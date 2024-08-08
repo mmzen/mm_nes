@@ -15,9 +15,10 @@ pub trait CPU: Debug {
 pub enum CpuError {
     MemoryError(MemoryError),
     InvalidOpcode(u8),
-    InvalidOperand(&'static str),
+    InvalidOperand(String),
     StackOverflow,
     StackUnderflow,
+    UnImplemented(String),
     FatalError,
 }
 
@@ -38,6 +39,7 @@ impl Display for CpuError {
             CpuError::StackUnderflow => { write!(f, "stack underflow") }
             CpuError::FatalError => { write!(f, "fatal error") }
             CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) }
+            CpuError::UnImplemented(s) => { write!(f, "unimplemented operation: {}", s)  }
         }
     }
 }
