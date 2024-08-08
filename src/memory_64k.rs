@@ -1,4 +1,4 @@
-use log::{debug, LevelFilter};
+use log::debug;
 
 use crate::memory::{Memory, MemoryError};
 
@@ -20,16 +20,20 @@ impl Memory for Memory64k {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        if self.is_addr_in_boundary(addr) {
-            Err(MemoryError::OutOfBounds)
+        debug!("reading byte at 0x{:04X}", addr);
+
+        if !self.is_addr_in_boundary(addr) {
+            Err(MemoryError::OutOfBounds(addr))
         } else {
             Ok(self.memory[addr as usize])
         }
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<u8, MemoryError> {
-        if self.is_addr_in_boundary(addr) {
-            Err(MemoryError::OutOfBounds)
+        debug!("writing byte at 0x{:04X}", addr);
+
+        if !self.is_addr_in_boundary(addr) {
+            Err(MemoryError::OutOfBounds(addr))
         } else {
             self.memory[addr as usize] = value;
             Ok(value)
@@ -38,7 +42,9 @@ impl Memory for Memory64k {
 
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
         let lower_byte = self.read_byte(addr)?;
-        let upper_byte = self.read_byte(addr + 1)?;
+        let next = addr.checked_add(1).ok_or(MemoryError::OutOfBounds(addr))?;
+
+        let upper_byte = self.read_byte(next)?;
 
         Ok((upper_byte as u16) << 8 | lower_byte as u16)
     }
@@ -46,9 +52,10 @@ impl Memory for Memory64k {
     fn write_word(&mut self, addr: u16, value: u16) -> Result<u16, MemoryError> {
         let lower_byte = (value & 0x00FF) as u8;
         let upper_byte = ((value & 0xFF00) >> 8) as u8;
+        let next = addr.checked_add(1).ok_or(MemoryError::OutOfBounds(addr))?;
 
         self.write_byte(addr, lower_byte)?;
-        self.write_byte(addr + 1, upper_byte)?;
+        self.write_byte(next, upper_byte)?;
         Ok(value)
     }
 
@@ -59,6 +66,10 @@ impl Memory for Memory64k {
             }
             print!("{:02X} ", byte);
         }
+    }
+
+    fn is_addr_in_boundary(&self, addr: u16) -> bool {
+        (addr as usize) < self.memory.len()
     }
 }
 
@@ -71,7 +82,4 @@ impl Default for Memory64k {
 }
 
 impl Memory64k {
-    fn is_addr_in_boundary(&self, addr: u16) -> bool {
-        (addr as usize) < self.memory.len()
-    }
 }

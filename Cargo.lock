@@ -34,6 +34,7 @@ name = "mm_nes"
 version = "0.1.0"
 dependencies = [
  "log",
+ "once_cell",
  "simplelog",
 ]
 
@@ -51,6 +52,12 @@ checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "powerfmt"

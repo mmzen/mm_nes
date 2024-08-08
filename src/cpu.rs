@@ -6,12 +6,16 @@ pub trait CPU: Debug {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;
     fn dump_registers(&self);
+    fn dump_flags(&self);
     fn run(&mut self) -> Result<(), CpuError>;
 }
 
 #[derive(Debug)]
 pub enum CpuError {
-    MemoryError(MemoryError)
+    MemoryError(MemoryError),
+    InvalidOpcode(u8),
+    StackOverflow,
+    StackUnderflow,
 }
 
 impl From<MemoryError> for CpuError {
@@ -26,7 +30,9 @@ impl Display for CpuError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             CpuError::MemoryError(error) => write!(f, "memory error: {}", error),
-            _ => write!(f, "error details not available")
+            CpuError::InvalidOpcode(op) => write!(f, "invalid opcode 0x{:02X}", op),
+            CpuError::StackOverflow => { write!(f, "stack overflow") },
+            CpuError::StackUnderflow => { write!(f, "stack underflow") }
         }
     }
 }
