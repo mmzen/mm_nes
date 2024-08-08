@@ -1,4 +1,4 @@
-use log::{debug, error, info, LevelFilter};
+use log::{debug, info, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use crate::cpu::{CPU, CpuError};
 use crate::cpu_6502::Cpu6502;
@@ -41,10 +41,9 @@ fn main() -> Result<(), CpuError> {
     status = cpu.run();
 
     if let Err(error) = status {
-        error!("CPU error: {}", error);
-        cpu.dump_registers();
-        cpu.dump_flags();
+        cpu.panic(&error);
+        Err(error)
+    } else {
+        Ok(())
     }
-
-    Ok(())
 }

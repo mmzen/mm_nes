@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::thread::sleep;
 use std::time::Duration;
-use log::{debug, info};
+use log::{debug, error, info};
 use once_cell::sync::Lazy;
 use crate::cpu::{CPU, CpuError};
 use crate::memory::{Memory, MemoryError};
@@ -23,9 +23,16 @@ pub static INSTRUCTIONS_TABLE: Lazy<HashMap<u8, Instruction>> = Lazy::new(|| {
     map.insert(0x00, Instruction {
         opcode: OpCode::BRK,
         addressing_mode: AddressingMode::Implicit,
-        bytes: 1,
+        bytes: 2,
         cycles: 7,
-        execute: Cpu6502::brk_force_interrupt
+        execute: Instruction::brk_force_interrupt
+    });
+    map.insert(0x09, Instruction {
+        opcode: OpCode::ORA,
+        addressing_mode: AddressingMode::Immediate,
+        bytes: 2,
+        cycles: 2,
+        execute: Instruction::ora_logical_inclusive_or
     });
     map
 });
@@ -139,7 +146,7 @@ struct Instruction {
     addressing_mode: AddressingMode,
     bytes: usize,
     cycles: usize,
-    execute: fn(&mut Cpu6502, &Option<Value>) -> Result<(), CpuError>,
+    execute: fn(&Instruction, &mut Cpu6502, &Option<Value>) -> Result<(), CpuError>,
 }
 
 struct InstructionTable<'a> {
@@ -171,6 +178,12 @@ impl CPU for Cpu6502 {
         self.reset()?;
         self.memory.initialize()?;
         Ok(())
+    }
+
+    fn panic(&self, error: &CpuError) {
+        error!("fatal exception: {}", error);
+        self.dump_registers();
+        self.dump_flags();
     }
 
     fn dump_registers(&self) {
@@ -368,7 +381,7 @@ impl Cpu6502 {
             AddressingMode::Relative => {
                 let pc = self.safe_pc_add(1)?;
                 let offset = self.memory.read_byte(pc)? as i8;
-                let addr = if (offset < 0) {
+                let addr = if offset < 0 {
                     self.safe_pc_sub(offset.abs() as u16)?
                 } else {
                     self.safe_pc_add(offset as u16)?
@@ -384,10 +397,13 @@ impl Cpu6502 {
 
     fn execute_instruction(&mut self, instruction: &Instruction, operand: &Option<Value>) -> Result<(), CpuError> {
         debug!("executing instruction: opcode: {:?}, addressing mode: {:?}", instruction.opcode, instruction.addressing_mode);
-        (instruction.execute)(self, operand)
+        (instruction.execute)(instruction, self, operand)
     }
+}
 
-    fn brk_force_interrupt(cpu: &mut Cpu6502, _: &Option<Value>) -> Result<(), CpuError> {
+impl Instruction {
+
+    fn brk_force_interrupt(&self, cpu: &mut Cpu6502, _: &Option<Value>) -> Result<(), CpuError> {
         cpu.registers.p |= StatusFlag::BreakCommand.bits();
 
         let next_pc = cpu.safe_pc_add(2)?;
@@ -402,7 +418,13 @@ impl Cpu6502 {
         Ok(())
     }
 
-    fn ora_logical_inclusive_or(cpu: &mut Cpu6502, operand: &Option<Value>) {
-        //cpu.registers.a |= operand;
+    fn ora_logical_inclusive_or(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
+
+        if let Some(Value::Byte(value)) = operand {
+            cpu.registers.a = cpu.registers.a | value;
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand("missing operand"))
+        }
     }
 }

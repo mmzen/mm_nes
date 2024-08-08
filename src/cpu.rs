@@ -5,6 +5,7 @@ use crate::memory::MemoryError;
 pub trait CPU: Debug {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;
+    fn panic(&self, error: &CpuError);
     fn dump_registers(&self);
     fn dump_flags(&self);
     fn run(&mut self) -> Result<(), CpuError>;
@@ -14,8 +15,10 @@ pub trait CPU: Debug {
 pub enum CpuError {
     MemoryError(MemoryError),
     InvalidOpcode(u8),
+    InvalidOperand(&'static str),
     StackOverflow,
     StackUnderflow,
+    FatalError,
 }
 
 impl From<MemoryError> for CpuError {
@@ -33,6 +36,8 @@ impl Display for CpuError {
             CpuError::InvalidOpcode(op) => write!(f, "invalid opcode 0x{:02X}", op),
             CpuError::StackOverflow => { write!(f, "stack overflow") },
             CpuError::StackUnderflow => { write!(f, "stack underflow") }
+            CpuError::FatalError => { write!(f, "fatal error") }
+            CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) }
         }
     }
 }
