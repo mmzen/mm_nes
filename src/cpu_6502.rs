@@ -15,6 +15,7 @@ const STACK_END_ADDRESS: u16 = 0x01FF;
 enum Value {
     Byte(u8),
     Word(u16),
+    Accumulator
 }
 
 lazy_static! {
@@ -65,6 +66,30 @@ pub struct Registers  {
     pub p: u8,      // Status register
     pub sp: u8,     // Stack pointer
     pub pc: u16,    // Program counter
+}
+
+impl Registers {
+    fn set_eval_status<F>(&mut self, flag: StatusFlag, predicate: F)
+    where F: FnOnce() -> bool,
+    {
+        if predicate() {
+            self.p |= flag.bits();
+        } else {
+            self.p &= !flag.bits();
+        }
+    }
+
+    fn set_status(&mut self, flag: StatusFlag, value: bool) {
+        if value {
+            self.p |= flag.bits();
+        } else {
+            self.p &= !flag.bits();
+        }
+    }
+
+    fn get_status(&self, flag: StatusFlag) -> bool {
+        (self.p & flag.bits()) != 0
+    }
 }
 
 #[derive(Debug)]
@@ -314,7 +339,7 @@ impl Cpu6502 {
             },
 
             AddressingMode::Accumulator => {
-                Some(Value::Byte(self.registers.a))
+                Some(Value::Accumulator)
             },
 
             AddressingMode::Immediate => {
@@ -401,7 +426,7 @@ impl Cpu6502 {
     }
 
     fn execute_instruction(&mut self, instruction: &Instruction, operand: &Option<Value>) -> Result<(), CpuError> {
-        debug!("executing instruction: opcode: {:?}, addressing mode: {:?}", instruction.opcode, instruction.addressing_mode);
+        debug!("executing instruction: opcode: {:?}, addressing mode: {:?}, operand: {:?}", instruction.opcode, instruction.addressing_mode, operand);
         (instruction.execute)(instruction, self, operand)
     }
 }
@@ -417,22 +442,69 @@ impl Instruction {
         cpu.push_stack((next_pc & 0xFF) as u8)?;
         cpu.push_stack(cpu.registers.p)?;
 
-        cpu.registers.p |= StatusFlag::InterruptDisable.bits();
+        cpu.registers.set_status(StatusFlag::InterruptDisable, true);
+
         cpu.registers.pc = cpu.memory.read_word(0xFFFE)?;
 
         Ok(())
     }
 
     fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Byte(value)) = operand {
+            let carry_flag = cpu.registers.get_status(StatusFlag::Carry);
+            let result = cpu.registers.a as u16 + *value as u16 + carry_flag as u16;
+
+            cpu.registers.a = result as u8;
+
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+            cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80!= 0);
+            cpu.registers.set_status(StatusFlag::Carry, result > 0xFF);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn and_and_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Byte(value)) = operand {
+            cpu.registers.a = cpu.registers.a & value;
+
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+            cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn asl_shift_left_one_bit(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+
+        let (original_value, result) = match operand {
+            Some(Value::Accumulator) => {
+                let original_value = cpu.registers.a;
+                let result = original_value << 1;
+                cpu.registers.a = result;
+                (original_value, result)
+            },
+
+            Some(Value::Word(addr)) => {
+                let original_value = cpu.memory.read_byte(*addr)?;
+                let result = original_value << 1;
+                cpu.memory.write_byte(*addr, result)?;
+                (original_value, result)
+            },
+
+            _ => {
+                return Err(CpuError::InvalidOperand(format!("{:?}", operand)));
+            }
+        };
+
+        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x80 != 0);
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+        Ok(())
     }
 
     fn bcc_branch_on_carry_clear(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -503,7 +575,17 @@ impl Instruction {
     }
 
     fn cmp_compare_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Byte(value)) = operand {
+            let result = cpu.registers.a.wrapping_sub(*value);
+
+            cpu.registers.set_status(StatusFlag::Carry, cpu.registers.a > *value);
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+            cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn cpx_compare_memory_and_index_x(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -515,7 +597,19 @@ impl Instruction {
     }
 
     fn dec_decrement_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Word(addr)) = operand {
+            let mut value = cpu.memory.read_byte(*addr)?;
+
+            value = value.wrapping_sub(1);
+            cpu.memory.write_byte(*addr, value)?;
+
+            cpu.registers.set_status(StatusFlag::Zero, value == 0);
+            cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("Expected a memory address, got: {:?}", operand)))
+        }
     }
 
     fn dex_decrement_index_x_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -527,11 +621,32 @@ impl Instruction {
     }
 
     fn eor_exclusive_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Byte(value)) = operand {
+            cpu.registers.a = cpu.registers.a ^ value;
+
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+            cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn inc_increment_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Word(addr)) = operand {
+            let mut value = cpu.memory.read_byte(*addr)?;
+
+            value = value.wrapping_add(1);
+            cpu.memory.write_byte(*addr, value)?;
+
+            cpu.registers.set_status(StatusFlag::Zero, value == 0);
+            cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("Expected a memory address, got: {:?}", operand)))
+        }
     }
 
     fn inx_increment_index_x_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -551,11 +666,27 @@ impl Instruction {
     }
 
     fn lda_load_accumulator_with_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Byte(value)) = operand {
+            cpu.registers.a = *value;
+
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+            cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn ldx_load_index_x_with_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Word(value)) = operand {
+            cpu.registers.x = cpu.memory.read_byte(*value)?;
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.x == 0);
+            cpu.registers.set_status(StatusFlag::Negative, cpu.registers.x & 0x80 != 0);
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn ldy_load_index_y_with_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -563,7 +694,28 @@ impl Instruction {
     }
 
     fn lsr_shift_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        let (original_value, result) = match operand {
+            Some(Value::Accumulator) => {
+                let original_value = cpu.registers.a;
+                let result = original_value >> 1;
+                cpu.registers.a = result;
+                (original_value, result)
+            },
+            Some(Value::Word(addr)) => {
+                let original_value = cpu.memory.read_byte(*addr)?;
+                let result = original_value >> 1;
+                cpu.memory.write_byte(*addr, result)?;
+                (original_value, result)
+            },
+            _ => {
+                return Err(CpuError::InvalidOperand(format!("{:?}", operand)));
+            }
+        };
+
+        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x01 != 0);
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, false);
+        Ok(())
     }
 
     fn nop_no_operation(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -596,11 +748,58 @@ impl Instruction {
     }
 
     fn rol_rotate_one_bit_left(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        let (original_value, result) = match operand {
+            Some(Value::Accumulator) => {
+                let original_value = cpu.registers.a;
+                let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 1 } else { 0 };
+                let result = (original_value << 1) | carry_in;
+                cpu.registers.a = result;
+                (original_value, result)
+            },
+
+            Some(Value::Word(addr)) => {
+                let original_value = cpu.memory.read_byte(*addr)?;
+                let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 1 } else { 0 };
+                let result = (original_value << 1) | carry_in;
+                cpu.memory.write_byte(*addr, result)?;
+                (original_value, result)
+            },
+            _ => {
+                return Err(CpuError::InvalidOperand(format!("{:?}", operand)));
+            }
+        };
+
+        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x80 != 0);
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+        Ok(())
     }
 
     fn ror_rotate_one_bit_left(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        let (original_value, result) = match operand {
+            Some(Value::Accumulator) => {
+                let original_value = cpu.registers.a;
+                let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
+                let result = (original_value >> 1) | carry_in;
+                cpu.registers.a = result;
+                (original_value, result)
+            },
+            Some(Value::Word(addr)) => {
+                let original_value = cpu.memory.read_byte(*addr)?;
+                let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
+                let result = (original_value >> 1) | carry_in;
+                cpu.memory.write_byte(*addr, result)?;
+                (original_value, result)
+            },
+            _ => {
+                return Err(CpuError::InvalidOperand(format!("{:?}", operand)));
+            }
+        };
+
+        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x01 != 0);
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+        Ok(())
     }
 
     fn rti_return_from_interrupt(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -612,7 +811,23 @@ impl Instruction {
     }
 
     fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Byte(value)) = operand {
+            let borrow = if cpu.registers.get_status(StatusFlag::Carry) { 0 } else { 1 };
+            let result = cpu.registers.a.wrapping_sub(*value).wrapping_sub(borrow);
+            let carry = cpu.registers.a >= *value + borrow;
+            let overflow = ((cpu.registers.a ^ result) & 0x80 != 0) && ((cpu.registers.a ^ *value) & 0x80 == 0);
+
+            cpu.registers.a = result;
+
+            cpu.registers.set_status(StatusFlag::Carry, carry);
+            cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+            cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+            cpu.registers.set_status(StatusFlag::Overflow, overflow);
+
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn sec_set_carry_flag(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
@@ -628,11 +843,21 @@ impl Instruction {
     }
 
     fn sta_store_accumulator_in_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Word(value)) = operand {
+            cpu.memory.write_byte(*value, cpu.registers.a)?;
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn stx_store_index_x_in_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-        Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+        if let Some(Value::Word(value)) = operand {
+            cpu.memory.write_byte(*value, cpu.registers.x)?;
+            Ok(())
+        } else {
+            Err(CpuError::InvalidOperand(format!("{:?}", operand)))
+        }
     }
 
     fn sty_store_index_y_in_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
