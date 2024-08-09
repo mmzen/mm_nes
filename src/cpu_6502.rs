@@ -24,8 +24,8 @@ enum Value {
 impl Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Value::Byte(val) => write!(f, "byte: 0x{:02x}", val),
-            Value::Word(val) => write!(f, "word: {:04x}", val),
+            Value::Byte(val) => write!(f, "byte: 0x{:02X}", val),
+            Value::Word(val) => write!(f, "word: 0x{:04X}", val),
             Value::Accumulator => write!(f, "accumulator"),
             Value::None => { write!(f, "none") }
         }
@@ -176,17 +176,17 @@ impl CPU for Cpu6502 {
         error!("fatal exception: {}", error);
         self.dump_registers();
         self.dump_flags();
-        self.dump_memory();
+        //self.dump_memory();
     }
 
     fn dump_registers(&self) {
         info!("CPU registers dump:");
         info!("- P (status): {:08b}", self.registers.p);
-        info!("- A (accumulator): 0x{:02x}", self.registers.a);
-        info!("- X (index): 0x{:02x}", self.registers.x);
-        info!("- Y (index): 0x{:02x}", self.registers.y);
-        info!("- SP (stack pointer): 0x{:02x}", self.registers.sp);
-        info!("- PC (program counter): 0x{:04x}", self.registers.pc);
+        info!("- A (accumulator): 0x{:02X}", self.registers.a);
+        info!("- X (index): 0x{:02X}", self.registers.x);
+        info!("- Y (index): 0x{:02X}", self.registers.y);
+        info!("- SP (stack pointer): 0x{:02X}", self.registers.sp);
+        info!("- PC (program counter): 0x{:04X}", self.registers.pc);
     }
 
     fn dump_flags(&self) {
@@ -208,7 +208,7 @@ impl CPU for Cpu6502 {
         info!("running CPU ...");
 
         loop {
-            debug!("pc: 0x{:04x}", self.registers.pc);
+            debug!("pc: 0x{:04X}", self.registers.pc);
             let original_pc = self.registers.pc;
 
             let byte = self.memory.read_byte(self.registers.pc)?;
@@ -228,7 +228,7 @@ impl CPU for Cpu6502 {
     fn run_start_at(&mut self, address: u16) -> Result<(), CpuError> {
         self.registers.pc = address;
 
-        debug!("pc set tp address 0x{:04x} ...", address);
+        debug!("pc set to address 0x{:04X} ...", address);
         self.run()
     }
 }
@@ -314,7 +314,7 @@ impl Cpu6502 {
             AddressingMode::Absolute => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
-                Value::Byte(self.memory.read_byte(addr)?)
+                Value::Word(addr)
             },
 
             AddressingMode::AbsoluteIndexedX => {
@@ -385,7 +385,7 @@ impl Cpu6502 {
             },
         };
 
-        debug!("fetched operand: {:?}", operand);
+        debug!("fetched operand: {}", operand);
         Ok(operand)
     }
 
@@ -771,8 +771,8 @@ impl Instruction {
     }
 
     fn ldx_load_index_x_with_memory(&self, cpu: &mut Cpu6502, operand: &Value) -> Result<(), CpuError> {
-        if let Value::Word(addr) = operand {
-            cpu.registers.x = cpu.memory.read_byte(*addr)?;
+        if let Value::Byte(value) = operand {
+            cpu.registers.x = *value;
             cpu.registers.set_status(StatusFlag::Zero, cpu.registers.x == 0);
             cpu.registers.set_status(StatusFlag::Negative, cpu.registers.x & 0x80 != 0);
             Ok(())
