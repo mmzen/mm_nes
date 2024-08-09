@@ -9,6 +9,7 @@ mod cpu;
 mod cpu_6502;
 mod memory;
 mod memory_64k;
+mod loader;
 
 fn logger_init(debug: bool) {
     let log_level = if debug {

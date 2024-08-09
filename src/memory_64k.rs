@@ -71,6 +71,10 @@ impl Memory for Memory64k {
     fn is_addr_in_boundary(&self, addr: u16) -> bool {
         (addr as usize) < self.memory.len()
     }
+
+    fn size(&self) -> usize {
+        MEMORY_SIZE
+    }
 }
 
 impl Default for Memory64k {
