@@ -1,7 +1,10 @@
+use std::process::exit;
 use log::{debug, info, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use crate::cpu::{CPU, CpuError};
 use crate::cpu_6502::Cpu6502;
+use crate::ines_loader::INesLoader;
+use crate::loader::Loader;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_64k::Memory64k;
 
@@ -10,6 +13,7 @@ mod cpu_6502;
 mod memory;
 mod memory_64k;
 mod loader;
+mod ines_loader;
 
 fn logger_init(debug: bool) {
     let log_level = if debug {
@@ -34,12 +38,16 @@ fn main() -> Result<(), CpuError> {
     let mut cpu;
     let mut memory : Box<dyn Memory> = Box::new(Memory64k::default());
     let status;
+    let mut loader;
 
     populate_memory(&mut memory)?;
-    cpu = Cpu6502::new(memory);
 
+    loader = Box::new(INesLoader::new_with_memory(&mut memory));
+    loader.load_rom("src/assets/nestest.nes").expect("fuck you");
+
+    cpu = Cpu6502::new(memory);
     cpu.initialize().expect("cpu initialization failed");
-    status = cpu.run();
+    status = cpu.run_start_at(0xc000);
 
     if let Err(error) = status {
         cpu.panic(&error);

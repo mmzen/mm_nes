@@ -1,7 +1,6 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 
-
 pub trait Memory: Debug {
     fn initialize(&mut self) -> Result<usize, MemoryError>;
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError>;
@@ -11,6 +10,7 @@ pub trait Memory: Debug {
     fn dump(&self);
     fn is_addr_in_boundary(&self, addr: u16) -> bool;
     fn size(&self) -> usize;
+    fn as_slice(&mut self) -> &mut [u8];
 }
 
 #[derive(Debug, PartialEq)]
@@ -27,4 +27,3 @@ impl Display for MemoryError {
         }
     }
 }
-

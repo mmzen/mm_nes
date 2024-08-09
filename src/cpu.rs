@@ -10,6 +10,7 @@ pub trait CPU: Debug {
     fn dump_flags(&self);
     fn dump_memory(&self);
     fn run(&mut self) -> Result<(), CpuError>;
+    fn run_start_at(&mut self, address: u16) -> Result<(), CpuError>;
 }
 
 #[derive(Debug)]
@@ -33,7 +34,7 @@ impl Display for CpuError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             CpuError::MemoryError(error) => write!(f, "memory error: {}", error),
-            CpuError::IllegalInstruction(op) => write!(f, "invalid opcode 0x{:02X}", op),
+            CpuError::IllegalInstruction(op) => write!(f, "illegal instruction 0x{:02X}", op),
             CpuError::StackOverflow => { write!(f, "stack overflow") },
             CpuError::StackUnderflow => { write!(f, "stack underflow") }
             CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) }
