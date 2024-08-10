@@ -8,6 +8,7 @@ pub trait CPU: Debug {
     fn panic(&self, error: &CpuError);
     fn dump_registers(&self);
     fn dump_flags(&self);
+    #[allow(dead_code)]
     fn dump_memory(&self);
     fn run(&mut self) -> Result<(), CpuError>;
     fn run_start_at(&mut self, address: u16) -> Result<(), CpuError>;

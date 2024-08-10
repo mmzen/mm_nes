@@ -88,9 +88,6 @@ impl<'a>  INesLoader<'a>  {
     }
 
     fn load_prg_rom(&mut self, file: &mut File, start_addr: usize, size: usize) -> Result<(), LoaderError> {
-        let memory_offset0: u16 = 0x8000;
-        let memory_offset1: u16 = 0xC000;
-
         file.seek(SeekFrom::Start(start_addr as u64))?;
         file.read_exact(&mut self.memory.as_slice()[0x8000..0x8000+size])?;
 

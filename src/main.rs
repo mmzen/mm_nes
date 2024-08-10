@@ -1,6 +1,8 @@
-use std::process::exit;
 use log::{debug, info, LevelFilter};
 use simplelog::{Config, SimpleLogger};
+use clap::Parser;
+use clap_num::maybe_hex;
+
 use crate::cpu::{CPU, CpuError};
 use crate::cpu_6502::Cpu6502;
 use crate::ines_loader::INesLoader;
@@ -14,6 +16,28 @@ mod memory;
 mod memory_64k;
 mod loader;
 mod ines_loader;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(
+        short = 'd',
+        long = "debug",
+        help = "debug mode",
+        default_value_t = false
+    )]
+    debug: bool,
+
+    #[arg(
+        short = 'x',
+        long = "addr",
+        help = "set PC address at startup",
+        value_parser=maybe_hex::<u16>,
+        default_value_t = 0xc000
+    )]
+    pc: u16
+}
+
 
 fn logger_init(debug: bool) {
     let log_level = if debug {
@@ -33,8 +57,11 @@ fn populate_memory(memory: &mut Box<dyn Memory>) -> Result<(), MemoryError> {
 }
 
 fn main() -> Result<(), CpuError> {
+    let args: Args = Args::parse();
+
     logger_init(true);
     info!("emulator bootstrapping...");
+
     let mut cpu;
     let mut memory : Box<dyn Memory> = Box::new(Memory64k::default());
     let status;
@@ -47,7 +74,7 @@ fn main() -> Result<(), CpuError> {
 
     cpu = Cpu6502::new(memory);
     cpu.initialize().expect("cpu initialization failed");
-    status = cpu.run_start_at(0xc000);
+    status = cpu.run_start_at(args.pc);
 
     if let Err(error) = status {
         cpu.panic(&error);

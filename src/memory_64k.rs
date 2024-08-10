@@ -12,6 +12,7 @@ pub struct Memory64k {
 }
 
 impl Memory for Memory64k {
+    #[allow(dead_code)]
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         debug!("initializing memory: {} kB to 0x{:04X}, 0x{:04X}", self.memory.len() / 1024, MEMORY_BASE_ADDRESS, MEMORY_END_ADDRESS);
 

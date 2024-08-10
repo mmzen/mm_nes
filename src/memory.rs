@@ -7,6 +7,7 @@ pub trait Memory: Debug {
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<u8, MemoryError>;
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError>;
     fn write_word(&mut self, addr: u16, value: u16) -> Result<u16, MemoryError>;
+    #[allow(dead_code)]
     fn dump(&self);
     fn is_addr_in_boundary(&self, addr: u16) -> bool;
     fn size(&self) -> usize;

@@ -8,7 +8,6 @@ pub trait Loader: Debug  {
 #[derive(Debug)]
 pub enum LoaderError {
     IoError(Error),
-    InvalidRomHeader(String),
     InvalidRomFormat,
 }
 
@@ -22,7 +21,6 @@ impl Display for LoaderError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             LoaderError::IoError(e) => { write!(f, "i/o error {}", e) },
-            LoaderError::InvalidRomHeader(s) => { write!(f, "invalid ROM header {}", s) }
             LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format")  }
         }
     }
