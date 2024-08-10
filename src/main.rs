@@ -59,7 +59,7 @@ fn populate_memory(memory: &mut Box<dyn Memory>) -> Result<(), MemoryError> {
 fn main() -> Result<(), CpuError> {
     let args: Args = Args::parse();
 
-    logger_init(true);
+    logger_init(args.debug);
     info!("emulator bootstrapping...");
 
     let mut cpu;

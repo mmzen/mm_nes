@@ -26,12 +26,14 @@ impl Memory for Memory64k {
         if !self.is_addr_in_boundary(addr) {
             Err(MemoryError::OutOfBounds(addr))
         } else {
-            Ok(self.memory[addr as usize])
+            let value = self.memory[addr as usize];
+            debug!("read byte at 0x{:04X}: {:02X}", addr, value);
+            Ok(value)
         }
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<u8, MemoryError> {
-        debug!("writing byte at 0x{:04X}", addr);
+        debug!("writing byte ({:02X}) at 0x{:04X}", value, addr);
 
         if !self.is_addr_in_boundary(addr) {
             Err(MemoryError::OutOfBounds(addr))

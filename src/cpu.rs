@@ -19,8 +19,8 @@ pub enum CpuError {
     MemoryError(MemoryError),
     IllegalInstruction(u8),
     InvalidOperand(String),
-    StackOverflow,
-    StackUnderflow
+    StackOverflow(u16),
+    StackUnderflow(u16)
 }
 
 impl From<MemoryError> for CpuError {
@@ -36,8 +36,8 @@ impl Display for CpuError {
         match self {
             CpuError::MemoryError(error) => write!(f, "memory error: {}", error),
             CpuError::IllegalInstruction(op) => write!(f, "illegal instruction 0x{:02X}", op),
-            CpuError::StackOverflow => { write!(f, "stack overflow") },
-            CpuError::StackUnderflow => { write!(f, "stack underflow") }
+            CpuError::StackOverflow(addr) => { write!(f, "stack overflow 0x{:04X}", addr) },
+            CpuError::StackUnderflow(addr) => { write!(f, "stack underflow 0x{:04X}", addr) }
             CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) }
         }
     }
