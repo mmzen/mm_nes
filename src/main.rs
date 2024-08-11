@@ -60,7 +60,7 @@ fn logger_init(debug: bool) {
 fn populate_memory(memory: &mut Box<dyn Memory>) -> Result<(), MemoryError> {
     debug!("populating memory with ROM data...");
 
-    memory.write_byte(0xFFFC, 0x00)?;
+    memory.initialize()?;
     Ok(())
 }
 

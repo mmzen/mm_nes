@@ -18,7 +18,8 @@ const STACK_END_ADDRESS: u16 = 0x01FF;
 #[derive(Debug)]
 enum Operand {
     Byte(u8),
-    Word(u16),
+    Address(u16),
+    AddressAndEffectiveAddress(u16, u16),
     Accumulator,
     None
 }
@@ -27,9 +28,12 @@ impl Display for Operand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Operand::Byte(val) => write!(f, "byte: 0x{:02X}", val),
-            Operand::Word(val) => write!(f, "word: 0x{:04X}", val),
+            Operand::Address(addr) => write!(f, "word: 0x{:04X}", addr),
             Operand::Accumulator => write!(f, "accumulator"),
             Operand::None => { write!(f, "none") }
+            Operand::AddressAndEffectiveAddress(addr, effective) => {
+                write!(f, "address: 0x{:02X}, effective address: {:02X}", addr, effective)
+            }
         }
     }
 }
@@ -272,20 +276,47 @@ impl Cpu6502 {
 
         let c0 = format!("{:?}", &instruction.opcode);
 
-        let c1 = match (&instruction.addressing_mode, operand) {
-            (AddressingMode::Implicit, _) |
-            (AddressingMode::Accumulator, _) => { "".to_string() },
-            (AddressingMode::Absolute, Operand::Word(word)) => format!("${:02X}{:02X}", *word >> 8, *word as u8),
-            (AddressingMode::Relative, Operand::Word(word)) => format!("${:02X}{:02X}", *word >> 8, *word as u8),
-            (AddressingMode::ZeroPage, Operand::Word(word)) => format!("${:02X}", *word as u8),
-            (AddressingMode::AbsoluteIndexedX, Operand::Word(word)) => format!("${:02X}{:02X},X", *word >> 8, *word as u8),
-            (AddressingMode::AbsoluteIndexedY, Operand::Word(word)) => format!("${:02X}{:02X},Y", *word >> 8, *word as u8),
-            (AddressingMode::ZeroPageIndexedX, Operand::Word(word)) => format!("${:02X},X", *word),
-            (AddressingMode::ZeroPageIndexedY, Operand::Word(word)) => format!("(${:02X}),Y", *word),
-            (AddressingMode::Indirect, Operand::Word(word)) => format!("(${:02X}{:02X})", *word >> 8, *word as u8),
-            (AddressingMode::IndirectIndexedX, Operand::Word(word)) => format!("(${:02X},X)", *word),
-            (AddressingMode::IndirectIndexedY, Operand::Word(word)) => format!("(${:02X}),Y", *word),
-            (AddressingMode::Immediate, Operand::Byte(byte)) => format!("#${:02X}", byte),
+        let c1 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
+            (AddressingMode::Implicit, _, _) |
+            (AddressingMode::Accumulator, _, _) => { "".to_string() },
+
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
+                format!("${:02X}{:02X}", *addr >> 8, *addr as u8),
+
+            (AddressingMode::Absolute, Operand::Address(addr), _) =>
+                format!("${:02X}{:02X} = {:02X}", *addr >> 8, *addr as u8, self.memory.read_byte(*addr)?),
+
+            (AddressingMode::Relative, Operand::Address(addr), _) =>
+                format!("${:02X}{:02X}", *addr >> 8, *addr as u8),
+
+            (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
+                format!("${:02X} = {:02X}", *addr as u8, self.memory.read_byte(*addr)?),
+
+            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("${:02X}{:02X},X", *addr >> 8, *addr as u8),
+
+            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("${:02X}{:02X},Y", *addr >> 8, *addr as u8),
+
+            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("${:02X},X", *addr),
+
+            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("(${:02X}),Y", *addr),
+
+            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("(${:02X}{:02X})", *addr >> 8, *addr as u8),
+
+            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("(${:02X},X)", *addr),
+
+            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
+                format!("(${:02X}),Y", *addr),
+
+            (AddressingMode::Immediate, Operand::Byte(byte), _) =>
+                format!("#${:02X}", byte),
+
             _ => { return Err(CpuError::InvalidOperand(
                     format!("could not format instruction and operand: {:?}, {:?}",
                             &instruction.addressing_mode, operand)
@@ -377,62 +408,64 @@ impl Cpu6502 {
             AddressingMode::Absolute => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
-                Operand::Word(addr)
+                Operand::Address(addr)
             },
 
             AddressingMode::AbsoluteIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
-                let indexed_addr = addr + (self.registers.x as u16);
-                Operand::Word(indexed_addr)
+                let effective_addr = addr.wrapping_add(self.registers.x as u16);
+                Operand::AddressAndEffectiveAddress(addr, effective_addr)
             }
 
             AddressingMode::AbsoluteIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
-                let indexed_addr = addr + (self.registers.y as u16);
-                Operand::Word(indexed_addr)
+                let effective_addr = addr.wrapping_add(self.registers.y as u16);
+                Operand::AddressAndEffectiveAddress(addr, effective_addr)
             }
 
             AddressingMode::ZeroPage => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                Operand::Word(addr as u16)
+                Operand::Address(addr as u16)
             },
 
             AddressingMode::ZeroPageIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
-                let indexed_addr = addr as u16 + self.registers.x as u16;
-                Operand::Word(indexed_addr as u16)
+                let addr = self.memory.read_byte(pc)?.wrapping_add(self.registers.x);
+                let effective_addr = self.memory.read_word(addr as u16)?;
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
             },
 
             AddressingMode::ZeroPageIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                let indexed_addr = addr as u16 + self.registers.y as u16;
-                Operand::Word(indexed_addr)
+                let effective_addr = self.memory.read_word(addr as u16)?.wrapping_add(self.registers.y as u16);
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
             },
 
             AddressingMode::Indirect => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let indirect_addr = self.memory.read_word(pc)?;
-                Operand::Word(indirect_addr)
+                let addr = self.memory.read_word(pc)?;
+                let effective_addr = self.memory.read_word(addr)?;
+                Operand::AddressAndEffectiveAddress(addr, effective_addr)
             },
 
             AddressingMode::IndirectIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                let indirect_addr0 = addr.wrapping_add(self.registers.x);
-                let indirect_addr1 = self.memory.read_word(indirect_addr0 as u16)?;
-                Operand::Word(indirect_addr1)
+                let indirect_addr = addr.wrapping_add(self.registers.x);
+                let effective_addr = self.memory.read_word(indirect_addr as u16)?;
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
             },
 
             AddressingMode::IndirectIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                let indirect_addr0 = self.memory.read_word(addr as u16)?.wrapping_add(self.registers.y as u16);
-                Operand::Word(indirect_addr0)
+                let indirect_addr = self.memory.read_word(addr as u16)?;
+                let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
             },
 
             AddressingMode::Relative => {
@@ -440,7 +473,7 @@ impl Cpu6502 {
                 let offset = self.memory.read_byte(pc)? as i16;
                 let addr = self.registers.safe_pc_add(offset+2)?;
 
-                Operand::Word(addr)
+                Operand::Address(addr)
             },
         };
 
@@ -478,22 +511,45 @@ impl Instruction {
         value0 >= value1
     }
 
-    fn get_operand_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u8, CpuError> {
+    fn get_operand_byte_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u8, CpuError> {
+
         let result = match operand {
-            Operand::Word(addr) => {
-                let value = cpu.memory.read_byte(*addr)?;
-                Ok(value)
-            },
             Operand::Byte(value) => {
                 Ok(*value)
             },
+            Operand::Address(addr) => {
+                let value = cpu.memory.read_byte(*addr)?;
+                Ok(value)
+            },
+            Operand::AddressAndEffectiveAddress(_, effective) => {
+                let value = cpu.memory.read_byte(*effective)?;
+                Ok(value)
+            },
             _ => Err(CpuError::InvalidOperand(format!("{}", operand)))
         };
+
+        result
+    }
+
+    fn get_operand_word_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u16, CpuError> {
+
+        let result = match operand {
+            Operand::Address(addr) => {
+                let value = *addr;
+                Ok(value)
+            },
+            Operand::AddressAndEffectiveAddress(_, effective) => {
+                let value = *effective;
+                Ok(value)
+            },
+            _ => Err(CpuError::InvalidOperand(format!("{}", operand)))
+        };
+
         result
     }
 
     fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
         let carry_in = cpu.registers.get_status(StatusFlag::Carry) as u8;
 
         let sum0 = cpu.registers.a.wrapping_add(value);
@@ -515,7 +571,7 @@ impl Instruction {
     }
 
     fn and_and_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         cpu.registers.a = cpu.registers.a & value;
 
@@ -535,7 +591,7 @@ impl Instruction {
                 (original_value, result)
             },
 
-            Operand::Word(addr) => {
+            Operand::Address(addr) => {
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let result = original_value << 1;
                 cpu.memory.write_byte(*addr, result)?;
@@ -556,7 +612,7 @@ impl Instruction {
 
     fn bcc_branch_on_carry_clear(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if !cpu.registers.get_status(StatusFlag::Carry) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -569,7 +625,7 @@ impl Instruction {
 
     fn bcs_branch_on_carry_set(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if cpu.registers.get_status(StatusFlag::Carry) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -582,7 +638,7 @@ impl Instruction {
 
     fn beq_branch_on_result_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if cpu.registers.get_status(StatusFlag::Zero) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -594,7 +650,7 @@ impl Instruction {
     }
 
     fn bit_test_bits_in_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(addr) = operand {
+        if let Operand::Address(addr) = operand {
             let value = cpu.memory.read_byte(*addr)?;
             let result = cpu.registers.a & value;
             cpu.registers.set_status(StatusFlag::Zero, result == 0);
@@ -608,7 +664,7 @@ impl Instruction {
 
     fn bmi_branch_on_result_minus(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if cpu.registers.get_status(StatusFlag::Negative) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -621,7 +677,7 @@ impl Instruction {
 
     fn bne_branch_on_result_not_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if !cpu.registers.get_status(StatusFlag::Zero) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -634,7 +690,7 @@ impl Instruction {
 
     fn bpl_branch_on_result_plus(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if !cpu.registers.get_status(StatusFlag::Negative) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -662,7 +718,7 @@ impl Instruction {
 
     fn bvc_branch_on_overflow_clear(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if !cpu.registers.get_status(StatusFlag::Overflow) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -675,7 +731,7 @@ impl Instruction {
 
     fn bvs_branch_on_overflow_set(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         if cpu.registers.get_status(StatusFlag::Overflow) {
-            if let Operand::Word(addr) = operand {
+            if let Operand::Address(addr) = operand {
                 cpu.registers.pc = *addr;
                 Ok(())
             } else {
@@ -707,7 +763,7 @@ impl Instruction {
     }
 
     fn cmp_compare_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         let result = cpu.registers.a.wrapping_sub(value);
 
@@ -719,7 +775,7 @@ impl Instruction {
     }
 
     fn cpx_compare_memory_and_index_x(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         let result = cpu.registers.x.wrapping_sub(value);
 
@@ -731,7 +787,7 @@ impl Instruction {
     }
 
     fn cpy_compare_memory_and_index_y(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         let result = cpu.registers.y.wrapping_sub(value);
 
@@ -743,7 +799,7 @@ impl Instruction {
     }
 
     fn dec_decrement_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(addr) = operand {
+        if let Operand::Address(addr) = operand {
             let mut value = cpu.memory.read_byte(*addr)?;
 
             value = value.wrapping_sub(1);
@@ -774,7 +830,7 @@ impl Instruction {
     }
 
     fn eor_exclusive_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         cpu.registers.a = cpu.registers.a ^ value;
 
@@ -785,7 +841,7 @@ impl Instruction {
     }
 
     fn inc_increment_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(addr) = operand {
+        if let Operand::Address(addr) = operand {
             let mut value = cpu.memory.read_byte(*addr)?;
 
             value = value.wrapping_add(1);
@@ -815,29 +871,26 @@ impl Instruction {
     }
 
     fn jmp_jump_to_new_location(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(addr) = operand {
-            cpu.registers.pc = *addr;
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("{}", operand)))
-        }
+        let addr = self.get_operand_word_value(cpu, operand)?;
+
+        debug!("preparing to jump to absolute address {:04X}", addr);
+        cpu.registers.pc = addr;
+        Ok(())
     }
 
     fn jsr_jump_to_new_location_saving_return_address(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(addr) = operand {
-            let pc = cpu.registers.safe_pc_add(3)?;
-            cpu.push_stack((pc >> 8) as u8)?;
-            cpu.push_stack(pc as u8)?;
+        let addr = self.get_operand_word_value(cpu, operand)?;
+        let pc = cpu.registers.safe_pc_add(3)?;
 
-            cpu.registers.pc = *addr;
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("{}", operand)))
-        }
+        cpu.push_stack((pc >> 8) as u8)?;
+        cpu.push_stack(pc as u8)?;
+
+        cpu.registers.pc = addr;
+        Ok(())
     }
 
     fn lda_load_accumulator_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         cpu.registers.a = value;
 
@@ -848,7 +901,7 @@ impl Instruction {
     }
 
     fn ldx_load_index_x_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         cpu.registers.x = value;
 
@@ -859,7 +912,7 @@ impl Instruction {
     }
 
     fn ldy_load_index_y_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         cpu.registers.y = value;
 
@@ -877,7 +930,7 @@ impl Instruction {
                 cpu.registers.a = result;
                 (original_value, result)
             },
-            Operand::Word(addr) => {
+            Operand::Address(addr) => {
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let result = original_value >> 1;
                 cpu.memory.write_byte(*addr, result)?;
@@ -899,7 +952,7 @@ impl Instruction {
     }
 
     fn ora_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
 
         cpu.registers.a = cpu.registers.a | value;
 
@@ -948,7 +1001,7 @@ impl Instruction {
                 (original_value, result)
             },
 
-            Operand::Word(addr) => {
+            Operand::Address(addr) => {
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 1 } else { 0 };
                 let result = (original_value << 1) | carry_in;
@@ -975,7 +1028,7 @@ impl Instruction {
                 cpu.registers.a = result;
                 (original_value, result)
             },
-            Operand::Word(addr) => {
+            Operand::Address(addr) => {
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
                 let result = (original_value >> 1) | carry_in;
@@ -1015,8 +1068,8 @@ impl Instruction {
     }
 
     fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let value = self.get_operand_value(cpu, operand)?;
-        let carry_in = cpu.registers.get_status(StatusFlag::Carry) as u8;
+        let value = self.get_operand_byte_value(cpu, operand)?;
+        let carry_in = !cpu.registers.get_status(StatusFlag::Carry) as u8;
 
         let sum0 = cpu.registers.a.wrapping_sub(value);
         let overflow0 = Instruction::detect_overflow_sub(cpu.registers.a, value, sum0);
@@ -1052,30 +1105,24 @@ impl Instruction {
     }
 
     fn sta_store_accumulator_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(value) = operand {
-            cpu.memory.write_byte(*value, cpu.registers.a)?;
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("{}", operand)))
-        }
+        let addr = self.get_operand_word_value(cpu, operand)?;
+        cpu.memory.write_byte(addr, cpu.registers.a)?;
+
+        Ok(())
     }
 
     fn stx_store_index_x_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(value) = operand {
-            cpu.memory.write_byte(*value, cpu.registers.x)?;
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("{}", operand)))
-        }
+        let addr = self.get_operand_word_value(cpu, operand)?;
+        cpu.memory.write_byte(addr, cpu.registers.x)?;
+
+        Ok(())
     }
 
     fn sty_store_index_y_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Word(addr) = operand {
-            cpu.memory.write_byte(*addr, cpu.registers.y)?;
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("{}", operand)))
-        }
+        let addr = self.get_operand_word_value(cpu, operand)?;
+        cpu.memory.write_byte(addr, cpu.registers.y)?;
+
+        Ok(())
     }
 
     fn tax_transfer_accumulator_to_index_x(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
