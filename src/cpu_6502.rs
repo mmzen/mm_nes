@@ -32,7 +32,7 @@ impl Display for Operand {
             Operand::Accumulator => write!(f, "accumulator"),
             Operand::None => { write!(f, "none") }
             Operand::AddressAndEffectiveAddress(addr, effective) => {
-                write!(f, "address: 0x{:02X}, effective address: {:02X}", addr, effective)
+                write!(f, "address: 0x{:04X}, effective address: 0x{:04X}", addr, effective)
             }
         }
     }
@@ -283,26 +283,24 @@ impl Cpu6502 {
             (AddressingMode::Accumulator, _, _) =>
                 "A".to_string(),
 
-            //(AddressingMode::Accumulator, _, _) => { "".to_string() },
-
             (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
             (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
-                format!("${:02X}{:02X}", *addr >> 8, *addr as u8),
+                format!("${:04X}", *addr),
 
             (AddressingMode::Absolute, Operand::Address(addr), _) =>
-                format!("${:02X}{:02X} = {:02X}", *addr >> 8, *addr as u8, self.memory.read_byte(*addr)?),
+                format!("${:04X} = {:02X}", *addr, self.memory.read_byte(*addr)?),
 
             (AddressingMode::Relative, Operand::Address(addr), _) =>
-                format!("${:02X}{:02X}", *addr >> 8, *addr as u8),
+                format!("${:04X}", *addr),
 
             (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
                 format!("${:02X} = {:02X}", *addr as u8, self.memory.read_byte(*addr)?),
 
             (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("${:02X}{:02X},X", *addr >> 8, *addr as u8),
+                format!("${:04X},X", *addr),
 
             (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("${:02X}{:02X},Y", *addr >> 8, *addr as u8),
+                format!("${:04X},Y", *addr),
 
             (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
                 format!("${:02X},X", *addr),
@@ -310,14 +308,14 @@ impl Cpu6502 {
             (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
                 format!("(${:02X}),Y", *addr),
 
-            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("(${:02X}{:02X})", *addr >> 8, *addr as u8),
+            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("(${:04X}) = {:04X}", *addr, effective),
 
-            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("(${:02X},X)", *addr),
+            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, addr.wrapping_add(self.registers.x as u16), *effective, self.memory.read_byte(*effective)?),
 
-            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("(${:02X}),Y", *addr),
+            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(self.registers.y as u16), *effective, self.memory.read_byte(*effective)?),
 
             (AddressingMode::Immediate, Operand::Byte(byte), _) =>
                 format!("#${:02X}", byte),
@@ -453,7 +451,16 @@ impl Cpu6502 {
             AddressingMode::Indirect => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
-                let effective_addr = self.memory.read_word(addr)?;
+
+                let effective_addr = if (addr & 0xFF) == 0xFF {
+                    let lo = self.memory.read_byte(addr)? as u16;
+                    let hi = self.memory.read_byte(addr - 0xFF)? as u16;
+                    lo | hi << 8
+                } else {
+                    self.memory.read_word(addr as u16)?
+                };
+
+                //let effective_addr = self.memory.read_word(addr)?;
                 Operand::AddressAndEffectiveAddress(addr, effective_addr)
             },
 
@@ -461,7 +468,16 @@ impl Cpu6502 {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
                 let indirect_addr = addr.wrapping_add(self.registers.x);
-                let effective_addr = self.memory.read_word(indirect_addr as u16)?;
+
+                let effective_addr = if indirect_addr == 0xFF {
+                    let lo = self.memory.read_byte(0xFF)? as u16;
+                    let hi = self.memory.read_byte(0)? as u16;
+                    lo | hi << 8
+                } else {
+                    self.memory.read_word(indirect_addr as u16)?
+                };
+
+                //let effective_addr = self.memory.read_word(indirect_addr as u16)?;
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
             },
 
@@ -535,7 +551,7 @@ impl Instruction {
         result
     }
 
-    fn get_operand_word_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u16, CpuError> {
+    fn get_operand_word_value(&self, _: &Cpu6502, operand: &Operand) -> Result<u16, CpuError> {
 
         let result = match operand {
             Operand::Address(addr) => {

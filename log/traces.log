@@ -1084,39 +1084,41 @@ CFD1  8D 03 03  STA $0303 = 00                  A:5C X:55 Y:69 P:25 SP:FB
 CFD4  A9 5D     LDA #$5D                        A:5C X:55 Y:69 P:25 SP:FB
 CFD6  8D 00 04  STA $0400 = 00                  A:5D X:55 Y:69 P:25 SP:FB
 CFD9  A2 00     LDX #$00                        A:5D X:55 Y:69 P:25 SP:FB
-CFDB  A1 80     LDA ($80,X)                     A:5D X:00 Y:69 P:27 SP:FB
+CFDB  A1 80     LDA ($80,X) @ 80 = 0200 = 5A    A:5D X:00 Y:69 P:27 SP:FB
 CFDD  C9 5A     CMP #$5A                        A:5A X:00 Y:69 P:25 SP:FB
 CFDF  D0 1F     BNE $D000                       A:5A X:00 Y:69 P:27 SP:FB
 CFE1  E8        INX                             A:5A X:00 Y:69 P:27 SP:FB
 CFE2  E8        INX                             A:5A X:01 Y:69 P:25 SP:FB
-CFE3  A1 80     LDA ($80,X)                     A:5A X:02 Y:69 P:25 SP:FB
+CFE3  A1 80     LDA ($80,X) @ 82 = 0300 = 5B    A:5A X:02 Y:69 P:25 SP:FB
 CFE5  C9 5B     CMP #$5B                        A:5B X:02 Y:69 P:25 SP:FB
 CFE7  D0 17     BNE $D000                       A:5B X:02 Y:69 P:27 SP:FB
 CFE9  E8        INX                             A:5B X:02 Y:69 P:27 SP:FB
-CFEA  A1 80     LDA ($80,X)                     A:5B X:03 Y:69 P:25 SP:FB
+CFEA  A1 80     LDA ($80,X) @ 83 = 0303 = 5C    A:5B X:03 Y:69 P:25 SP:FB
 CFEC  C9 5C     CMP #$5C                        A:5C X:03 Y:69 P:25 SP:FB
 CFEE  D0 10     BNE $D000                       A:5C X:03 Y:69 P:27 SP:FB
 CFF0  A2 00     LDX #$00                        A:5C X:03 Y:69 P:27 SP:FB
-CFF2  A1 FF     LDA ($FF,X)                     A:5C X:00 Y:69 P:27 SP:FB
-CFF4  C9 5D     CMP #$5D                        A:04 X:00 Y:69 P:25 SP:FB
-CFF6  D0 08     BNE $D000                       A:04 X:00 Y:69 P:A4 SP:FB
-D000  A9 58     LDA #$58                        A:04 X:00 Y:69 P:A4 SP:FB
-D002  8D FF 07  STA $07FF = 00                  A:58 X:00 Y:69 P:24 SP:FB
-D005  A9 AA     LDA #$AA                        A:58 X:00 Y:69 P:24 SP:FB
-D007  A2 00     LDX #$00                        A:AA X:00 Y:69 P:A4 SP:FB
-D009  81 80     STA ($80,X)                     A:AA X:00 Y:69 P:26 SP:FB
-D00B  E8        INX                             A:AA X:00 Y:69 P:26 SP:FB
-D00C  E8        INX                             A:AA X:01 Y:69 P:24 SP:FB
-D00D  A9 AB     LDA #$AB                        A:AA X:02 Y:69 P:24 SP:FB
-D00F  81 80     STA ($80,X)                     A:AB X:02 Y:69 P:A4 SP:FB
-D011  E8        INX                             A:AB X:02 Y:69 P:A4 SP:FB
-D012  A9 AC     LDA #$AC                        A:AB X:03 Y:69 P:24 SP:FB
-D014  81 80     STA ($80,X)                     A:AC X:03 Y:69 P:A4 SP:FB
-D016  A2 00     LDX #$00                        A:AC X:03 Y:69 P:A4 SP:FB
-D018  A9 AD     LDA #$AD                        A:AC X:00 Y:69 P:26 SP:FB
-D01A  81 FF     STA ($FF,X)                     A:AD X:00 Y:69 P:A4 SP:FB
-D01C  AD 00 02  LDA $0200 = AA                  A:AD X:00 Y:69 P:A4 SP:FB
-D01F  C9 AA     CMP #$AA                        A:AA X:00 Y:69 P:A4 SP:FB
+CFF2  A1 FF     LDA ($FF,X) @ FF = 0400 = 5D    A:5C X:00 Y:69 P:27 SP:FB
+CFF4  C9 5D     CMP #$5D                        A:5D X:00 Y:69 P:25 SP:FB
+CFF6  D0 08     BNE $D000                       A:5D X:00 Y:69 P:27 SP:FB
+CFF8  A2 81     LDX #$81                        A:5D X:00 Y:69 P:27 SP:FB
+CFFA  A1 FF     LDA ($FF,X) @ 180 = 0200 = 5A   A:5D X:81 Y:69 P:A5 SP:FB
+CFFC  C9 5A     CMP #$5A                        A:5A X:81 Y:69 P:25 SP:FB
+CFFE  F0 05     BEQ $D005                       A:5A X:81 Y:69 P:27 SP:FB
+D005  A9 AA     LDA #$AA                        A:5A X:81 Y:69 P:27 SP:FB
+D007  A2 00     LDX #$00                        A:AA X:81 Y:69 P:A5 SP:FB
+D009  81 80     STA ($80,X) @ 80 = 0200 = 5A    A:AA X:00 Y:69 P:27 SP:FB
+D00B  E8        INX                             A:AA X:00 Y:69 P:27 SP:FB
+D00C  E8        INX                             A:AA X:01 Y:69 P:25 SP:FB
+D00D  A9 AB     LDA #$AB                        A:AA X:02 Y:69 P:25 SP:FB
+D00F  81 80     STA ($80,X) @ 82 = 0300 = 5B    A:AB X:02 Y:69 P:A5 SP:FB
+D011  E8        INX                             A:AB X:02 Y:69 P:A5 SP:FB
+D012  A9 AC     LDA #$AC                        A:AB X:03 Y:69 P:25 SP:FB
+D014  81 80     STA ($80,X) @ 83 = 0303 = 5C    A:AC X:03 Y:69 P:A5 SP:FB
+D016  A2 00     LDX #$00                        A:AC X:03 Y:69 P:A5 SP:FB
+D018  A9 AD     LDA #$AD                        A:AC X:00 Y:69 P:27 SP:FB
+D01A  81 FF     STA ($FF,X) @ FF = 0400 = 5D    A:AD X:00 Y:69 P:A5 SP:FB
+D01C  AD 00 02  LDA $0200 = AA                  A:AD X:00 Y:69 P:A5 SP:FB
+D01F  C9 AA     CMP #$AA                        A:AA X:00 Y:69 P:A5 SP:FB
 D021  D0 15     BNE $D038                       A:AA X:00 Y:69 P:27 SP:FB
 D023  AD 00 03  LDA $0300 = AB                  A:AA X:00 Y:69 P:27 SP:FB
 D026  C9 AB     CMP #$AB                        A:AB X:00 Y:69 P:A5 SP:FB
@@ -1124,27 +1126,25 @@ D028  D0 0E     BNE $D038                       A:AB X:00 Y:69 P:27 SP:FB
 D02A  AD 03 03  LDA $0303 = AC                  A:AB X:00 Y:69 P:27 SP:FB
 D02D  C9 AC     CMP #$AC                        A:AC X:00 Y:69 P:A5 SP:FB
 D02F  D0 07     BNE $D038                       A:AC X:00 Y:69 P:27 SP:FB
-D031  AD 00 04  LDA $0400 = 5D                  A:AC X:00 Y:69 P:27 SP:FB
-D034  C9 AD     CMP #$AD                        A:5D X:00 Y:69 P:25 SP:FB
-D036  F0 05     BEQ $D03D                       A:5D X:00 Y:69 P:A4 SP:FB
-D038  A9 59     LDA #$59                        A:5D X:00 Y:69 P:A4 SP:FB
-D03A  8D FF 07  STA $07FF = 58                  A:59 X:00 Y:69 P:24 SP:FB
-D03D  AD FF 07  LDA $07FF = 59                  A:59 X:00 Y:69 P:24 SP:FB
-D040  85 00     STA $00 = AD                    A:59 X:00 Y:69 P:24 SP:FB
-D042  A9 00     LDA #$00                        A:59 X:00 Y:69 P:24 SP:FB
-D044  8D 00 03  STA $0300 = AB                  A:00 X:00 Y:69 P:26 SP:FB
-D047  A9 AA     LDA #$AA                        A:00 X:00 Y:69 P:26 SP:FB
-D049  8D 00 02  STA $0200 = AA                  A:AA X:00 Y:69 P:A4 SP:FB
-D04C  A2 00     LDX #$00                        A:AA X:00 Y:69 P:A4 SP:FB
-D04E  A0 5A     LDY #$5A                        A:AA X:00 Y:69 P:26 SP:FB
-D050  20 B6 F7  JSR $F7B6                       A:AA X:00 Y:5A P:24 SP:FB
-F7B6  18        CLC                             A:AA X:00 Y:5A P:24 SP:F9
+D031  AD 00 04  LDA $0400 = AD                  A:AC X:00 Y:69 P:27 SP:FB
+D034  C9 AD     CMP #$AD                        A:AD X:00 Y:69 P:A5 SP:FB
+D036  F0 05     BEQ $D03D                       A:AD X:00 Y:69 P:27 SP:FB
+D03D  AD FF 07  LDA $07FF = 00                  A:AD X:00 Y:69 P:27 SP:FB
+D040  85 00     STA $00 = 04                    A:00 X:00 Y:69 P:27 SP:FB
+D042  A9 00     LDA #$00                        A:00 X:00 Y:69 P:27 SP:FB
+D044  8D 00 03  STA $0300 = AB                  A:00 X:00 Y:69 P:27 SP:FB
+D047  A9 AA     LDA #$AA                        A:00 X:00 Y:69 P:27 SP:FB
+D049  8D 00 02  STA $0200 = AA                  A:AA X:00 Y:69 P:A5 SP:FB
+D04C  A2 00     LDX #$00                        A:AA X:00 Y:69 P:A5 SP:FB
+D04E  A0 5A     LDY #$5A                        A:AA X:00 Y:69 P:27 SP:FB
+D050  20 B6 F7  JSR $F7B6                       A:AA X:00 Y:5A P:25 SP:FB
+F7B6  18        CLC                             A:AA X:00 Y:5A P:25 SP:F9
 F7B7  A9 FF     LDA #$FF                        A:AA X:00 Y:5A P:24 SP:F9
 F7B9  85 01     STA $01 = FF                    A:FF X:00 Y:5A P:A4 SP:F9
 F7BB  24 01     BIT $01 = FF                    A:FF X:00 Y:5A P:A4 SP:F9
 F7BD  A9 55     LDA #$55                        A:FF X:00 Y:5A P:E4 SP:F9
 F7BF  60        RTS                             A:55 X:00 Y:5A P:64 SP:F9
-D053  01 80     ORA ($80,X)                     A:55 X:00 Y:5A P:64 SP:FB
+D053  01 80     ORA ($80,X) @ 80 = 0200 = AA    A:55 X:00 Y:5A P:64 SP:FB
 D055  20 C0 F7  JSR $F7C0                       A:FF X:00 Y:5A P:E4 SP:FB
 F7C0  B0 09     BCS $F7CB                       A:FF X:00 Y:5A P:E4 SP:F9
 F7C2  10 07     BPL $F7CB                       A:FF X:00 Y:5A P:E4 SP:F9
@@ -1158,7 +1158,7 @@ F7CE  38        SEC                             A:FF X:00 Y:5B P:65 SP:F9
 F7CF  B8        CLV                             A:FF X:00 Y:5B P:65 SP:F9
 F7D0  A9 00     LDA #$00                        A:FF X:00 Y:5B P:25 SP:F9
 F7D2  60        RTS                             A:00 X:00 Y:5B P:27 SP:F9
-D05C  01 82     ORA ($82,X)                     A:00 X:00 Y:5B P:27 SP:FB
+D05C  01 82     ORA ($82,X) @ 82 = 0300 = 00    A:00 X:00 Y:5B P:27 SP:FB
 D05E  20 D3 F7  JSR $F7D3                       A:00 X:00 Y:5B P:27 SP:FB
 F7D3  D0 07     BNE $F7DC                       A:00 X:00 Y:5B P:27 SP:F9
 F7D5  70 05     BVS $F7DC                       A:00 X:00 Y:5B P:27 SP:F9
@@ -1171,7 +1171,7 @@ F7DF  18        CLC                             A:00 X:00 Y:5C P:25 SP:F9
 F7E0  24 01     BIT $01 = FF                    A:00 X:00 Y:5C P:24 SP:F9
 F7E2  A9 55     LDA #$55                        A:00 X:00 Y:5C P:E6 SP:F9
 F7E4  60        RTS                             A:55 X:00 Y:5C P:64 SP:F9
-D065  21 80     AND ($80,X)                     A:55 X:00 Y:5C P:64 SP:FB
+D065  21 80     AND ($80,X) @ 80 = 0200 = AA    A:55 X:00 Y:5C P:64 SP:FB
 D067  20 E5 F7  JSR $F7E5                       A:00 X:00 Y:5C P:66 SP:FB
 F7E5  D0 07     BNE $F7EE                       A:00 X:00 Y:5C P:66 SP:F9
 F7E7  50 05     BVC $F7EE                       A:00 X:00 Y:5C P:66 SP:F9
@@ -1186,7 +1186,7 @@ F7F1  38        SEC                             A:EF X:00 Y:5D P:E4 SP:F9
 F7F2  B8        CLV                             A:EF X:00 Y:5D P:E5 SP:F9
 F7F3  A9 F8     LDA #$F8                        A:EF X:00 Y:5D P:A5 SP:F9
 F7F5  60        RTS                             A:F8 X:00 Y:5D P:A5 SP:F9
-D073  21 82     AND ($82,X)                     A:F8 X:00 Y:5D P:A5 SP:FB
+D073  21 82     AND ($82,X) @ 82 = 0300 = EF    A:F8 X:00 Y:5D P:A5 SP:FB
 D075  20 F6 F7  JSR $F7F6                       A:E8 X:00 Y:5D P:A5 SP:FB
 F7F6  90 09     BCC $F801                       A:E8 X:00 Y:5D P:A5 SP:F9
 F7F8  10 07     BPL $F801                       A:E8 X:00 Y:5D P:A5 SP:F9
@@ -1200,7 +1200,7 @@ F804  18        CLC                             A:E8 X:00 Y:5E P:25 SP:F9
 F805  24 01     BIT $01 = FF                    A:E8 X:00 Y:5E P:24 SP:F9
 F807  A9 5F     LDA #$5F                        A:E8 X:00 Y:5E P:E4 SP:F9
 F809  60        RTS                             A:5F X:00 Y:5E P:64 SP:F9
-D07C  41 80     EOR ($80,X)                     A:5F X:00 Y:5E P:64 SP:FB
+D07C  41 80     EOR ($80,X) @ 80 = 0200 = AA    A:5F X:00 Y:5E P:64 SP:FB
 D07E  20 0A F8  JSR $F80A                       A:F5 X:00 Y:5E P:E4 SP:FB
 F80A  B0 09     BCS $F815                       A:F5 X:00 Y:5E P:E4 SP:F9
 F80C  10 07     BPL $F815                       A:F5 X:00 Y:5E P:E4 SP:F9
@@ -1216,7 +1216,7 @@ F818  38        SEC                             A:70 X:00 Y:5F P:65 SP:F9
 F819  B8        CLV                             A:70 X:00 Y:5F P:65 SP:F9
 F81A  A9 70     LDA #$70                        A:70 X:00 Y:5F P:25 SP:F9
 F81C  60        RTS                             A:70 X:00 Y:5F P:25 SP:F9
-D08A  41 82     EOR ($82,X)                     A:70 X:00 Y:5F P:25 SP:FB
+D08A  41 82     EOR ($82,X) @ 82 = 0300 = 70    A:70 X:00 Y:5F P:25 SP:FB
 D08C  20 1D F8  JSR $F81D                       A:00 X:00 Y:5F P:27 SP:FB
 F81D  D0 07     BNE $F826                       A:00 X:00 Y:5F P:27 SP:F9
 F81F  70 05     BVS $F826                       A:00 X:00 Y:5F P:27 SP:F9
@@ -1231,7 +1231,7 @@ F829  18        CLC                             A:69 X:00 Y:60 P:25 SP:F9
 F82A  24 01     BIT $01 = FF                    A:69 X:00 Y:60 P:24 SP:F9
 F82C  A9 00     LDA #$00                        A:69 X:00 Y:60 P:E4 SP:F9
 F82E  60        RTS                             A:00 X:00 Y:60 P:66 SP:F9
-D098  61 80     ADC ($80,X)                     A:00 X:00 Y:60 P:66 SP:FB
+D098  61 80     ADC ($80,X) @ 80 = 0200 = 69    A:00 X:00 Y:60 P:66 SP:FB
 D09A  20 2F F8  JSR $F82F                       A:69 X:00 Y:60 P:24 SP:FB
 F82F  30 09     BMI $F83A                       A:69 X:00 Y:60 P:24 SP:F9
 F831  B0 07     BCS $F83A                       A:69 X:00 Y:60 P:24 SP:F9
@@ -1245,7 +1245,7 @@ F83D  38        SEC                             A:69 X:00 Y:61 P:25 SP:F9
 F83E  24 01     BIT $01 = FF                    A:69 X:00 Y:61 P:25 SP:F9
 F840  A9 00     LDA #$00                        A:69 X:00 Y:61 P:E5 SP:F9
 F842  60        RTS                             A:00 X:00 Y:61 P:67 SP:F9
-D0A1  61 80     ADC ($80,X)                     A:00 X:00 Y:61 P:67 SP:FB
+D0A1  61 80     ADC ($80,X) @ 80 = 0200 = 69    A:00 X:00 Y:61 P:67 SP:FB
 D0A3  20 43 F8  JSR $F843                       A:6A X:00 Y:61 P:24 SP:FB
 F843  30 09     BMI $F84E                       A:6A X:00 Y:61 P:24 SP:F9
 F845  B0 07     BCS $F84E                       A:6A X:00 Y:61 P:24 SP:F9
@@ -1261,7 +1261,7 @@ F851  38        SEC                             A:7F X:00 Y:62 P:25 SP:F9
 F852  B8        CLV                             A:7F X:00 Y:62 P:25 SP:F9
 F853  A9 7F     LDA #$7F                        A:7F X:00 Y:62 P:25 SP:F9
 F855  60        RTS                             A:7F X:00 Y:62 P:25 SP:F9
-D0AF  61 80     ADC ($80,X)                     A:7F X:00 Y:62 P:25 SP:FB
+D0AF  61 80     ADC ($80,X) @ 80 = 0200 = 7F    A:7F X:00 Y:62 P:25 SP:FB
 D0B1  20 56 F8  JSR $F856                       A:FF X:00 Y:62 P:E4 SP:FB
 F856  10 09     BPL $F861                       A:FF X:00 Y:62 P:E4 SP:F9
 F858  B0 07     BCS $F861                       A:FF X:00 Y:62 P:E4 SP:F9
@@ -1277,7 +1277,7 @@ F864  18        CLC                             A:80 X:00 Y:63 P:E5 SP:F9
 F865  24 01     BIT $01 = FF                    A:80 X:00 Y:63 P:E4 SP:F9
 F867  A9 7F     LDA #$7F                        A:80 X:00 Y:63 P:E4 SP:F9
 F869  60        RTS                             A:7F X:00 Y:63 P:64 SP:F9
-D0BD  61 80     ADC ($80,X)                     A:7F X:00 Y:63 P:64 SP:FB
+D0BD  61 80     ADC ($80,X) @ 80 = 0200 = 80    A:7F X:00 Y:63 P:64 SP:FB
 D0BF  20 6A F8  JSR $F86A                       A:FF X:00 Y:63 P:A4 SP:FB
 F86A  10 09     BPL $F875                       A:FF X:00 Y:63 P:A4 SP:F9
 F86C  B0 07     BCS $F875                       A:FF X:00 Y:63 P:A4 SP:F9
@@ -1291,7 +1291,7 @@ F878  38        SEC                             A:FF X:00 Y:64 P:25 SP:F9
 F879  B8        CLV                             A:FF X:00 Y:64 P:25 SP:F9
 F87A  A9 7F     LDA #$7F                        A:FF X:00 Y:64 P:25 SP:F9
 F87C  60        RTS                             A:7F X:00 Y:64 P:25 SP:F9
-D0C6  61 80     ADC ($80,X)                     A:7F X:00 Y:64 P:25 SP:FB
+D0C6  61 80     ADC ($80,X) @ 80 = 0200 = 80    A:7F X:00 Y:64 P:25 SP:FB
 D0C8  20 7D F8  JSR $F87D                       A:00 X:00 Y:64 P:27 SP:FB
 F87D  D0 07     BNE $F886                       A:00 X:00 Y:64 P:27 SP:F9
 F87F  30 05     BMI $F886                       A:00 X:00 Y:64 P:27 SP:F9
@@ -1305,7 +1305,7 @@ D0D1  20 89 F8  JSR $F889                       A:40 X:00 Y:65 P:25 SP:FB
 F889  24 01     BIT $01 = FF                    A:40 X:00 Y:65 P:25 SP:F9
 F88B  A9 40     LDA #$40                        A:40 X:00 Y:65 P:E5 SP:F9
 F88D  60        RTS                             A:40 X:00 Y:65 P:65 SP:F9
-D0D4  C1 80     CMP ($80,X)                     A:40 X:00 Y:65 P:65 SP:FB
+D0D4  C1 80     CMP ($80,X) @ 80 = 0200 = 40    A:40 X:00 Y:65 P:65 SP:FB
 D0D6  20 8E F8  JSR $F88E                       A:40 X:00 Y:65 P:67 SP:FB
 F88E  30 07     BMI $F897                       A:40 X:00 Y:65 P:67 SP:F9
 F890  90 05     BCC $F897                       A:40 X:00 Y:65 P:67 SP:F9
@@ -1320,7 +1320,7 @@ D0E0  68        PLA                             A:3F X:00 Y:66 P:65 SP:FA
 D0E1  20 9A F8  JSR $F89A                       A:40 X:00 Y:66 P:65 SP:FB
 F89A  B8        CLV                             A:40 X:00 Y:66 P:65 SP:F9
 F89B  60        RTS                             A:40 X:00 Y:66 P:25 SP:F9
-D0E4  C1 80     CMP ($80,X)                     A:40 X:00 Y:66 P:25 SP:FB
+D0E4  C1 80     CMP ($80,X) @ 80 = 0200 = 3F    A:40 X:00 Y:66 P:25 SP:FB
 D0E6  20 9C F8  JSR $F89C                       A:40 X:00 Y:66 P:25 SP:FB
 F89C  F0 07     BEQ $F8A5                       A:40 X:00 Y:66 P:25 SP:F9
 F89E  30 05     BMI $F8A5                       A:40 X:00 Y:66 P:25 SP:F9
@@ -1332,7 +1332,7 @@ D0EA  48        PHA                             A:40 X:00 Y:67 P:25 SP:FB
 D0EB  A9 41     LDA #$41                        A:40 X:00 Y:67 P:25 SP:FA
 D0ED  8D 00 02  STA $0200 = 3F                  A:41 X:00 Y:67 P:25 SP:FA
 D0F0  68        PLA                             A:41 X:00 Y:67 P:25 SP:FA
-D0F1  C1 80     CMP ($80,X)                     A:40 X:00 Y:67 P:25 SP:FB
+D0F1  C1 80     CMP ($80,X) @ 80 = 0200 = 41    A:40 X:00 Y:67 P:25 SP:FB
 D0F3  20 A8 F8  JSR $F8A8                       A:40 X:00 Y:67 P:A4 SP:FB
 F8A8  F0 05     BEQ $F8AF                       A:40 X:00 Y:67 P:A4 SP:F9
 F8AA  10 03     BPL $F8AF                       A:40 X:00 Y:67 P:A4 SP:F9
@@ -1346,7 +1346,7 @@ D0FD  68        PLA                             A:00 X:00 Y:68 P:26 SP:FA
 D0FE  20 B2 F8  JSR $F8B2                       A:40 X:00 Y:68 P:24 SP:FB
 F8B2  A9 80     LDA #$80                        A:40 X:00 Y:68 P:24 SP:F9
 F8B4  60        RTS                             A:80 X:00 Y:68 P:A4 SP:F9
-D101  C1 80     CMP ($80,X)                     A:80 X:00 Y:68 P:A4 SP:FB
+D101  C1 80     CMP ($80,X) @ 80 = 0200 = 00    A:80 X:00 Y:68 P:A4 SP:FB
 D103  20 B5 F8  JSR $F8B5                       A:80 X:00 Y:68 P:A5 SP:FB
 F8B5  F0 05     BEQ $F8BC                       A:80 X:00 Y:68 P:A5 SP:F9
 F8B7  10 03     BPL $F8BC                       A:80 X:00 Y:68 P:A5 SP:F9
@@ -1357,7 +1357,7 @@ D107  48        PHA                             A:80 X:00 Y:69 P:25 SP:FB
 D108  A9 80     LDA #$80                        A:80 X:00 Y:69 P:25 SP:FA
 D10A  8D 00 02  STA $0200 = 00                  A:80 X:00 Y:69 P:A5 SP:FA
 D10D  68        PLA                             A:80 X:00 Y:69 P:A5 SP:FA
-D10E  C1 80     CMP ($80,X)                     A:80 X:00 Y:69 P:A5 SP:FB
+D10E  C1 80     CMP ($80,X) @ 80 = 0200 = 80    A:80 X:00 Y:69 P:A5 SP:FB
 D110  20 BF F8  JSR $F8BF                       A:80 X:00 Y:69 P:27 SP:FB
 F8BF  D0 05     BNE $F8C6                       A:80 X:00 Y:69 P:27 SP:F9
 F8C1  30 03     BMI $F8C6                       A:80 X:00 Y:69 P:27 SP:F9
@@ -1368,7 +1368,7 @@ D114  48        PHA                             A:80 X:00 Y:6A P:25 SP:FB
 D115  A9 81     LDA #$81                        A:80 X:00 Y:6A P:25 SP:FA
 D117  8D 00 02  STA $0200 = 80                  A:81 X:00 Y:6A P:A5 SP:FA
 D11A  68        PLA                             A:81 X:00 Y:6A P:A5 SP:FA
-D11B  C1 80     CMP ($80,X)                     A:80 X:00 Y:6A P:A5 SP:FB
+D11B  C1 80     CMP ($80,X) @ 80 = 0200 = 81    A:80 X:00 Y:6A P:A5 SP:FB
 D11D  20 C9 F8  JSR $F8C9                       A:80 X:00 Y:6A P:A4 SP:FB
 F8C9  B0 05     BCS $F8D0                       A:80 X:00 Y:6A P:A4 SP:F9
 F8CB  F0 03     BEQ $F8D0                       A:80 X:00 Y:6A P:A4 SP:F9
@@ -1379,7 +1379,7 @@ D121  48        PHA                             A:80 X:00 Y:6B P:24 SP:FB
 D122  A9 7F     LDA #$7F                        A:80 X:00 Y:6B P:24 SP:FA
 D124  8D 00 02  STA $0200 = 81                  A:7F X:00 Y:6B P:24 SP:FA
 D127  68        PLA                             A:7F X:00 Y:6B P:24 SP:FA
-D128  C1 80     CMP ($80,X)                     A:80 X:00 Y:6B P:A4 SP:FB
+D128  C1 80     CMP ($80,X) @ 80 = 0200 = 7F    A:80 X:00 Y:6B P:A4 SP:FB
 D12A  20 D3 F8  JSR $F8D3                       A:80 X:00 Y:6B P:25 SP:FB
 F8D3  90 05     BCC $F8DA                       A:80 X:00 Y:6B P:25 SP:F9
 F8D5  F0 03     BEQ $F8DA                       A:80 X:00 Y:6B P:25 SP:F9
@@ -1393,7 +1393,7 @@ F931  24 01     BIT $01 = FF                    A:40 X:00 Y:6C P:25 SP:F9
 F933  A9 40     LDA #$40                        A:40 X:00 Y:6C P:E5 SP:F9
 F935  38        SEC                             A:40 X:00 Y:6C P:65 SP:F9
 F936  60        RTS                             A:40 X:00 Y:6C P:65 SP:F9
-D136  E1 80     SBC ($80,X)                     A:40 X:00 Y:6C P:65 SP:FB
+D136  E1 80     SBC ($80,X) @ 80 = 0200 = 40    A:40 X:00 Y:6C P:65 SP:FB
 D138  20 37 F9  JSR $F937                       A:00 X:00 Y:6C P:27 SP:FB
 F937  30 0B     BMI $F944                       A:00 X:00 Y:6C P:27 SP:F9
 F939  90 09     BCC $F944                       A:00 X:00 Y:6C P:27 SP:F9
@@ -1410,7 +1410,7 @@ F947  B8        CLV                             A:3F X:00 Y:6D P:25 SP:F9
 F948  38        SEC                             A:3F X:00 Y:6D P:25 SP:F9
 F949  A9 40     LDA #$40                        A:3F X:00 Y:6D P:25 SP:F9
 F94B  60        RTS                             A:40 X:00 Y:6D P:25 SP:F9
-D144  E1 80     SBC ($80,X)                     A:40 X:00 Y:6D P:25 SP:FB
+D144  E1 80     SBC ($80,X) @ 80 = 0200 = 3F    A:40 X:00 Y:6D P:25 SP:FB
 D146  20 4C F9  JSR $F94C                       A:01 X:00 Y:6D P:25 SP:FB
 F94C  F0 0B     BEQ $F959                       A:01 X:00 Y:6D P:25 SP:F9
 F94E  30 09     BMI $F959                       A:01 X:00 Y:6D P:25 SP:F9
@@ -1427,7 +1427,7 @@ F95C  A9 40     LDA #$40                        A:41 X:00 Y:6E P:25 SP:F9
 F95E  38        SEC                             A:40 X:00 Y:6E P:25 SP:F9
 F95F  24 01     BIT $01 = FF                    A:40 X:00 Y:6E P:25 SP:F9
 F961  60        RTS                             A:40 X:00 Y:6E P:E5 SP:F9
-D152  E1 80     SBC ($80,X)                     A:40 X:00 Y:6E P:E5 SP:FB
+D152  E1 80     SBC ($80,X) @ 80 = 0200 = 41    A:40 X:00 Y:6E P:E5 SP:FB
 D154  20 62 F9  JSR $F962                       A:FF X:00 Y:6E P:A4 SP:FB
 F962  B0 0B     BCS $F96F                       A:FF X:00 Y:6E P:A4 SP:F9
 F964  F0 09     BEQ $F96F                       A:FF X:00 Y:6E P:A4 SP:F9
@@ -1443,7 +1443,7 @@ D15D  20 72 F9  JSR $F972                       A:00 X:00 Y:6F P:27 SP:FB
 F972  18        CLC                             A:00 X:00 Y:6F P:27 SP:F9
 F973  A9 80     LDA #$80                        A:00 X:00 Y:6F P:26 SP:F9
 F975  60        RTS                             A:80 X:00 Y:6F P:A4 SP:F9
-D160  E1 80     SBC ($80,X)                     A:80 X:00 Y:6F P:A4 SP:FB
+D160  E1 80     SBC ($80,X) @ 80 = 0200 = 00    A:80 X:00 Y:6F P:A4 SP:FB
 D162  20 76 F9  JSR $F976                       A:7F X:00 Y:6F P:65 SP:FB
 F976  90 05     BCC $F97D                       A:7F X:00 Y:6F P:65 SP:F9
 F978  C9 7F     CMP #$7F                        A:7F X:00 Y:6F P:65 SP:F9
@@ -1456,7 +1456,7 @@ D16B  20 80 F9  JSR $F980                       A:7F X:00 Y:70 P:65 SP:FB
 F980  38        SEC                             A:7F X:00 Y:70 P:65 SP:F9
 F981  A9 81     LDA #$81                        A:7F X:00 Y:70 P:65 SP:F9
 F983  60        RTS                             A:81 X:00 Y:70 P:E5 SP:F9
-D16E  E1 80     SBC ($80,X)                     A:81 X:00 Y:70 P:E5 SP:FB
+D16E  E1 80     SBC ($80,X) @ 80 = 0200 = 7F    A:81 X:00 Y:70 P:E5 SP:FB
 D170  20 84 F9  JSR $F984                       A:02 X:00 Y:70 P:65 SP:FB
 F984  50 07     BVC $F98D                       A:02 X:00 Y:70 P:65 SP:F9
 F986  90 05     BCC $F98D                       A:02 X:00 Y:70 P:65 SP:F9
@@ -3038,7 +3038,7 @@ D91C  A0 00     LDY #$00                        A:03 X:65 Y:E4 P:25 SP:FB
 D91E  38        SEC                             A:03 X:65 Y:00 P:27 SP:FB
 D91F  A9 00     LDA #$00                        A:03 X:65 Y:00 P:27 SP:FB
 D921  B8        CLV                             A:00 X:65 Y:00 P:27 SP:FB
-D922  B1 89     LDA ($89),Y                     A:00 X:65 Y:00 P:27 SP:FB
+D922  B1 89     LDA ($89),Y = 0300 @ 0300 = 89  A:00 X:65 Y:00 P:27 SP:FB
 D924  F0 0C     BEQ $D932                       A:89 X:65 Y:00 P:A5 SP:FB
 D926  90 0A     BCC $D932                       A:89 X:65 Y:00 P:A5 SP:FB
 D928  70 08     BVS $D932                       A:89 X:65 Y:00 P:A5 SP:FB
@@ -3051,22 +3051,22 @@ D938  85 97     STA $97 = 00                    A:FF X:65 Y:00 P:A5 SP:FB
 D93A  85 98     STA $98 = 00                    A:FF X:65 Y:00 P:A5 SP:FB
 D93C  24 98     BIT $98 = FF                    A:FF X:65 Y:00 P:A5 SP:FB
 D93E  A0 34     LDY #$34                        A:FF X:65 Y:00 P:E5 SP:FB
-D940  B1 97     LDA ($97),Y                     A:FF X:65 Y:34 P:65 SP:FB
+D940  B1 97     LDA ($97),Y = FFFF @ 0033 = A3  A:FF X:65 Y:34 P:65 SP:FB
 D942  C9 A3     CMP #$A3                        A:A3 X:65 Y:34 P:E5 SP:FB
 D944  D0 02     BNE $D948                       A:A3 X:65 Y:34 P:67 SP:FB
 D946  B0 04     BCS $D94C                       A:A3 X:65 Y:34 P:67 SP:FB
-D94C  A5 00     LDA $00 = 59                    A:A3 X:65 Y:34 P:67 SP:FB
-D94E  48        PHA                             A:59 X:65 Y:34 P:65 SP:FB
-D94F  A9 46     LDA #$46                        A:59 X:65 Y:34 P:65 SP:FA
+D94C  A5 00     LDA $00 = 00                    A:A3 X:65 Y:34 P:67 SP:FB
+D94E  48        PHA                             A:00 X:65 Y:34 P:67 SP:FB
+D94F  A9 46     LDA #$46                        A:00 X:65 Y:34 P:67 SP:FA
 D951  85 FF     STA $FF = 00                    A:46 X:65 Y:34 P:65 SP:FA
 D953  A9 01     LDA #$01                        A:46 X:65 Y:34 P:65 SP:FA
-D955  85 00     STA $00 = 59                    A:01 X:65 Y:34 P:65 SP:FA
+D955  85 00     STA $00 = 00                    A:01 X:65 Y:34 P:65 SP:FA
 D957  A0 FF     LDY #$FF                        A:01 X:65 Y:34 P:65 SP:FA
-D959  B1 FF     LDA ($FF),Y                     A:01 X:65 Y:FF P:E5 SP:FA
+D959  B1 FF     LDA ($FF),Y = 0046 @ 0145 = 00  A:01 X:65 Y:FF P:E5 SP:FA
 D95B  C9 12     CMP #$12                        A:00 X:65 Y:FF P:67 SP:FA
 D95D  F0 04     BEQ $D963                       A:00 X:65 Y:FF P:E4 SP:FA
 D95F  68        PLA                             A:00 X:65 Y:FF P:E4 SP:FA
-D960  A9 EC     LDA #$EC                        A:59 X:65 Y:FF P:64 SP:FB
+D960  A9 EC     LDA #$EC                        A:00 X:65 Y:FF P:66 SP:FB
 D962  48        PHA                             A:EC X:65 Y:FF P:E4 SP:FB
 D963  68        PLA                             A:EC X:65 Y:FF P:E4 SP:FA
 D964  85 00     STA $00 = 01                    A:EC X:65 Y:FF P:E4 SP:FB
@@ -3081,9 +3081,9 @@ D973  A9 FF     LDA #$FF                        A:04 X:ED Y:00 P:66 SP:FB
 D975  85 01     STA $01 = FF                    A:FF X:ED Y:00 P:E4 SP:FB
 D977  24 01     BIT $01 = FF                    A:FF X:ED Y:00 P:E4 SP:FB
 D979  A9 AA     LDA #$AA                        A:FF X:ED Y:00 P:E4 SP:FB
-D97B  8D 00 04  STA $0400 = 5D                  A:AA X:ED Y:00 P:E4 SP:FB
+D97B  8D 00 04  STA $0400 = AD                  A:AA X:ED Y:00 P:E4 SP:FB
 D97E  A9 55     LDA #$55                        A:AA X:ED Y:00 P:E4 SP:FB
-D980  11 33     ORA ($33),Y                     A:55 X:ED Y:00 P:64 SP:FB
+D980  11 33     ORA ($33),Y = 0400 @ 0400 = AA  A:55 X:ED Y:00 P:64 SP:FB
 D982  B0 08     BCS $D98C                       A:FF X:ED Y:00 P:E4 SP:FB
 D984  10 06     BPL $D98C                       A:FF X:ED Y:00 P:E4 SP:FB
 D986  C9 FF     CMP #$FF                        A:FF X:ED Y:00 P:E4 SP:FB
@@ -3093,7 +3093,7 @@ D98E  E8        INX                             A:FF X:ED Y:00 P:67 SP:FB
 D98F  38        SEC                             A:FF X:EE Y:00 P:E5 SP:FB
 D990  B8        CLV                             A:FF X:EE Y:00 P:E5 SP:FB
 D991  A9 00     LDA #$00                        A:FF X:EE Y:00 P:A5 SP:FB
-D993  11 33     ORA ($33),Y                     A:00 X:EE Y:00 P:27 SP:FB
+D993  11 33     ORA ($33),Y = 0400 @ 0400 = AA  A:00 X:EE Y:00 P:27 SP:FB
 D995  F0 06     BEQ $D99D                       A:AA X:EE Y:00 P:A5 SP:FB
 D997  70 04     BVS $D99D                       A:AA X:EE Y:00 P:A5 SP:FB
 D999  90 02     BCC $D99D                       A:AA X:EE Y:00 P:A5 SP:FB
@@ -3102,7 +3102,7 @@ D99F  E8        INX                             A:AA X:EE Y:00 P:A5 SP:FB
 D9A0  18        CLC                             A:AA X:EF Y:00 P:A5 SP:FB
 D9A1  24 01     BIT $01 = FF                    A:AA X:EF Y:00 P:A4 SP:FB
 D9A3  A9 55     LDA #$55                        A:AA X:EF Y:00 P:E4 SP:FB
-D9A5  31 33     AND ($33),Y                     A:55 X:EF Y:00 P:64 SP:FB
+D9A5  31 33     AND ($33),Y = 0400 @ 0400 = AA  A:55 X:EF Y:00 P:64 SP:FB
 D9A7  D0 06     BNE $D9AF                       A:00 X:EF Y:00 P:66 SP:FB
 D9A9  50 04     BVC $D9AF                       A:00 X:EF Y:00 P:66 SP:FB
 D9AB  B0 02     BCS $D9AF                       A:00 X:EF Y:00 P:66 SP:FB
@@ -3113,7 +3113,7 @@ D9B3  B8        CLV                             A:00 X:F0 Y:00 P:E5 SP:FB
 D9B4  A9 EF     LDA #$EF                        A:00 X:F0 Y:00 P:A5 SP:FB
 D9B6  8D 00 04  STA $0400 = AA                  A:EF X:F0 Y:00 P:A5 SP:FB
 D9B9  A9 F8     LDA #$F8                        A:EF X:F0 Y:00 P:A5 SP:FB
-D9BB  31 33     AND ($33),Y                     A:F8 X:F0 Y:00 P:A5 SP:FB
+D9BB  31 33     AND ($33),Y = 0400 @ 0400 = EF  A:F8 X:F0 Y:00 P:A5 SP:FB
 D9BD  90 08     BCC $D9C7                       A:E8 X:F0 Y:00 P:A5 SP:FB
 D9BF  10 06     BPL $D9C7                       A:E8 X:F0 Y:00 P:A5 SP:FB
 D9C1  C9 E8     CMP #$E8                        A:E8 X:F0 Y:00 P:A5 SP:FB
@@ -3125,7 +3125,7 @@ D9CB  24 01     BIT $01 = FF                    A:E8 X:F1 Y:00 P:A4 SP:FB
 D9CD  A9 AA     LDA #$AA                        A:E8 X:F1 Y:00 P:E4 SP:FB
 D9CF  8D 00 04  STA $0400 = EF                  A:AA X:F1 Y:00 P:E4 SP:FB
 D9D2  A9 5F     LDA #$5F                        A:AA X:F1 Y:00 P:E4 SP:FB
-D9D4  51 33     EOR ($33),Y                     A:5F X:F1 Y:00 P:64 SP:FB
+D9D4  51 33     EOR ($33),Y = 0400 @ 0400 = AA  A:5F X:F1 Y:00 P:64 SP:FB
 D9D6  B0 08     BCS $D9E0                       A:F5 X:F1 Y:00 P:E4 SP:FB
 D9D8  10 06     BPL $D9E0                       A:F5 X:F1 Y:00 P:E4 SP:FB
 D9DA  C9 F5     CMP #$F5                        A:F5 X:F1 Y:00 P:E4 SP:FB
@@ -3136,7 +3136,7 @@ D9E3  38        SEC                             A:F5 X:F2 Y:00 P:E5 SP:FB
 D9E4  B8        CLV                             A:F5 X:F2 Y:00 P:E5 SP:FB
 D9E5  A9 70     LDA #$70                        A:F5 X:F2 Y:00 P:A5 SP:FB
 D9E7  8D 00 04  STA $0400 = AA                  A:70 X:F2 Y:00 P:25 SP:FB
-D9EA  51 33     EOR ($33),Y                     A:70 X:F2 Y:00 P:25 SP:FB
+D9EA  51 33     EOR ($33),Y = 0400 @ 0400 = 70  A:70 X:F2 Y:00 P:25 SP:FB
 D9EC  D0 06     BNE $D9F4                       A:00 X:F2 Y:00 P:27 SP:FB
 D9EE  70 04     BVS $D9F4                       A:00 X:F2 Y:00 P:27 SP:FB
 D9F0  90 02     BCC $D9F4                       A:00 X:F2 Y:00 P:27 SP:FB
@@ -3147,7 +3147,7 @@ D9F8  24 01     BIT $01 = FF                    A:00 X:F3 Y:00 P:A4 SP:FB
 D9FA  A9 69     LDA #$69                        A:00 X:F3 Y:00 P:E6 SP:FB
 D9FC  8D 00 04  STA $0400 = 70                  A:69 X:F3 Y:00 P:64 SP:FB
 D9FF  A9 00     LDA #$00                        A:69 X:F3 Y:00 P:64 SP:FB
-DA01  71 33     ADC ($33),Y                     A:00 X:F3 Y:00 P:66 SP:FB
+DA01  71 33     ADC ($33),Y = 0400 @ 0400 = 69  A:00 X:F3 Y:00 P:66 SP:FB
 DA03  30 08     BMI $DA0D                       A:69 X:F3 Y:00 P:24 SP:FB
 DA05  B0 06     BCS $DA0D                       A:69 X:F3 Y:00 P:24 SP:FB
 DA07  C9 69     CMP #$69                        A:69 X:F3 Y:00 P:24 SP:FB
@@ -3157,7 +3157,7 @@ DA0F  E8        INX                             A:69 X:F3 Y:00 P:27 SP:FB
 DA10  38        SEC                             A:69 X:F4 Y:00 P:A5 SP:FB
 DA11  24 01     BIT $01 = FF                    A:69 X:F4 Y:00 P:A5 SP:FB
 DA13  A9 00     LDA #$00                        A:69 X:F4 Y:00 P:E5 SP:FB
-DA15  71 33     ADC ($33),Y                     A:00 X:F4 Y:00 P:67 SP:FB
+DA15  71 33     ADC ($33),Y = 0400 @ 0400 = 69  A:00 X:F4 Y:00 P:67 SP:FB
 DA17  30 08     BMI $DA21                       A:6A X:F4 Y:00 P:24 SP:FB
 DA19  B0 06     BCS $DA21                       A:6A X:F4 Y:00 P:24 SP:FB
 DA1B  C9 6A     CMP #$6A                        A:6A X:F4 Y:00 P:24 SP:FB
@@ -3168,7 +3168,7 @@ DA24  38        SEC                             A:6A X:F5 Y:00 P:A5 SP:FB
 DA25  B8        CLV                             A:6A X:F5 Y:00 P:A5 SP:FB
 DA26  A9 7F     LDA #$7F                        A:6A X:F5 Y:00 P:A5 SP:FB
 DA28  8D 00 04  STA $0400 = 69                  A:7F X:F5 Y:00 P:25 SP:FB
-DA2B  71 33     ADC ($33),Y                     A:7F X:F5 Y:00 P:25 SP:FB
+DA2B  71 33     ADC ($33),Y = 0400 @ 0400 = 7F  A:7F X:F5 Y:00 P:25 SP:FB
 DA2D  10 08     BPL $DA37                       A:FF X:F5 Y:00 P:E4 SP:FB
 DA2F  B0 06     BCS $DA37                       A:FF X:F5 Y:00 P:E4 SP:FB
 DA31  C9 FF     CMP #$FF                        A:FF X:F5 Y:00 P:E4 SP:FB
@@ -3180,7 +3180,7 @@ DA3B  24 01     BIT $01 = FF                    A:FF X:F6 Y:00 P:E4 SP:FB
 DA3D  A9 80     LDA #$80                        A:FF X:F6 Y:00 P:E4 SP:FB
 DA3F  8D 00 04  STA $0400 = 7F                  A:80 X:F6 Y:00 P:E4 SP:FB
 DA42  A9 7F     LDA #$7F                        A:80 X:F6 Y:00 P:E4 SP:FB
-DA44  71 33     ADC ($33),Y                     A:7F X:F6 Y:00 P:64 SP:FB
+DA44  71 33     ADC ($33),Y = 0400 @ 0400 = 80  A:7F X:F6 Y:00 P:64 SP:FB
 DA46  10 08     BPL $DA50                       A:FF X:F6 Y:00 P:A4 SP:FB
 DA48  B0 06     BCS $DA50                       A:FF X:F6 Y:00 P:A4 SP:FB
 DA4A  C9 FF     CMP #$FF                        A:FF X:F6 Y:00 P:A4 SP:FB
@@ -3192,7 +3192,7 @@ DA54  B8        CLV                             A:FF X:F7 Y:00 P:A5 SP:FB
 DA55  A9 80     LDA #$80                        A:FF X:F7 Y:00 P:A5 SP:FB
 DA57  8D 00 04  STA $0400 = 80                  A:80 X:F7 Y:00 P:A5 SP:FB
 DA5A  A9 7F     LDA #$7F                        A:80 X:F7 Y:00 P:A5 SP:FB
-DA5C  71 33     ADC ($33),Y                     A:7F X:F7 Y:00 P:25 SP:FB
+DA5C  71 33     ADC ($33),Y = 0400 @ 0400 = 80  A:7F X:F7 Y:00 P:25 SP:FB
 DA5E  D0 06     BNE $DA66                       A:00 X:F7 Y:00 P:27 SP:FB
 DA60  30 04     BMI $DA66                       A:00 X:F7 Y:00 P:27 SP:FB
 DA62  70 02     BVS $DA66                       A:00 X:F7 Y:00 P:27 SP:FB
@@ -3201,7 +3201,7 @@ DA68  E8        INX                             A:00 X:F7 Y:00 P:27 SP:FB
 DA69  24 01     BIT $01 = FF                    A:00 X:F8 Y:00 P:A5 SP:FB
 DA6B  A9 40     LDA #$40                        A:00 X:F8 Y:00 P:E7 SP:FB
 DA6D  8D 00 04  STA $0400 = 80                  A:40 X:F8 Y:00 P:65 SP:FB
-DA70  D1 33     CMP ($33),Y                     A:40 X:F8 Y:00 P:65 SP:FB
+DA70  D1 33     CMP ($33),Y = 0400 @ 0400 = 40  A:40 X:F8 Y:00 P:65 SP:FB
 DA72  30 06     BMI $DA7A                       A:40 X:F8 Y:00 P:67 SP:FB
 DA74  90 04     BCC $DA7A                       A:40 X:F8 Y:00 P:67 SP:FB
 DA76  D0 02     BNE $DA7A                       A:40 X:F8 Y:00 P:67 SP:FB
@@ -3209,7 +3209,7 @@ DA78  70 02     BVS $DA7C                       A:40 X:F8 Y:00 P:67 SP:FB
 DA7C  E8        INX                             A:40 X:F8 Y:00 P:67 SP:FB
 DA7D  B8        CLV                             A:40 X:F9 Y:00 P:E5 SP:FB
 DA7E  CE 00 04  DEC $0400 = 40                  A:40 X:F9 Y:00 P:A5 SP:FB
-DA81  D1 33     CMP ($33),Y                     A:40 X:F9 Y:00 P:25 SP:FB
+DA81  D1 33     CMP ($33),Y = 0400 @ 0400 = 3F  A:40 X:F9 Y:00 P:25 SP:FB
 DA83  F0 06     BEQ $DA8B                       A:40 X:F9 Y:00 P:25 SP:FB
 DA85  30 04     BMI $DA8B                       A:40 X:F9 Y:00 P:25 SP:FB
 DA87  90 02     BCC $DA8B                       A:40 X:F9 Y:00 P:25 SP:FB
@@ -3217,14 +3217,14 @@ DA89  50 02     BVC $DA8D                       A:40 X:F9 Y:00 P:25 SP:FB
 DA8D  E8        INX                             A:40 X:F9 Y:00 P:25 SP:FB
 DA8E  EE 00 04  INC $0400 = 3F                  A:40 X:FA Y:00 P:A5 SP:FB
 DA91  EE 00 04  INC $0400 = 40                  A:40 X:FA Y:00 P:25 SP:FB
-DA94  D1 33     CMP ($33),Y                     A:40 X:FA Y:00 P:25 SP:FB
+DA94  D1 33     CMP ($33),Y = 0400 @ 0400 = 41  A:40 X:FA Y:00 P:25 SP:FB
 DA96  F0 02     BEQ $DA9A                       A:40 X:FA Y:00 P:A4 SP:FB
 DA98  30 02     BMI $DA9C                       A:40 X:FA Y:00 P:A4 SP:FB
 DA9C  E8        INX                             A:40 X:FA Y:00 P:A4 SP:FB
 DA9D  A9 00     LDA #$00                        A:40 X:FB Y:00 P:A4 SP:FB
 DA9F  8D 00 04  STA $0400 = 41                  A:00 X:FB Y:00 P:26 SP:FB
 DAA2  A9 80     LDA #$80                        A:00 X:FB Y:00 P:26 SP:FB
-DAA4  D1 33     CMP ($33),Y                     A:80 X:FB Y:00 P:A4 SP:FB
+DAA4  D1 33     CMP ($33),Y = 0400 @ 0400 = 00  A:80 X:FB Y:00 P:A4 SP:FB
 DAA6  F0 04     BEQ $DAAC                       A:80 X:FB Y:00 P:A5 SP:FB
 DAA8  10 02     BPL $DAAC                       A:80 X:FB Y:00 P:A5 SP:FB
 DAAA  B0 02     BCS $DAAE                       A:80 X:FB Y:00 P:A5 SP:FB
@@ -3232,20 +3232,20 @@ DAAE  E8        INX                             A:80 X:FB Y:00 P:A5 SP:FB
 DAAF  A0 80     LDY #$80                        A:80 X:FC Y:00 P:A5 SP:FB
 DAB1  8C 00 04  STY $0400 = 00                  A:80 X:FC Y:80 P:A5 SP:FB
 DAB4  A0 00     LDY #$00                        A:80 X:FC Y:80 P:A5 SP:FB
-DAB6  D1 33     CMP ($33),Y                     A:80 X:FC Y:00 P:27 SP:FB
+DAB6  D1 33     CMP ($33),Y = 0400 @ 0400 = 80  A:80 X:FC Y:00 P:27 SP:FB
 DAB8  D0 04     BNE $DABE                       A:80 X:FC Y:00 P:27 SP:FB
 DABA  30 02     BMI $DABE                       A:80 X:FC Y:00 P:27 SP:FB
 DABC  B0 02     BCS $DAC0                       A:80 X:FC Y:00 P:27 SP:FB
 DAC0  E8        INX                             A:80 X:FC Y:00 P:27 SP:FB
 DAC1  EE 00 04  INC $0400 = 80                  A:80 X:FD Y:00 P:A5 SP:FB
-DAC4  D1 33     CMP ($33),Y                     A:80 X:FD Y:00 P:A5 SP:FB
+DAC4  D1 33     CMP ($33),Y = 0400 @ 0400 = 81  A:80 X:FD Y:00 P:A5 SP:FB
 DAC6  B0 04     BCS $DACC                       A:80 X:FD Y:00 P:A4 SP:FB
 DAC8  F0 02     BEQ $DACC                       A:80 X:FD Y:00 P:A4 SP:FB
 DACA  30 02     BMI $DACE                       A:80 X:FD Y:00 P:A4 SP:FB
 DACE  E8        INX                             A:80 X:FD Y:00 P:A4 SP:FB
 DACF  CE 00 04  DEC $0400 = 81                  A:80 X:FE Y:00 P:A4 SP:FB
 DAD2  CE 00 04  DEC $0400 = 80                  A:80 X:FE Y:00 P:A4 SP:FB
-DAD5  D1 33     CMP ($33),Y                     A:80 X:FE Y:00 P:24 SP:FB
+DAD5  D1 33     CMP ($33),Y = 0400 @ 0400 = 7F  A:80 X:FE Y:00 P:24 SP:FB
 DAD7  90 04     BCC $DADD                       A:80 X:FE Y:00 P:25 SP:FB
 DAD9  F0 02     BEQ $DADD                       A:80 X:FE Y:00 P:25 SP:FB
 DADB  10 02     BPL $DADF                       A:80 X:FE Y:00 P:25 SP:FB
@@ -3265,7 +3265,7 @@ DAEC  24 01     BIT $01 = FF                    A:04 X:01 Y:00 P:25 SP:FB
 DAEE  A9 40     LDA #$40                        A:04 X:01 Y:00 P:E5 SP:FB
 DAF0  8D 00 04  STA $0400 = 7F                  A:40 X:01 Y:00 P:65 SP:FB
 DAF3  38        SEC                             A:40 X:01 Y:00 P:65 SP:FB
-DAF4  F1 33     SBC ($33),Y                     A:40 X:01 Y:00 P:65 SP:FB
+DAF4  F1 33     SBC ($33),Y = 0400 @ 0400 = 40  A:40 X:01 Y:00 P:65 SP:FB
 DAF6  30 0A     BMI $DB02                       A:00 X:01 Y:00 P:27 SP:FB
 DAF8  90 08     BCC $DB02                       A:00 X:01 Y:00 P:27 SP:FB
 DAFA  D0 06     BNE $DB02                       A:00 X:01 Y:00 P:27 SP:FB
@@ -3277,7 +3277,7 @@ DB05  B8        CLV                             A:00 X:02 Y:00 P:25 SP:FB
 DB06  38        SEC                             A:00 X:02 Y:00 P:25 SP:FB
 DB07  A9 40     LDA #$40                        A:00 X:02 Y:00 P:25 SP:FB
 DB09  CE 00 04  DEC $0400 = 40                  A:40 X:02 Y:00 P:25 SP:FB
-DB0C  F1 33     SBC ($33),Y                     A:40 X:02 Y:00 P:25 SP:FB
+DB0C  F1 33     SBC ($33),Y = 0400 @ 0400 = 3F  A:40 X:02 Y:00 P:25 SP:FB
 DB0E  F0 0A     BEQ $DB1A                       A:01 X:02 Y:00 P:25 SP:FB
 DB10  30 08     BMI $DB1A                       A:01 X:02 Y:00 P:25 SP:FB
 DB12  90 06     BCC $DB1A                       A:01 X:02 Y:00 P:25 SP:FB
@@ -3290,7 +3290,7 @@ DB1F  38        SEC                             A:40 X:03 Y:00 P:25 SP:FB
 DB20  24 01     BIT $01 = FF                    A:40 X:03 Y:00 P:25 SP:FB
 DB22  EE 00 04  INC $0400 = 3F                  A:40 X:03 Y:00 P:E5 SP:FB
 DB25  EE 00 04  INC $0400 = 40                  A:40 X:03 Y:00 P:65 SP:FB
-DB28  F1 33     SBC ($33),Y                     A:40 X:03 Y:00 P:65 SP:FB
+DB28  F1 33     SBC ($33),Y = 0400 @ 0400 = 41  A:40 X:03 Y:00 P:65 SP:FB
 DB2A  B0 0A     BCS $DB36                       A:FF X:03 Y:00 P:A4 SP:FB
 DB2C  F0 08     BEQ $DB36                       A:FF X:03 Y:00 P:A4 SP:FB
 DB2E  10 06     BPL $DB36                       A:FF X:03 Y:00 P:A4 SP:FB
@@ -3302,7 +3302,7 @@ DB39  18        CLC                             A:FF X:04 Y:00 P:25 SP:FB
 DB3A  A9 00     LDA #$00                        A:FF X:04 Y:00 P:24 SP:FB
 DB3C  8D 00 04  STA $0400 = 41                  A:00 X:04 Y:00 P:26 SP:FB
 DB3F  A9 80     LDA #$80                        A:00 X:04 Y:00 P:26 SP:FB
-DB41  F1 33     SBC ($33),Y                     A:80 X:04 Y:00 P:A4 SP:FB
+DB41  F1 33     SBC ($33),Y = 0400 @ 0400 = 00  A:80 X:04 Y:00 P:A4 SP:FB
 DB43  90 04     BCC $DB49                       A:7F X:04 Y:00 P:65 SP:FB
 DB45  C9 7F     CMP #$7F                        A:7F X:04 Y:00 P:65 SP:FB
 DB47  F0 02     BEQ $DB4B                       A:7F X:04 Y:00 P:67 SP:FB
@@ -3311,7 +3311,7 @@ DB4C  38        SEC                             A:7F X:05 Y:00 P:65 SP:FB
 DB4D  A9 7F     LDA #$7F                        A:7F X:05 Y:00 P:65 SP:FB
 DB4F  8D 00 04  STA $0400 = 00                  A:7F X:05 Y:00 P:65 SP:FB
 DB52  A9 81     LDA #$81                        A:7F X:05 Y:00 P:65 SP:FB
-DB54  F1 33     SBC ($33),Y                     A:81 X:05 Y:00 P:E5 SP:FB
+DB54  F1 33     SBC ($33),Y = 0400 @ 0400 = 7F  A:81 X:05 Y:00 P:E5 SP:FB
 DB56  50 06     BVC $DB5E                       A:02 X:05 Y:00 P:65 SP:FB
 DB58  90 04     BCC $DB5E                       A:02 X:05 Y:00 P:65 SP:FB
 DB5A  C9 02     CMP #$02                        A:02 X:05 Y:00 P:65 SP:FB
@@ -3319,7 +3319,7 @@ DB5C  F0 02     BEQ $DB60                       A:02 X:05 Y:00 P:67 SP:FB
 DB60  E8        INX                             A:02 X:05 Y:00 P:67 SP:FB
 DB61  A9 00     LDA #$00                        A:02 X:06 Y:00 P:65 SP:FB
 DB63  A9 87     LDA #$87                        A:00 X:06 Y:00 P:67 SP:FB
-DB65  91 33     STA ($33),Y                     A:87 X:06 Y:00 P:E5 SP:FB
+DB65  91 33     STA ($33),Y = 0400 @ 0400 = 7F  A:87 X:06 Y:00 P:E5 SP:FB
 DB67  AD 00 04  LDA $0400 = 87                  A:87 X:06 Y:00 P:E5 SP:FB
 DB6A  C9 87     CMP #$87                        A:87 X:06 Y:00 P:E5 SP:FB
 DB6C  F0 02     BEQ $DB70                       A:87 X:06 Y:00 P:67 SP:FB
@@ -3328,7 +3328,7 @@ DB71  A9 7E     LDA #$7E                        A:87 X:07 Y:00 P:65 SP:FB
 DB73  8D 00 02  STA $0200 = 7F                  A:7E X:07 Y:00 P:65 SP:FB
 DB76  A9 DB     LDA #$DB                        A:7E X:07 Y:00 P:65 SP:FB
 DB78  8D 01 02  STA $0201 = 00                  A:DB X:07 Y:00 P:E5 SP:FB
-DB7B  6C 00 02  JMP ($0200)                     A:DB X:07 Y:00 P:E5 SP:FB
+DB7B  6C 00 02  JMP ($0200) = DB7E              A:DB X:07 Y:00 P:E5 SP:FB
 DB7E  A9 00     LDA #$00                        A:DB X:07 Y:00 P:E5 SP:FB
 DB80  8D FF 02  STA $02FF = 00                  A:00 X:07 Y:00 P:67 SP:FB
 DB83  A9 01     LDA #$01                        A:00 X:07 Y:00 P:67 SP:FB
@@ -3348,20 +3348,678 @@ DBA3  8D 01 03  STA $0301 = 00                  A:AA X:07 Y:00 P:E5 SP:FB
 DBA6  A9 60     LDA #$60                        A:AA X:07 Y:00 P:E5 SP:FB
 DBA8  8D 02 03  STA $0302 = 00                  A:60 X:07 Y:00 P:65 SP:FB
 DBAB  20 B5 DB  JSR $DBB5                       A:60 X:07 Y:00 P:65 SP:FB
-DBB5  6C FF 02  JMP ($02FF)                     A:60 X:07 Y:00 P:65 SP:F9
-A900  00        BRK                             A:60 X:07 Y:00 P:65 SP:F9
-C5F4  40        RTI                             A:60 X:07 Y:00 P:75 SP:F6
-A902  EA        NOP                             A:60 X:07 Y:00 P:65 SP:F9
-A903  EA        NOP                             A:60 X:07 Y:00 P:65 SP:F9
-A904  EA        NOP                             A:60 X:07 Y:00 P:65 SP:F9
-A905  20 76 F9  JSR $F976                       A:60 X:07 Y:00 P:65 SP:F9
-F976  90 05     BCC $F97D                       A:60 X:07 Y:00 P:65 SP:F7
-F978  C9 7F     CMP #$7F                        A:60 X:07 Y:00 P:65 SP:F7
-F97A  D0 01     BNE $F97D                       A:60 X:07 Y:00 P:E4 SP:F7
-F97D  84 00     STY $00 = 00                    A:60 X:07 Y:00 P:E4 SP:F7
-F97F  60        RTS                             A:60 X:07 Y:00 P:E4 SP:F7
-A908  C8        INY                             A:60 X:07 Y:00 P:E4 SP:F9
-A909  20 80 F9  JSR $F980                       A:60 X:07 Y:01 P:64 SP:F9
-F980  38        SEC                             A:60 X:07 Y:01 P:64 SP:F7
-F981  A9 81     LDA #$81                        A:60 X:07 Y:01 P:65 SP:F7
-F983  60        RTS                             A:81 X:07 Y:01 P:E5 SP:F7
+DBB5  6C FF 02  JMP ($02FF) = 0300              A:60 X:07 Y:00 P:65 SP:F9
+0300  A9 AA     LDA #$AA                        A:60 X:07 Y:00 P:65 SP:F9
+0302  60        RTS                             A:AA X:07 Y:00 P:E5 SP:F9
+DBAE  C9 AA     CMP #$AA                        A:AA X:07 Y:00 P:E5 SP:FB
+DBB0  F0 02     BEQ $DBB4                       A:AA X:07 Y:00 P:67 SP:FB
+DBB4  60        RTS                             A:AA X:07 Y:00 P:67 SP:FB
+C626  20 4A DF  JSR $DF4A                       A:AA X:07 Y:00 P:67 SP:FD
+DF4A  A9 89     LDA #$89                        A:AA X:07 Y:00 P:67 SP:FB
+DF4C  8D 00 03  STA $0300 = A9                  A:89 X:07 Y:00 P:E5 SP:FB
+DF4F  A9 A3     LDA #$A3                        A:89 X:07 Y:00 P:E5 SP:FB
+DF51  85 33     STA $33 = 00                    A:A3 X:07 Y:00 P:E5 SP:FB
+DF53  A9 12     LDA #$12                        A:A3 X:07 Y:00 P:E5 SP:FB
+DF55  8D 45 02  STA $0245 = 12                  A:12 X:07 Y:00 P:65 SP:FB
+DF58  A2 65     LDX #$65                        A:12 X:07 Y:00 P:65 SP:FB
+DF5A  A0 00     LDY #$00                        A:12 X:65 Y:00 P:65 SP:FB
+DF5C  38        SEC                             A:12 X:65 Y:00 P:67 SP:FB
+DF5D  A9 00     LDA #$00                        A:12 X:65 Y:00 P:67 SP:FB
+DF5F  B8        CLV                             A:00 X:65 Y:00 P:67 SP:FB
+DF60  B9 00 03  LDA $0300,Y                     A:00 X:65 Y:00 P:27 SP:FB
+DF63  F0 0C     BEQ $DF71                       A:89 X:65 Y:00 P:A5 SP:FB
+DF65  90 0A     BCC $DF71                       A:89 X:65 Y:00 P:A5 SP:FB
+DF67  70 08     BVS $DF71                       A:89 X:65 Y:00 P:A5 SP:FB
+DF69  C9 89     CMP #$89                        A:89 X:65 Y:00 P:A5 SP:FB
+DF6B  D0 04     BNE $DF71                       A:89 X:65 Y:00 P:27 SP:FB
+DF6D  E0 65     CPX #$65                        A:89 X:65 Y:00 P:27 SP:FB
+DF6F  F0 04     BEQ $DF75                       A:89 X:65 Y:00 P:27 SP:FB
+DF75  A9 FF     LDA #$FF                        A:89 X:65 Y:00 P:27 SP:FB
+DF77  85 01     STA $01 = FF                    A:FF X:65 Y:00 P:A5 SP:FB
+DF79  24 01     BIT $01 = FF                    A:FF X:65 Y:00 P:A5 SP:FB
+DF7B  A0 34     LDY #$34                        A:FF X:65 Y:00 P:E5 SP:FB
+DF7D  B9 FF FF  LDA $FFFF,Y                     A:FF X:65 Y:34 P:65 SP:FB
+DF80  C9 A3     CMP #$A3                        A:A3 X:65 Y:34 P:E5 SP:FB
+DF82  D0 02     BNE $DF86                       A:A3 X:65 Y:34 P:67 SP:FB
+DF84  B0 04     BCS $DF8A                       A:A3 X:65 Y:34 P:67 SP:FB
+DF8A  A9 46     LDA #$46                        A:A3 X:65 Y:34 P:67 SP:FB
+DF8C  85 FF     STA $FF = 46                    A:46 X:65 Y:34 P:65 SP:FB
+DF8E  A0 FF     LDY #$FF                        A:46 X:65 Y:34 P:65 SP:FB
+DF90  B9 46 01  LDA $0146,Y                     A:46 X:65 Y:FF P:E5 SP:FB
+DF93  C9 12     CMP #$12                        A:12 X:65 Y:FF P:65 SP:FB
+DF95  F0 04     BEQ $DF9B                       A:12 X:65 Y:FF P:67 SP:FB
+DF9B  A2 39     LDX #$39                        A:12 X:65 Y:FF P:67 SP:FB
+DF9D  18        CLC                             A:12 X:39 Y:FF P:65 SP:FB
+DF9E  A9 FF     LDA #$FF                        A:12 X:39 Y:FF P:64 SP:FB
+DFA0  85 01     STA $01 = FF                    A:FF X:39 Y:FF P:E4 SP:FB
+DFA2  24 01     BIT $01 = FF                    A:FF X:39 Y:FF P:E4 SP:FB
+DFA4  A9 AA     LDA #$AA                        A:FF X:39 Y:FF P:E4 SP:FB
+DFA6  8D 00 04  STA $0400 = 87                  A:AA X:39 Y:FF P:E4 SP:FB
+DFA9  A9 55     LDA #$55                        A:AA X:39 Y:FF P:E4 SP:FB
+DFAB  A0 00     LDY #$00                        A:55 X:39 Y:FF P:64 SP:FB
+DFAD  19 00 04  ORA $0400,Y                     A:55 X:39 Y:00 P:66 SP:FB
+DFB0  B0 08     BCS $DFBA                       A:FF X:39 Y:00 P:E4 SP:FB
+DFB2  10 06     BPL $DFBA                       A:FF X:39 Y:00 P:E4 SP:FB
+DFB4  C9 FF     CMP #$FF                        A:FF X:39 Y:00 P:E4 SP:FB
+DFB6  D0 02     BNE $DFBA                       A:FF X:39 Y:00 P:67 SP:FB
+DFB8  70 02     BVS $DFBC                       A:FF X:39 Y:00 P:67 SP:FB
+DFBC  E8        INX                             A:FF X:39 Y:00 P:67 SP:FB
+DFBD  38        SEC                             A:FF X:3A Y:00 P:65 SP:FB
+DFBE  B8        CLV                             A:FF X:3A Y:00 P:65 SP:FB
+DFBF  A9 00     LDA #$00                        A:FF X:3A Y:00 P:25 SP:FB
+DFC1  19 00 04  ORA $0400,Y                     A:00 X:3A Y:00 P:27 SP:FB
+DFC4  F0 06     BEQ $DFCC                       A:AA X:3A Y:00 P:A5 SP:FB
+DFC6  70 04     BVS $DFCC                       A:AA X:3A Y:00 P:A5 SP:FB
+DFC8  90 02     BCC $DFCC                       A:AA X:3A Y:00 P:A5 SP:FB
+DFCA  30 02     BMI $DFCE                       A:AA X:3A Y:00 P:A5 SP:FB
+DFCE  E8        INX                             A:AA X:3A Y:00 P:A5 SP:FB
+DFCF  18        CLC                             A:AA X:3B Y:00 P:25 SP:FB
+DFD0  24 01     BIT $01 = FF                    A:AA X:3B Y:00 P:24 SP:FB
+DFD2  A9 55     LDA #$55                        A:AA X:3B Y:00 P:E4 SP:FB
+DFD4  39 00 04  AND $0400,Y                     A:55 X:3B Y:00 P:64 SP:FB
+DFD7  D0 06     BNE $DFDF                       A:00 X:3B Y:00 P:66 SP:FB
+DFD9  50 04     BVC $DFDF                       A:00 X:3B Y:00 P:66 SP:FB
+DFDB  B0 02     BCS $DFDF                       A:00 X:3B Y:00 P:66 SP:FB
+DFDD  10 02     BPL $DFE1                       A:00 X:3B Y:00 P:66 SP:FB
+DFE1  E8        INX                             A:00 X:3B Y:00 P:66 SP:FB
+DFE2  38        SEC                             A:00 X:3C Y:00 P:64 SP:FB
+DFE3  B8        CLV                             A:00 X:3C Y:00 P:65 SP:FB
+DFE4  A9 EF     LDA #$EF                        A:00 X:3C Y:00 P:25 SP:FB
+DFE6  8D 00 04  STA $0400 = AA                  A:EF X:3C Y:00 P:A5 SP:FB
+DFE9  A9 F8     LDA #$F8                        A:EF X:3C Y:00 P:A5 SP:FB
+DFEB  39 00 04  AND $0400,Y                     A:F8 X:3C Y:00 P:A5 SP:FB
+DFEE  90 08     BCC $DFF8                       A:E8 X:3C Y:00 P:A5 SP:FB
+DFF0  10 06     BPL $DFF8                       A:E8 X:3C Y:00 P:A5 SP:FB
+DFF2  C9 E8     CMP #$E8                        A:E8 X:3C Y:00 P:A5 SP:FB
+DFF4  D0 02     BNE $DFF8                       A:E8 X:3C Y:00 P:27 SP:FB
+DFF6  50 02     BVC $DFFA                       A:E8 X:3C Y:00 P:27 SP:FB
+DFFA  E8        INX                             A:E8 X:3C Y:00 P:27 SP:FB
+DFFB  18        CLC                             A:E8 X:3D Y:00 P:25 SP:FB
+DFFC  24 01     BIT $01 = FF                    A:E8 X:3D Y:00 P:24 SP:FB
+DFFE  A9 AA     LDA #$AA                        A:E8 X:3D Y:00 P:E4 SP:FB
+E000  8D 00 04  STA $0400 = EF                  A:AA X:3D Y:00 P:E4 SP:FB
+E003  A9 5F     LDA #$5F                        A:AA X:3D Y:00 P:E4 SP:FB
+E005  59 00 04  EOR $0400,Y                     A:5F X:3D Y:00 P:64 SP:FB
+E008  B0 08     BCS $E012                       A:F5 X:3D Y:00 P:E4 SP:FB
+E00A  10 06     BPL $E012                       A:F5 X:3D Y:00 P:E4 SP:FB
+E00C  C9 F5     CMP #$F5                        A:F5 X:3D Y:00 P:E4 SP:FB
+E00E  D0 02     BNE $E012                       A:F5 X:3D Y:00 P:67 SP:FB
+E010  70 02     BVS $E014                       A:F5 X:3D Y:00 P:67 SP:FB
+E014  E8        INX                             A:F5 X:3D Y:00 P:67 SP:FB
+E015  38        SEC                             A:F5 X:3E Y:00 P:65 SP:FB
+E016  B8        CLV                             A:F5 X:3E Y:00 P:65 SP:FB
+E017  A9 70     LDA #$70                        A:F5 X:3E Y:00 P:25 SP:FB
+E019  8D 00 04  STA $0400 = AA                  A:70 X:3E Y:00 P:25 SP:FB
+E01C  59 00 04  EOR $0400,Y                     A:70 X:3E Y:00 P:25 SP:FB
+E01F  D0 06     BNE $E027                       A:00 X:3E Y:00 P:27 SP:FB
+E021  70 04     BVS $E027                       A:00 X:3E Y:00 P:27 SP:FB
+E023  90 02     BCC $E027                       A:00 X:3E Y:00 P:27 SP:FB
+E025  10 02     BPL $E029                       A:00 X:3E Y:00 P:27 SP:FB
+E029  E8        INX                             A:00 X:3E Y:00 P:27 SP:FB
+E02A  18        CLC                             A:00 X:3F Y:00 P:25 SP:FB
+E02B  24 01     BIT $01 = FF                    A:00 X:3F Y:00 P:24 SP:FB
+E02D  A9 69     LDA #$69                        A:00 X:3F Y:00 P:E6 SP:FB
+E02F  8D 00 04  STA $0400 = 70                  A:69 X:3F Y:00 P:64 SP:FB
+E032  A9 00     LDA #$00                        A:69 X:3F Y:00 P:64 SP:FB
+E034  79 00 04  ADC $0400,Y                     A:00 X:3F Y:00 P:66 SP:FB
+E037  30 08     BMI $E041                       A:69 X:3F Y:00 P:24 SP:FB
+E039  B0 06     BCS $E041                       A:69 X:3F Y:00 P:24 SP:FB
+E03B  C9 69     CMP #$69                        A:69 X:3F Y:00 P:24 SP:FB
+E03D  D0 02     BNE $E041                       A:69 X:3F Y:00 P:27 SP:FB
+E03F  50 02     BVC $E043                       A:69 X:3F Y:00 P:27 SP:FB
+E043  E8        INX                             A:69 X:3F Y:00 P:27 SP:FB
+E044  38        SEC                             A:69 X:40 Y:00 P:25 SP:FB
+E045  24 01     BIT $01 = FF                    A:69 X:40 Y:00 P:25 SP:FB
+E047  A9 00     LDA #$00                        A:69 X:40 Y:00 P:E5 SP:FB
+E049  79 00 04  ADC $0400,Y                     A:00 X:40 Y:00 P:67 SP:FB
+E04C  30 08     BMI $E056                       A:6A X:40 Y:00 P:24 SP:FB
+E04E  B0 06     BCS $E056                       A:6A X:40 Y:00 P:24 SP:FB
+E050  C9 6A     CMP #$6A                        A:6A X:40 Y:00 P:24 SP:FB
+E052  D0 02     BNE $E056                       A:6A X:40 Y:00 P:27 SP:FB
+E054  50 02     BVC $E058                       A:6A X:40 Y:00 P:27 SP:FB
+E058  E8        INX                             A:6A X:40 Y:00 P:27 SP:FB
+E059  38        SEC                             A:6A X:41 Y:00 P:25 SP:FB
+E05A  B8        CLV                             A:6A X:41 Y:00 P:25 SP:FB
+E05B  A9 7F     LDA #$7F                        A:6A X:41 Y:00 P:25 SP:FB
+E05D  8D 00 04  STA $0400 = 69                  A:7F X:41 Y:00 P:25 SP:FB
+E060  79 00 04  ADC $0400,Y                     A:7F X:41 Y:00 P:25 SP:FB
+E063  10 08     BPL $E06D                       A:FF X:41 Y:00 P:E4 SP:FB
+E065  B0 06     BCS $E06D                       A:FF X:41 Y:00 P:E4 SP:FB
+E067  C9 FF     CMP #$FF                        A:FF X:41 Y:00 P:E4 SP:FB
+E069  D0 02     BNE $E06D                       A:FF X:41 Y:00 P:67 SP:FB
+E06B  70 02     BVS $E06F                       A:FF X:41 Y:00 P:67 SP:FB
+E06F  E8        INX                             A:FF X:41 Y:00 P:67 SP:FB
+E070  18        CLC                             A:FF X:42 Y:00 P:65 SP:FB
+E071  24 01     BIT $01 = FF                    A:FF X:42 Y:00 P:64 SP:FB
+E073  A9 80     LDA #$80                        A:FF X:42 Y:00 P:E4 SP:FB
+E075  8D 00 04  STA $0400 = 7F                  A:80 X:42 Y:00 P:E4 SP:FB
+E078  A9 7F     LDA #$7F                        A:80 X:42 Y:00 P:E4 SP:FB
+E07A  79 00 04  ADC $0400,Y                     A:7F X:42 Y:00 P:64 SP:FB
+E07D  10 08     BPL $E087                       A:FF X:42 Y:00 P:A4 SP:FB
+E07F  B0 06     BCS $E087                       A:FF X:42 Y:00 P:A4 SP:FB
+E081  C9 FF     CMP #$FF                        A:FF X:42 Y:00 P:A4 SP:FB
+E083  D0 02     BNE $E087                       A:FF X:42 Y:00 P:27 SP:FB
+E085  50 02     BVC $E089                       A:FF X:42 Y:00 P:27 SP:FB
+E089  E8        INX                             A:FF X:42 Y:00 P:27 SP:FB
+E08A  38        SEC                             A:FF X:43 Y:00 P:25 SP:FB
+E08B  B8        CLV                             A:FF X:43 Y:00 P:25 SP:FB
+E08C  A9 80     LDA #$80                        A:FF X:43 Y:00 P:25 SP:FB
+E08E  8D 00 04  STA $0400 = 80                  A:80 X:43 Y:00 P:A5 SP:FB
+E091  A9 7F     LDA #$7F                        A:80 X:43 Y:00 P:A5 SP:FB
+E093  79 00 04  ADC $0400,Y                     A:7F X:43 Y:00 P:25 SP:FB
+E096  D0 06     BNE $E09E                       A:00 X:43 Y:00 P:27 SP:FB
+E098  30 04     BMI $E09E                       A:00 X:43 Y:00 P:27 SP:FB
+E09A  70 02     BVS $E09E                       A:00 X:43 Y:00 P:27 SP:FB
+E09C  B0 02     BCS $E0A0                       A:00 X:43 Y:00 P:27 SP:FB
+E0A0  E8        INX                             A:00 X:43 Y:00 P:27 SP:FB
+E0A1  24 01     BIT $01 = FF                    A:00 X:44 Y:00 P:25 SP:FB
+E0A3  A9 40     LDA #$40                        A:00 X:44 Y:00 P:E7 SP:FB
+E0A5  8D 00 04  STA $0400 = 80                  A:40 X:44 Y:00 P:65 SP:FB
+E0A8  D9 00 04  CMP $0400,Y                     A:40 X:44 Y:00 P:65 SP:FB
+E0AB  30 06     BMI $E0B3                       A:40 X:44 Y:00 P:67 SP:FB
+E0AD  90 04     BCC $E0B3                       A:40 X:44 Y:00 P:67 SP:FB
+E0AF  D0 02     BNE $E0B3                       A:40 X:44 Y:00 P:67 SP:FB
+E0B1  70 02     BVS $E0B5                       A:40 X:44 Y:00 P:67 SP:FB
+E0B5  E8        INX                             A:40 X:44 Y:00 P:67 SP:FB
+E0B6  B8        CLV                             A:40 X:45 Y:00 P:65 SP:FB
+E0B7  CE 00 04  DEC $0400 = 40                  A:40 X:45 Y:00 P:25 SP:FB
+E0BA  D9 00 04  CMP $0400,Y                     A:40 X:45 Y:00 P:25 SP:FB
+E0BD  F0 06     BEQ $E0C5                       A:40 X:45 Y:00 P:25 SP:FB
+E0BF  30 04     BMI $E0C5                       A:40 X:45 Y:00 P:25 SP:FB
+E0C1  90 02     BCC $E0C5                       A:40 X:45 Y:00 P:25 SP:FB
+E0C3  50 02     BVC $E0C7                       A:40 X:45 Y:00 P:25 SP:FB
+E0C7  E8        INX                             A:40 X:45 Y:00 P:25 SP:FB
+E0C8  EE 00 04  INC $0400 = 3F                  A:40 X:46 Y:00 P:25 SP:FB
+E0CB  EE 00 04  INC $0400 = 40                  A:40 X:46 Y:00 P:25 SP:FB
+E0CE  D9 00 04  CMP $0400,Y                     A:40 X:46 Y:00 P:25 SP:FB
+E0D1  F0 02     BEQ $E0D5                       A:40 X:46 Y:00 P:A4 SP:FB
+E0D3  30 02     BMI $E0D7                       A:40 X:46 Y:00 P:A4 SP:FB
+E0D7  E8        INX                             A:40 X:46 Y:00 P:A4 SP:FB
+E0D8  A9 00     LDA #$00                        A:40 X:47 Y:00 P:24 SP:FB
+E0DA  8D 00 04  STA $0400 = 41                  A:00 X:47 Y:00 P:26 SP:FB
+E0DD  A9 80     LDA #$80                        A:00 X:47 Y:00 P:26 SP:FB
+E0DF  D9 00 04  CMP $0400,Y                     A:80 X:47 Y:00 P:A4 SP:FB
+E0E2  F0 04     BEQ $E0E8                       A:80 X:47 Y:00 P:A5 SP:FB
+E0E4  10 02     BPL $E0E8                       A:80 X:47 Y:00 P:A5 SP:FB
+E0E6  B0 02     BCS $E0EA                       A:80 X:47 Y:00 P:A5 SP:FB
+E0EA  E8        INX                             A:80 X:47 Y:00 P:A5 SP:FB
+E0EB  A0 80     LDY #$80                        A:80 X:48 Y:00 P:25 SP:FB
+E0ED  8C 00 04  STY $0400 = 00                  A:80 X:48 Y:80 P:A5 SP:FB
+E0F0  A0 00     LDY #$00                        A:80 X:48 Y:80 P:A5 SP:FB
+E0F2  D9 00 04  CMP $0400,Y                     A:80 X:48 Y:00 P:27 SP:FB
+E0F5  D0 04     BNE $E0FB                       A:80 X:48 Y:00 P:27 SP:FB
+E0F7  30 02     BMI $E0FB                       A:80 X:48 Y:00 P:27 SP:FB
+E0F9  B0 02     BCS $E0FD                       A:80 X:48 Y:00 P:27 SP:FB
+E0FD  E8        INX                             A:80 X:48 Y:00 P:27 SP:FB
+E0FE  EE 00 04  INC $0400 = 80                  A:80 X:49 Y:00 P:25 SP:FB
+E101  D9 00 04  CMP $0400,Y                     A:80 X:49 Y:00 P:A5 SP:FB
+E104  B0 04     BCS $E10A                       A:80 X:49 Y:00 P:A4 SP:FB
+E106  F0 02     BEQ $E10A                       A:80 X:49 Y:00 P:A4 SP:FB
+E108  30 02     BMI $E10C                       A:80 X:49 Y:00 P:A4 SP:FB
+E10C  E8        INX                             A:80 X:49 Y:00 P:A4 SP:FB
+E10D  CE 00 04  DEC $0400 = 81                  A:80 X:4A Y:00 P:24 SP:FB
+E110  CE 00 04  DEC $0400 = 80                  A:80 X:4A Y:00 P:A4 SP:FB
+E113  D9 00 04  CMP $0400,Y                     A:80 X:4A Y:00 P:24 SP:FB
+E116  90 04     BCC $E11C                       A:80 X:4A Y:00 P:25 SP:FB
+E118  F0 02     BEQ $E11C                       A:80 X:4A Y:00 P:25 SP:FB
+E11A  10 02     BPL $E11E                       A:80 X:4A Y:00 P:25 SP:FB
+E11E  E8        INX                             A:80 X:4A Y:00 P:25 SP:FB
+E11F  24 01     BIT $01 = FF                    A:80 X:4B Y:00 P:25 SP:FB
+E121  A9 40     LDA #$40                        A:80 X:4B Y:00 P:E5 SP:FB
+E123  8D 00 04  STA $0400 = 7F                  A:40 X:4B Y:00 P:65 SP:FB
+E126  38        SEC                             A:40 X:4B Y:00 P:65 SP:FB
+E127  F9 00 04  SBC $0400,Y                     A:40 X:4B Y:00 P:65 SP:FB
+E12A  30 0A     BMI $E136                       A:00 X:4B Y:00 P:27 SP:FB
+E12C  90 08     BCC $E136                       A:00 X:4B Y:00 P:27 SP:FB
+E12E  D0 06     BNE $E136                       A:00 X:4B Y:00 P:27 SP:FB
+E130  70 04     BVS $E136                       A:00 X:4B Y:00 P:27 SP:FB
+E132  C9 00     CMP #$00                        A:00 X:4B Y:00 P:27 SP:FB
+E134  F0 02     BEQ $E138                       A:00 X:4B Y:00 P:27 SP:FB
+E138  E8        INX                             A:00 X:4B Y:00 P:27 SP:FB
+E139  B8        CLV                             A:00 X:4C Y:00 P:25 SP:FB
+E13A  38        SEC                             A:00 X:4C Y:00 P:25 SP:FB
+E13B  A9 40     LDA #$40                        A:00 X:4C Y:00 P:25 SP:FB
+E13D  CE 00 04  DEC $0400 = 40                  A:40 X:4C Y:00 P:25 SP:FB
+E140  F9 00 04  SBC $0400,Y                     A:40 X:4C Y:00 P:25 SP:FB
+E143  F0 0A     BEQ $E14F                       A:01 X:4C Y:00 P:25 SP:FB
+E145  30 08     BMI $E14F                       A:01 X:4C Y:00 P:25 SP:FB
+E147  90 06     BCC $E14F                       A:01 X:4C Y:00 P:25 SP:FB
+E149  70 04     BVS $E14F                       A:01 X:4C Y:00 P:25 SP:FB
+E14B  C9 01     CMP #$01                        A:01 X:4C Y:00 P:25 SP:FB
+E14D  F0 02     BEQ $E151                       A:01 X:4C Y:00 P:27 SP:FB
+E151  E8        INX                             A:01 X:4C Y:00 P:27 SP:FB
+E152  A9 40     LDA #$40                        A:01 X:4D Y:00 P:25 SP:FB
+E154  38        SEC                             A:40 X:4D Y:00 P:25 SP:FB
+E155  24 01     BIT $01 = FF                    A:40 X:4D Y:00 P:25 SP:FB
+E157  EE 00 04  INC $0400 = 3F                  A:40 X:4D Y:00 P:E5 SP:FB
+E15A  EE 00 04  INC $0400 = 40                  A:40 X:4D Y:00 P:65 SP:FB
+E15D  F9 00 04  SBC $0400,Y                     A:40 X:4D Y:00 P:65 SP:FB
+E160  B0 0A     BCS $E16C                       A:FF X:4D Y:00 P:A4 SP:FB
+E162  F0 08     BEQ $E16C                       A:FF X:4D Y:00 P:A4 SP:FB
+E164  10 06     BPL $E16C                       A:FF X:4D Y:00 P:A4 SP:FB
+E166  70 04     BVS $E16C                       A:FF X:4D Y:00 P:A4 SP:FB
+E168  C9 FF     CMP #$FF                        A:FF X:4D Y:00 P:A4 SP:FB
+E16A  F0 02     BEQ $E16E                       A:FF X:4D Y:00 P:27 SP:FB
+E16E  E8        INX                             A:FF X:4D Y:00 P:27 SP:FB
+E16F  18        CLC                             A:FF X:4E Y:00 P:25 SP:FB
+E170  A9 00     LDA #$00                        A:FF X:4E Y:00 P:24 SP:FB
+E172  8D 00 04  STA $0400 = 41                  A:00 X:4E Y:00 P:26 SP:FB
+E175  A9 80     LDA #$80                        A:00 X:4E Y:00 P:26 SP:FB
+E177  F9 00 04  SBC $0400,Y                     A:80 X:4E Y:00 P:A4 SP:FB
+E17A  90 04     BCC $E180                       A:7F X:4E Y:00 P:65 SP:FB
+E17C  C9 7F     CMP #$7F                        A:7F X:4E Y:00 P:65 SP:FB
+E17E  F0 02     BEQ $E182                       A:7F X:4E Y:00 P:67 SP:FB
+E182  E8        INX                             A:7F X:4E Y:00 P:67 SP:FB
+E183  38        SEC                             A:7F X:4F Y:00 P:65 SP:FB
+E184  A9 7F     LDA #$7F                        A:7F X:4F Y:00 P:65 SP:FB
+E186  8D 00 04  STA $0400 = 00                  A:7F X:4F Y:00 P:65 SP:FB
+E189  A9 81     LDA #$81                        A:7F X:4F Y:00 P:65 SP:FB
+E18B  F9 00 04  SBC $0400,Y                     A:81 X:4F Y:00 P:E5 SP:FB
+E18E  50 06     BVC $E196                       A:02 X:4F Y:00 P:65 SP:FB
+E190  90 04     BCC $E196                       A:02 X:4F Y:00 P:65 SP:FB
+E192  C9 02     CMP #$02                        A:02 X:4F Y:00 P:65 SP:FB
+E194  F0 02     BEQ $E198                       A:02 X:4F Y:00 P:67 SP:FB
+E198  E8        INX                             A:02 X:4F Y:00 P:67 SP:FB
+E199  A9 00     LDA #$00                        A:02 X:50 Y:00 P:65 SP:FB
+E19B  A9 87     LDA #$87                        A:00 X:50 Y:00 P:67 SP:FB
+E19D  99 00 04  STA $0400,Y                     A:87 X:50 Y:00 P:E5 SP:FB
+E1A0  AD 00 04  LDA $0400 = 87                  A:87 X:50 Y:00 P:E5 SP:FB
+E1A3  C9 87     CMP #$87                        A:87 X:50 Y:00 P:E5 SP:FB
+E1A5  F0 02     BEQ $E1A9                       A:87 X:50 Y:00 P:67 SP:FB
+E1A9  60        RTS                             A:87 X:50 Y:00 P:67 SP:FB
+C629  20 B8 DB  JSR $DBB8                       A:87 X:50 Y:00 P:67 SP:FD
+DBB8  A9 FF     LDA #$FF                        A:87 X:50 Y:00 P:67 SP:FB
+DBBA  85 01     STA $01 = FF                    A:FF X:50 Y:00 P:E5 SP:FB
+DBBC  A9 AA     LDA #$AA                        A:FF X:50 Y:00 P:E5 SP:FB
+DBBE  85 33     STA $33 = A3                    A:AA X:50 Y:00 P:E5 SP:FB
+DBC0  A9 BB     LDA #$BB                        A:AA X:50 Y:00 P:E5 SP:FB
+DBC2  85 89     STA $89 = 00                    A:BB X:50 Y:00 P:E5 SP:FB
+DBC4  A2 00     LDX #$00                        A:BB X:50 Y:00 P:E5 SP:FB
+DBC6  A9 66     LDA #$66                        A:BB X:00 Y:00 P:67 SP:FB
+DBC8  24 01     BIT $01 = FF                    A:66 X:00 Y:00 P:65 SP:FB
+DBCA  38        SEC                             A:66 X:00 Y:00 P:E5 SP:FB
+DBCB  A0 00     LDY #$00                        A:66 X:00 Y:00 P:E5 SP:FB
+DBCD  B4 33     LDY $33,X                       A:66 X:00 Y:00 P:67 SP:FB
+DBCF  10 12     BPL $DBE3                       A:66 X:00 Y:00 P:67 SP:FB
+DBE3  A9 08     LDA #$08                        A:66 X:00 Y:00 P:67 SP:FB
+DBE5  85 00     STA $00 = 00                    A:08 X:00 Y:00 P:65 SP:FB
+DBE7  A2 8A     LDX #$8A                        A:08 X:00 Y:00 P:65 SP:FB
+DBE9  A9 66     LDA #$66                        A:08 X:8A Y:00 P:E5 SP:FB
+DBEB  B8        CLV                             A:66 X:8A Y:00 P:65 SP:FB
+DBEC  18        CLC                             A:66 X:8A Y:00 P:25 SP:FB
+DBED  A0 00     LDY #$00                        A:66 X:8A Y:00 P:24 SP:FB
+DBEF  B4 FF     LDY $89,X                       A:66 X:8A Y:00 P:26 SP:FB
+DBF1  10 12     BPL $DC05                       A:66 X:8A Y:00 P:26 SP:FB
+DC05  A9 09     LDA #$09                        A:66 X:8A Y:00 P:26 SP:FB
+DC07  85 00     STA $00 = 08                    A:09 X:8A Y:00 P:24 SP:FB
+DC09  24 01     BIT $01 = FF                    A:09 X:8A Y:00 P:24 SP:FB
+DC0B  38        SEC                             A:09 X:8A Y:00 P:E4 SP:FB
+DC0C  A0 44     LDY #$44                        A:09 X:8A Y:00 P:E5 SP:FB
+DC0E  A2 00     LDX #$00                        A:09 X:8A Y:44 P:65 SP:FB
+DC10  94 33     STY $33,X                       A:09 X:00 Y:44 P:67 SP:FB
+DC12  A5 33     LDA $33 = AA                    A:09 X:00 Y:44 P:67 SP:FB
+DC14  90 18     BCC $DC2E                       A:AA X:00 Y:44 P:E5 SP:FB
+DC16  C9 44     CMP #$44                        A:AA X:00 Y:44 P:E5 SP:FB
+DC18  D0 14     BNE $DC2E                       A:AA X:00 Y:44 P:65 SP:FB
+DC2E  A9 0A     LDA #$0A                        A:AA X:00 Y:44 P:65 SP:FB
+DC30  85 00     STA $00 = 09                    A:0A X:00 Y:44 P:65 SP:FB
+DC32  A0 0B     LDY #$0B                        A:0A X:00 Y:44 P:65 SP:FB
+DC34  A9 AA     LDA #$AA                        A:0A X:00 Y:0B P:65 SP:FB
+DC36  A2 78     LDX #$78                        A:AA X:00 Y:0B P:E5 SP:FB
+DC38  85 78     STA $78 = 00                    A:AA X:78 Y:0B P:65 SP:FB
+DC3A  20 B6 F7  JSR $F7B6                       A:AA X:78 Y:0B P:65 SP:FB
+F7B6  18        CLC                             A:AA X:78 Y:0B P:65 SP:F9
+F7B7  A9 FF     LDA #$FF                        A:AA X:78 Y:0B P:64 SP:F9
+F7B9  85 01     STA $01 = FF                    A:FF X:78 Y:0B P:E4 SP:F9
+F7BB  24 01     BIT $01 = FF                    A:FF X:78 Y:0B P:E4 SP:F9
+F7BD  A9 55     LDA #$55                        A:FF X:78 Y:0B P:E4 SP:F9
+F7BF  60        RTS                             A:55 X:78 Y:0B P:64 SP:F9
+DC3D  15 00     ORA $78,X                       A:55 X:78 Y:0B P:64 SP:FB
+DC3F  20 C0 F7  JSR $F7C0                       A:55 X:78 Y:0B P:64 SP:FB
+F7C0  B0 09     BCS $F7CB                       A:55 X:78 Y:0B P:64 SP:F9
+F7C2  10 07     BPL $F7CB                       A:55 X:78 Y:0B P:64 SP:F9
+F7CB  84 00     STY $00 = 0A                    A:55 X:78 Y:0B P:64 SP:F9
+F7CD  60        RTS                             A:55 X:78 Y:0B P:64 SP:F9
+DC42  C8        INY                             A:55 X:78 Y:0B P:64 SP:FB
+DC43  A9 00     LDA #$00                        A:55 X:78 Y:0C P:64 SP:FB
+DC45  85 78     STA $78 = AA                    A:00 X:78 Y:0C P:66 SP:FB
+DC47  20 CE F7  JSR $F7CE                       A:00 X:78 Y:0C P:66 SP:FB
+F7CE  38        SEC                             A:00 X:78 Y:0C P:66 SP:F9
+F7CF  B8        CLV                             A:00 X:78 Y:0C P:67 SP:F9
+F7D0  A9 00     LDA #$00                        A:00 X:78 Y:0C P:27 SP:F9
+F7D2  60        RTS                             A:00 X:78 Y:0C P:27 SP:F9
+DC4A  15 00     ORA $78,X                       A:00 X:78 Y:0C P:27 SP:FB
+DC4C  20 D3 F7  JSR $F7D3                       A:0B X:78 Y:0C P:25 SP:FB
+F7D3  D0 07     BNE $F7DC                       A:0B X:78 Y:0C P:25 SP:F9
+F7DC  84 00     STY $00 = 0B                    A:0B X:78 Y:0C P:25 SP:F9
+F7DE  60        RTS                             A:0B X:78 Y:0C P:25 SP:F9
+DC4F  C8        INY                             A:0B X:78 Y:0C P:25 SP:FB
+DC50  A9 AA     LDA #$AA                        A:0B X:78 Y:0D P:25 SP:FB
+DC52  85 78     STA $78 = 00                    A:AA X:78 Y:0D P:A5 SP:FB
+DC54  20 DF F7  JSR $F7DF                       A:AA X:78 Y:0D P:A5 SP:FB
+F7DF  18        CLC                             A:AA X:78 Y:0D P:A5 SP:F9
+F7E0  24 01     BIT $01 = FF                    A:AA X:78 Y:0D P:A4 SP:F9
+F7E2  A9 55     LDA #$55                        A:AA X:78 Y:0D P:E4 SP:F9
+F7E4  60        RTS                             A:55 X:78 Y:0D P:64 SP:F9
+DC57  35 00     AND $78,X                       A:55 X:78 Y:0D P:64 SP:FB
+DC59  20 E5 F7  JSR $F7E5                       A:00 X:78 Y:0D P:66 SP:FB
+F7E5  D0 07     BNE $F7EE                       A:00 X:78 Y:0D P:66 SP:F9
+F7E7  50 05     BVC $F7EE                       A:00 X:78 Y:0D P:66 SP:F9
+F7E9  B0 03     BCS $F7EE                       A:00 X:78 Y:0D P:66 SP:F9
+F7EB  30 01     BMI $F7EE                       A:00 X:78 Y:0D P:66 SP:F9
+F7ED  60        RTS                             A:00 X:78 Y:0D P:66 SP:F9
+DC5C  C8        INY                             A:00 X:78 Y:0D P:66 SP:FB
+DC5D  A9 EF     LDA #$EF                        A:00 X:78 Y:0E P:64 SP:FB
+DC5F  85 78     STA $78 = AA                    A:EF X:78 Y:0E P:E4 SP:FB
+DC61  20 F1 F7  JSR $F7F1                       A:EF X:78 Y:0E P:E4 SP:FB
+F7F1  38        SEC                             A:EF X:78 Y:0E P:E4 SP:F9
+F7F2  B8        CLV                             A:EF X:78 Y:0E P:E5 SP:F9
+F7F3  A9 F8     LDA #$F8                        A:EF X:78 Y:0E P:A5 SP:F9
+F7F5  60        RTS                             A:F8 X:78 Y:0E P:A5 SP:F9
+DC64  35 00     AND $78,X                       A:F8 X:78 Y:0E P:A5 SP:FB
+DC66  20 F6 F7  JSR $F7F6                       A:00 X:78 Y:0E P:27 SP:FB
+F7F6  90 09     BCC $F801                       A:00 X:78 Y:0E P:27 SP:F9
+F7F8  10 07     BPL $F801                       A:00 X:78 Y:0E P:27 SP:F9
+F801  84 00     STY $00 = 0C                    A:00 X:78 Y:0E P:27 SP:F9
+F803  60        RTS                             A:00 X:78 Y:0E P:27 SP:F9
+DC69  C8        INY                             A:00 X:78 Y:0E P:27 SP:FB
+DC6A  A9 AA     LDA #$AA                        A:00 X:78 Y:0F P:25 SP:FB
+DC6C  85 78     STA $78 = EF                    A:AA X:78 Y:0F P:A5 SP:FB
+DC6E  20 04 F8  JSR $F804                       A:AA X:78 Y:0F P:A5 SP:FB
+F804  18        CLC                             A:AA X:78 Y:0F P:A5 SP:F9
+F805  24 01     BIT $01 = FF                    A:AA X:78 Y:0F P:A4 SP:F9
+F807  A9 5F     LDA #$5F                        A:AA X:78 Y:0F P:E4 SP:F9
+F809  60        RTS                             A:5F X:78 Y:0F P:64 SP:F9
+DC71  55 00     EOR $78,X                       A:5F X:78 Y:0F P:64 SP:FB
+DC73  20 0A F8  JSR $F80A                       A:5F X:78 Y:0F P:64 SP:FB
+F80A  B0 09     BCS $F815                       A:5F X:78 Y:0F P:64 SP:F9
+F80C  10 07     BPL $F815                       A:5F X:78 Y:0F P:64 SP:F9
+F815  84 00     STY $00 = 0E                    A:5F X:78 Y:0F P:64 SP:F9
+F817  60        RTS                             A:5F X:78 Y:0F P:64 SP:F9
+DC76  C8        INY                             A:5F X:78 Y:0F P:64 SP:FB
+DC77  A9 70     LDA #$70                        A:5F X:78 Y:10 P:64 SP:FB
+DC79  85 78     STA $78 = AA                    A:70 X:78 Y:10 P:64 SP:FB
+DC7B  20 18 F8  JSR $F818                       A:70 X:78 Y:10 P:64 SP:FB
+F818  38        SEC                             A:70 X:78 Y:10 P:64 SP:F9
+F819  B8        CLV                             A:70 X:78 Y:10 P:65 SP:F9
+F81A  A9 70     LDA #$70                        A:70 X:78 Y:10 P:25 SP:F9
+F81C  60        RTS                             A:70 X:78 Y:10 P:25 SP:F9
+DC7E  55 00     EOR $78,X                       A:70 X:78 Y:10 P:25 SP:FB
+DC80  20 1D F8  JSR $F81D                       A:70 X:78 Y:10 P:25 SP:FB
+F81D  D0 07     BNE $F826                       A:70 X:78 Y:10 P:25 SP:F9
+F826  84 00     STY $00 = 0F                    A:70 X:78 Y:10 P:25 SP:F9
+F828  60        RTS                             A:70 X:78 Y:10 P:25 SP:F9
+DC83  C8        INY                             A:70 X:78 Y:10 P:25 SP:FB
+DC84  A9 69     LDA #$69                        A:70 X:78 Y:11 P:25 SP:FB
+DC86  85 78     STA $78 = 70                    A:69 X:78 Y:11 P:25 SP:FB
+DC88  20 29 F8  JSR $F829                       A:69 X:78 Y:11 P:25 SP:FB
+F829  18        CLC                             A:69 X:78 Y:11 P:25 SP:F9
+F82A  24 01     BIT $01 = FF                    A:69 X:78 Y:11 P:24 SP:F9
+F82C  A9 00     LDA #$00                        A:69 X:78 Y:11 P:E4 SP:F9
+F82E  60        RTS                             A:00 X:78 Y:11 P:66 SP:F9
+DC8B  75 00     ADC $78,X                       A:00 X:78 Y:11 P:66 SP:FB
+DC8D  20 2F F8  JSR $F82F                       A:00 X:78 Y:11 P:26 SP:FB
+F82F  30 09     BMI $F83A                       A:00 X:78 Y:11 P:26 SP:F9
+F831  B0 07     BCS $F83A                       A:00 X:78 Y:11 P:26 SP:F9
+F833  C9 69     CMP #$69                        A:00 X:78 Y:11 P:26 SP:F9
+F835  D0 03     BNE $F83A                       A:00 X:78 Y:11 P:A4 SP:F9
+F83A  84 00     STY $00 = 10                    A:00 X:78 Y:11 P:A4 SP:F9
+F83C  60        RTS                             A:00 X:78 Y:11 P:A4 SP:F9
+DC90  C8        INY                             A:00 X:78 Y:11 P:A4 SP:FB
+DC91  20 3D F8  JSR $F83D                       A:00 X:78 Y:12 P:24 SP:FB
+F83D  38        SEC                             A:00 X:78 Y:12 P:24 SP:F9
+F83E  24 01     BIT $01 = FF                    A:00 X:78 Y:12 P:25 SP:F9
+F840  A9 00     LDA #$00                        A:00 X:78 Y:12 P:E7 SP:F9
+F842  60        RTS                             A:00 X:78 Y:12 P:67 SP:F9
+DC94  75 00     ADC $78,X                       A:00 X:78 Y:12 P:67 SP:FB
+DC96  20 43 F8  JSR $F843                       A:01 X:78 Y:12 P:24 SP:FB
+F843  30 09     BMI $F84E                       A:01 X:78 Y:12 P:24 SP:F9
+F845  B0 07     BCS $F84E                       A:01 X:78 Y:12 P:24 SP:F9
+F847  C9 6A     CMP #$6A                        A:01 X:78 Y:12 P:24 SP:F9
+F849  D0 03     BNE $F84E                       A:01 X:78 Y:12 P:A4 SP:F9
+F84E  84 00     STY $00 = 11                    A:01 X:78 Y:12 P:A4 SP:F9
+F850  60        RTS                             A:01 X:78 Y:12 P:A4 SP:F9
+DC99  C8        INY                             A:01 X:78 Y:12 P:A4 SP:FB
+DC9A  A9 7F     LDA #$7F                        A:01 X:78 Y:13 P:24 SP:FB
+DC9C  85 78     STA $78 = 69                    A:7F X:78 Y:13 P:24 SP:FB
+DC9E  20 51 F8  JSR $F851                       A:7F X:78 Y:13 P:24 SP:FB
+F851  38        SEC                             A:7F X:78 Y:13 P:24 SP:F9
+F852  B8        CLV                             A:7F X:78 Y:13 P:25 SP:F9
+F853  A9 7F     LDA #$7F                        A:7F X:78 Y:13 P:25 SP:F9
+F855  60        RTS                             A:7F X:78 Y:13 P:25 SP:F9
+DCA1  75 00     ADC $78,X                       A:7F X:78 Y:13 P:25 SP:FB
+DCA3  20 56 F8  JSR $F856                       A:80 X:78 Y:13 P:E4 SP:FB
+F856  10 09     BPL $F861                       A:80 X:78 Y:13 P:E4 SP:F9
+F858  B0 07     BCS $F861                       A:80 X:78 Y:13 P:E4 SP:F9
+F85A  C9 FF     CMP #$FF                        A:80 X:78 Y:13 P:E4 SP:F9
+F85C  D0 03     BNE $F861                       A:80 X:78 Y:13 P:E4 SP:F9
+F861  84 00     STY $00 = 12                    A:80 X:78 Y:13 P:E4 SP:F9
+F863  60        RTS                             A:80 X:78 Y:13 P:E4 SP:F9
+DCA6  C8        INY                             A:80 X:78 Y:13 P:E4 SP:FB
+DCA7  A9 80     LDA #$80                        A:80 X:78 Y:14 P:64 SP:FB
+DCA9  85 78     STA $78 = 7F                    A:80 X:78 Y:14 P:E4 SP:FB
+DCAB  20 64 F8  JSR $F864                       A:80 X:78 Y:14 P:E4 SP:FB
+F864  18        CLC                             A:80 X:78 Y:14 P:E4 SP:F9
+F865  24 01     BIT $01 = FF                    A:80 X:78 Y:14 P:E4 SP:F9
+F867  A9 7F     LDA #$7F                        A:80 X:78 Y:14 P:E4 SP:F9
+F869  60        RTS                             A:7F X:78 Y:14 P:64 SP:F9
+DCAE  75 00     ADC $78,X                       A:7F X:78 Y:14 P:64 SP:FB
+DCB0  20 6A F8  JSR $F86A                       A:7F X:78 Y:14 P:24 SP:FB
+F86A  10 09     BPL $F875                       A:7F X:78 Y:14 P:24 SP:F9
+F875  84 00     STY $00 = 13                    A:7F X:78 Y:14 P:24 SP:F9
+F877  60        RTS                             A:7F X:78 Y:14 P:24 SP:F9
+DCB3  C8        INY                             A:7F X:78 Y:14 P:24 SP:FB
+DCB4  20 78 F8  JSR $F878                       A:7F X:78 Y:15 P:24 SP:FB
+F878  38        SEC                             A:7F X:78 Y:15 P:24 SP:F9
+F879  B8        CLV                             A:7F X:78 Y:15 P:25 SP:F9
+F87A  A9 7F     LDA #$7F                        A:7F X:78 Y:15 P:25 SP:F9
+F87C  60        RTS                             A:7F X:78 Y:15 P:25 SP:F9
+DCB7  75 00     ADC $78,X                       A:7F X:78 Y:15 P:25 SP:FB
+DCB9  20 7D F8  JSR $F87D                       A:80 X:78 Y:15 P:E4 SP:FB
+F87D  D0 07     BNE $F886                       A:80 X:78 Y:15 P:E4 SP:F9
+F886  84 00     STY $00 = 14                    A:80 X:78 Y:15 P:E4 SP:F9
+F888  60        RTS                             A:80 X:78 Y:15 P:E4 SP:F9
+DCBC  C8        INY                             A:80 X:78 Y:15 P:E4 SP:FB
+DCBD  A9 40     LDA #$40                        A:80 X:78 Y:16 P:64 SP:FB
+DCBF  85 78     STA $78 = 80                    A:40 X:78 Y:16 P:64 SP:FB
+DCC1  20 89 F8  JSR $F889                       A:40 X:78 Y:16 P:64 SP:FB
+F889  24 01     BIT $01 = FF                    A:40 X:78 Y:16 P:64 SP:F9
+F88B  A9 40     LDA #$40                        A:40 X:78 Y:16 P:E4 SP:F9
+F88D  60        RTS                             A:40 X:78 Y:16 P:64 SP:F9
+DCC4  D5 00     CMP $78,X                       A:40 X:78 Y:16 P:64 SP:FB
+DCC6  20 8E F8  JSR $F88E                       A:40 X:78 Y:16 P:65 SP:FB
+F88E  30 07     BMI $F897                       A:40 X:78 Y:16 P:65 SP:F9
+F890  90 05     BCC $F897                       A:40 X:78 Y:16 P:65 SP:F9
+F892  D0 03     BNE $F897                       A:40 X:78 Y:16 P:65 SP:F9
+F897  84 00     STY $00 = 15                    A:40 X:78 Y:16 P:65 SP:F9
+F899  60        RTS                             A:40 X:78 Y:16 P:65 SP:F9
+DCC9  C8        INY                             A:40 X:78 Y:16 P:65 SP:FB
+DCCA  48        PHA                             A:40 X:78 Y:17 P:65 SP:FB
+DCCB  A9 3F     LDA #$3F                        A:40 X:78 Y:17 P:65 SP:FA
+DCCD  85 78     STA $78 = 40                    A:3F X:78 Y:17 P:65 SP:FA
+DCCF  68        PLA                             A:3F X:78 Y:17 P:65 SP:FA
+DCD0  20 9A F8  JSR $F89A                       A:40 X:78 Y:17 P:65 SP:FB
+F89A  B8        CLV                             A:40 X:78 Y:17 P:65 SP:F9
+F89B  60        RTS                             A:40 X:78 Y:17 P:25 SP:F9
+DCD3  D5 00     CMP $78,X                       A:40 X:78 Y:17 P:25 SP:FB
+DCD5  20 9C F8  JSR $F89C                       A:40 X:78 Y:17 P:25 SP:FB
+F89C  F0 07     BEQ $F8A5                       A:40 X:78 Y:17 P:25 SP:F9
+F89E  30 05     BMI $F8A5                       A:40 X:78 Y:17 P:25 SP:F9
+F8A0  90 03     BCC $F8A5                       A:40 X:78 Y:17 P:25 SP:F9
+F8A2  70 01     BVS $F8A5                       A:40 X:78 Y:17 P:25 SP:F9
+F8A4  60        RTS                             A:40 X:78 Y:17 P:25 SP:F9
+DCD8  C8        INY                             A:40 X:78 Y:17 P:25 SP:FB
+DCD9  48        PHA                             A:40 X:78 Y:18 P:25 SP:FB
+DCDA  A9 41     LDA #$41                        A:40 X:78 Y:18 P:25 SP:FA
+DCDC  85 78     STA $78 = 3F                    A:41 X:78 Y:18 P:25 SP:FA
+DCDE  68        PLA                             A:41 X:78 Y:18 P:25 SP:FA
+DCDF  D5 00     CMP $78,X                       A:40 X:78 Y:18 P:25 SP:FB
+DCE1  20 A8 F8  JSR $F8A8                       A:40 X:78 Y:18 P:25 SP:FB
+F8A8  F0 05     BEQ $F8AF                       A:40 X:78 Y:18 P:25 SP:F9
+F8AA  10 03     BPL $F8AF                       A:40 X:78 Y:18 P:25 SP:F9
+F8AF  84 00     STY $00 = 16                    A:40 X:78 Y:18 P:25 SP:F9
+F8B1  60        RTS                             A:40 X:78 Y:18 P:25 SP:F9
+DCE4  C8        INY                             A:40 X:78 Y:18 P:25 SP:FB
+DCE5  48        PHA                             A:40 X:78 Y:19 P:25 SP:FB
+DCE6  A9 00     LDA #$00                        A:40 X:78 Y:19 P:25 SP:FA
+DCE8  85 78     STA $78 = 41                    A:00 X:78 Y:19 P:27 SP:FA
+DCEA  68        PLA                             A:00 X:78 Y:19 P:27 SP:FA
+DCEB  20 B2 F8  JSR $F8B2                       A:40 X:78 Y:19 P:25 SP:FB
+F8B2  A9 80     LDA #$80                        A:40 X:78 Y:19 P:25 SP:F9
+F8B4  60        RTS                             A:80 X:78 Y:19 P:A5 SP:F9
+DCEE  D5 00     CMP $78,X                       A:80 X:78 Y:19 P:A5 SP:FB
+DCF0  20 B5 F8  JSR $F8B5                       A:80 X:78 Y:19 P:25 SP:FB
+F8B5  F0 05     BEQ $F8BC                       A:80 X:78 Y:19 P:25 SP:F9
+F8B7  10 03     BPL $F8BC                       A:80 X:78 Y:19 P:25 SP:F9
+F8BC  84 00     STY $00 = 18                    A:80 X:78 Y:19 P:25 SP:F9
+F8BE  60        RTS                             A:80 X:78 Y:19 P:25 SP:F9
+DCF3  C8        INY                             A:80 X:78 Y:19 P:25 SP:FB
+DCF4  48        PHA                             A:80 X:78 Y:1A P:25 SP:FB
+DCF5  A9 80     LDA #$80                        A:80 X:78 Y:1A P:25 SP:FA
+DCF7  85 78     STA $78 = 00                    A:80 X:78 Y:1A P:A5 SP:FA
+DCF9  68        PLA                             A:80 X:78 Y:1A P:A5 SP:FA
+DCFA  D5 00     CMP $78,X                       A:80 X:78 Y:1A P:A5 SP:FB
+DCFC  20 BF F8  JSR $F8BF                       A:80 X:78 Y:1A P:A5 SP:FB
+F8BF  D0 05     BNE $F8C6                       A:80 X:78 Y:1A P:A5 SP:F9
+F8C6  84 00     STY $00 = 19                    A:80 X:78 Y:1A P:A5 SP:F9
+F8C8  60        RTS                             A:80 X:78 Y:1A P:A5 SP:F9
+DCFF  C8        INY                             A:80 X:78 Y:1A P:A5 SP:FB
+DD00  48        PHA                             A:80 X:78 Y:1B P:25 SP:FB
+DD01  A9 81     LDA #$81                        A:80 X:78 Y:1B P:25 SP:FA
+DD03  85 78     STA $78 = 80                    A:81 X:78 Y:1B P:A5 SP:FA
+DD05  68        PLA                             A:81 X:78 Y:1B P:A5 SP:FA
+DD06  D5 00     CMP $78,X                       A:80 X:78 Y:1B P:A5 SP:FB
+DD08  20 C9 F8  JSR $F8C9                       A:80 X:78 Y:1B P:25 SP:FB
+F8C9  B0 05     BCS $F8D0                       A:80 X:78 Y:1B P:25 SP:F9
+F8D0  84 00     STY $00 = 1A                    A:80 X:78 Y:1B P:25 SP:F9
+F8D2  60        RTS                             A:80 X:78 Y:1B P:25 SP:F9
+DD0B  C8        INY                             A:80 X:78 Y:1B P:25 SP:FB
+DD0C  48        PHA                             A:80 X:78 Y:1C P:25 SP:FB
+DD0D  A9 7F     LDA #$7F                        A:80 X:78 Y:1C P:25 SP:FA
+DD0F  85 78     STA $78 = 81                    A:7F X:78 Y:1C P:25 SP:FA
+DD11  68        PLA                             A:7F X:78 Y:1C P:25 SP:FA
+DD12  D5 00     CMP $78,X                       A:80 X:78 Y:1C P:A5 SP:FB
+DD14  20 D3 F8  JSR $F8D3                       A:80 X:78 Y:1C P:A5 SP:FB
+F8D3  90 05     BCC $F8DA                       A:80 X:78 Y:1C P:A5 SP:F9
+F8D5  F0 03     BEQ $F8DA                       A:80 X:78 Y:1C P:A5 SP:F9
+F8D7  30 01     BMI $F8DA                       A:80 X:78 Y:1C P:A5 SP:F9
+F8DA  84 00     STY $00 = 1B                    A:80 X:78 Y:1C P:A5 SP:F9
+F8DC  60        RTS                             A:80 X:78 Y:1C P:A5 SP:F9
+DD17  C8        INY                             A:80 X:78 Y:1C P:A5 SP:FB
+DD18  A9 40     LDA #$40                        A:80 X:78 Y:1D P:25 SP:FB
+DD1A  85 78     STA $78 = 7F                    A:40 X:78 Y:1D P:25 SP:FB
+DD1C  20 31 F9  JSR $F931                       A:40 X:78 Y:1D P:25 SP:FB
+F931  24 01     BIT $01 = FF                    A:40 X:78 Y:1D P:25 SP:F9
+F933  A9 40     LDA #$40                        A:40 X:78 Y:1D P:E5 SP:F9
+F935  38        SEC                             A:40 X:78 Y:1D P:65 SP:F9
+F936  60        RTS                             A:40 X:78 Y:1D P:65 SP:F9
+DD1F  F5 00     SBC $78,X                       A:40 X:78 Y:1D P:65 SP:FB
+DD21  20 37 F9  JSR $F937                       A:40 X:78 Y:1D P:25 SP:FB
+F937  30 0B     BMI $F944                       A:40 X:78 Y:1D P:25 SP:F9
+F939  90 09     BCC $F944                       A:40 X:78 Y:1D P:25 SP:F9
+F93B  D0 07     BNE $F944                       A:40 X:78 Y:1D P:25 SP:F9
+F944  84 00     STY $00 = 1C                    A:40 X:78 Y:1D P:25 SP:F9
+F946  60        RTS                             A:40 X:78 Y:1D P:25 SP:F9
+DD24  C8        INY                             A:40 X:78 Y:1D P:25 SP:FB
+DD25  A9 3F     LDA #$3F                        A:40 X:78 Y:1E P:25 SP:FB
+DD27  85 78     STA $78 = 40                    A:3F X:78 Y:1E P:25 SP:FB
+DD29  20 47 F9  JSR $F947                       A:3F X:78 Y:1E P:25 SP:FB
+F947  B8        CLV                             A:3F X:78 Y:1E P:25 SP:F9
+F948  38        SEC                             A:3F X:78 Y:1E P:25 SP:F9
+F949  A9 40     LDA #$40                        A:3F X:78 Y:1E P:25 SP:F9
+F94B  60        RTS                             A:40 X:78 Y:1E P:25 SP:F9
+DD2C  F5 00     SBC $78,X                       A:40 X:78 Y:1E P:25 SP:FB
+DD2E  20 4C F9  JSR $F94C                       A:40 X:78 Y:1E P:25 SP:FB
+F94C  F0 0B     BEQ $F959                       A:40 X:78 Y:1E P:25 SP:F9
+F94E  30 09     BMI $F959                       A:40 X:78 Y:1E P:25 SP:F9
+F950  90 07     BCC $F959                       A:40 X:78 Y:1E P:25 SP:F9
+F952  70 05     BVS $F959                       A:40 X:78 Y:1E P:25 SP:F9
+F954  C9 01     CMP #$01                        A:40 X:78 Y:1E P:25 SP:F9
+F956  D0 01     BNE $F959                       A:40 X:78 Y:1E P:25 SP:F9
+F959  84 00     STY $00 = 1D                    A:40 X:78 Y:1E P:25 SP:F9
+F95B  60        RTS                             A:40 X:78 Y:1E P:25 SP:F9
+DD31  C8        INY                             A:40 X:78 Y:1E P:25 SP:FB
+DD32  A9 41     LDA #$41                        A:40 X:78 Y:1F P:25 SP:FB
+DD34  85 78     STA $78 = 3F                    A:41 X:78 Y:1F P:25 SP:FB
+DD36  20 5C F9  JSR $F95C                       A:41 X:78 Y:1F P:25 SP:FB
+F95C  A9 40     LDA #$40                        A:41 X:78 Y:1F P:25 SP:F9
+F95E  38        SEC                             A:40 X:78 Y:1F P:25 SP:F9
+F95F  24 01     BIT $01 = FF                    A:40 X:78 Y:1F P:25 SP:F9
+F961  60        RTS                             A:40 X:78 Y:1F P:E5 SP:F9
+DD39  F5 00     SBC $78,X                       A:40 X:78 Y:1F P:E5 SP:FB
+DD3B  20 62 F9  JSR $F962                       A:40 X:78 Y:1F P:25 SP:FB
+F962  B0 0B     BCS $F96F                       A:40 X:78 Y:1F P:25 SP:F9
+F96F  84 00     STY $00 = 1E                    A:40 X:78 Y:1F P:25 SP:F9
+F971  60        RTS                             A:40 X:78 Y:1F P:25 SP:F9
+DD3E  C8        INY                             A:40 X:78 Y:1F P:25 SP:FB
+DD3F  A9 00     LDA #$00                        A:40 X:78 Y:20 P:25 SP:FB
+DD41  85 78     STA $78 = 41                    A:00 X:78 Y:20 P:27 SP:FB
+DD43  20 72 F9  JSR $F972                       A:00 X:78 Y:20 P:27 SP:FB
+F972  18        CLC                             A:00 X:78 Y:20 P:27 SP:F9
+F973  A9 80     LDA #$80                        A:00 X:78 Y:20 P:26 SP:F9
+F975  60        RTS                             A:80 X:78 Y:20 P:A4 SP:F9
+DD46  F5 00     SBC $78,X                       A:80 X:78 Y:20 P:A4 SP:FB
+DD48  20 76 F9  JSR $F976                       A:60 X:78 Y:20 P:65 SP:FB
+F976  90 05     BCC $F97D                       A:60 X:78 Y:20 P:65 SP:F9
+F978  C9 7F     CMP #$7F                        A:60 X:78 Y:20 P:65 SP:F9
+F97A  D0 01     BNE $F97D                       A:60 X:78 Y:20 P:E4 SP:F9
+F97D  84 00     STY $00 = 1F                    A:60 X:78 Y:20 P:E4 SP:F9
+F97F  60        RTS                             A:60 X:78 Y:20 P:E4 SP:F9
+DD4B  C8        INY                             A:60 X:78 Y:20 P:E4 SP:FB
+DD4C  A9 7F     LDA #$7F                        A:60 X:78 Y:21 P:64 SP:FB
+DD4E  85 78     STA $78 = 00                    A:7F X:78 Y:21 P:64 SP:FB
+DD50  20 80 F9  JSR $F980                       A:7F X:78 Y:21 P:64 SP:FB
+F980  38        SEC                             A:7F X:78 Y:21 P:64 SP:F9
+F981  A9 81     LDA #$81                        A:7F X:78 Y:21 P:65 SP:F9
+F983  60        RTS                             A:81 X:78 Y:21 P:E5 SP:F9
+DD53  F5 00     SBC $78,X                       A:81 X:78 Y:21 P:E5 SP:FB
+DD55  20 84 F9  JSR $F984                       A:81 X:78 Y:21 P:A5 SP:FB
+F984  50 07     BVC $F98D                       A:81 X:78 Y:21 P:A5 SP:F9
+F98D  84 00     STY $00 = 20                    A:81 X:78 Y:21 P:A5 SP:F9
+F98F  60        RTS                             A:81 X:78 Y:21 P:A5 SP:F9
+DD58  A9 AA     LDA #$AA                        A:81 X:78 Y:21 P:A5 SP:FB
+DD5A  85 33     STA $33 = AA                    A:AA X:78 Y:21 P:A5 SP:FB
+DD5C  A9 BB     LDA #$BB                        A:AA X:78 Y:21 P:A5 SP:FB
+DD5E  85 89     STA $89 = BB                    A:BB X:78 Y:21 P:A5 SP:FB
+DD60  A2 00     LDX #$00                        A:BB X:78 Y:21 P:A5 SP:FB
+DD62  A0 66     LDY #$66                        A:BB X:00 Y:21 P:27 SP:FB
+DD64  24 01     BIT $01 = FF                    A:BB X:00 Y:66 P:25 SP:FB
+DD66  38        SEC                             A:BB X:00 Y:66 P:E5 SP:FB
+DD67  A9 00     LDA #$00                        A:BB X:00 Y:66 P:E5 SP:FB
+DD69  B5 33     LDA $33,X                       A:00 X:00 Y:66 P:67 SP:FB
+DD6B  10 12     BPL $DD7F                       A:44 X:00 Y:66 P:65 SP:FB
+DD7F  A9 22     LDA #$22                        A:44 X:00 Y:66 P:65 SP:FB
+DD81  85 00     STA $00 = 21                    A:22 X:00 Y:66 P:65 SP:FB
+DD83  A2 8A     LDX #$8A                        A:22 X:00 Y:66 P:65 SP:FB
+DD85  A0 66     LDY #$66                        A:22 X:8A Y:66 P:E5 SP:FB
+DD87  B8        CLV                             A:22 X:8A Y:66 P:65 SP:FB
+DD88  18        CLC                             A:22 X:8A Y:66 P:25 SP:FB
+DD89  A9 00     LDA #$00                        A:22 X:8A Y:66 P:24 SP:FB
+DD8B  B5 FF     LDA $89,X                       A:00 X:8A Y:66 P:26 SP:FB
+DD8D  10 12     BPL $DDA1                       A:00 X:8A Y:66 P:26 SP:FB
+DDA1  A9 23     LDA #$23                        A:00 X:8A Y:66 P:26 SP:FB
+DDA3  85 00     STA $00 = 22                    A:23 X:8A Y:66 P:24 SP:FB
+DDA5  24 01     BIT $01 = FF                    A:23 X:8A Y:66 P:24 SP:FB
+DDA7  38        SEC                             A:23 X:8A Y:66 P:E4 SP:FB
+DDA8  A9 44     LDA #$44                        A:23 X:8A Y:66 P:E5 SP:FB
+DDAA  A2 00     LDX #$00                        A:44 X:8A Y:66 P:65 SP:FB
+DDAC  95 33     STA $33,X                       A:44 X:00 Y:66 P:67 SP:FB
+DDAE  A5 33     LDA $33 = AA                    A:44 X:00 Y:66 P:67 SP:FB
+DDB0  90 18     BCC $DDCA                       A:AA X:00 Y:66 P:E5 SP:FB
+DDB2  C9 44     CMP #$44                        A:AA X:00 Y:66 P:E5 SP:FB
+DDB4  D0 14     BNE $DDCA                       A:AA X:00 Y:66 P:65 SP:FB
+DDCA  A9 24     LDA #$24                        A:AA X:00 Y:66 P:65 SP:FB
+DDCC  85 00     STA $00 = 23                    A:24 X:00 Y:66 P:65 SP:FB
+DDCE  A0 25     LDY #$25                        A:24 X:00 Y:66 P:65 SP:FB
+DDD0  A2 78     LDX #$78                        A:24 X:00 Y:25 P:65 SP:FB
+DDD2  20 90 F9  JSR $F990                       A:24 X:78 Y:25 P:65 SP:FB
+F990  A2 55     LDX #$55                        A:24 X:78 Y:25 P:65 SP:F9
+F992  A9 FF     LDA #$FF                        A:24 X:55 Y:25 P:65 SP:F9
+F994  85 01     STA $01 = FF                    A:FF X:55 Y:25 P:E5 SP:F9
+F996  EA        NOP                             A:FF X:55 Y:25 P:E5 SP:F9
+F997  24 01     BIT $01 = FF                    A:FF X:55 Y:25 P:E5 SP:F9
+F999  38        SEC                             A:FF X:55 Y:25 P:E5 SP:F9
+F99A  A9 01     LDA #$01                        A:FF X:55 Y:25 P:E5 SP:F9
+F99C  60        RTS                             A:01 X:55 Y:25 P:65 SP:F9
+DDD5  95 00     STA $55,X                       A:01 X:55 Y:25 P:65 SP:FB
+DDD7  56 00     LSR $55,X                       A:01 X:55 Y:25 P:65 SP:FB
