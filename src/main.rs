@@ -1,3 +1,4 @@
+use std::fs::File;
 use log::{debug, info, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use clap::Parser;
@@ -35,7 +36,14 @@ struct Args {
         value_parser=maybe_hex::<u16>,
         default_value_t = 0xc000
     )]
-    pc: u16
+    pc: u16,
+
+    #[arg(
+        short = 'f',
+        long = "trace-file",
+        help = "output for CPU tracing"
+    )]
+    trace_file: Option<String>,
 }
 
 
@@ -72,7 +80,15 @@ fn main() -> Result<(), CpuError> {
     loader = Box::new(INesLoader::new_with_memory(&mut memory));
     loader.load_rom("src/assets/nestest.nes").expect("fuck you");
 
-    cpu = Cpu6502::new(memory);
+    let file = if let Some(trace_file) = args.trace_file {
+        debug!("output for traces: {}", trace_file);
+        Some(File::create(trace_file)?)
+    } else {
+        debug!("output for traces: stdout");
+        None
+    };
+
+    cpu = Cpu6502::new(memory, file);
     cpu.initialize().expect("cpu initialization failed");
     status = cpu.run_start_at(args.pc);
 

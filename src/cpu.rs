@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use crate::loader::LoaderError;
 use crate::memory::MemoryError;
 
-pub trait CPU: Debug {
+pub trait CPU {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;
     fn panic(&self, error: &CpuError);
@@ -20,7 +21,8 @@ pub enum CpuError {
     IllegalInstruction(u8),
     InvalidOperand(String),
     StackOverflow(u16),
-    StackUnderflow(u16)
+    StackUnderflow(u16),
+    ConfigurationError(String)
 }
 
 impl From<MemoryError> for CpuError {
@@ -28,6 +30,13 @@ impl From<MemoryError> for CpuError {
         CpuError::MemoryError(error)
     }
 }
+
+impl From<std::io::Error> for CpuError {
+    fn from(error: std::io::Error) -> Self {
+        CpuError::ConfigurationError(error.to_string())
+    }
+}
+
 
 impl Error for CpuError {}
 
@@ -39,6 +48,7 @@ impl Display for CpuError {
             CpuError::StackOverflow(addr) => { write!(f, "stack overflow 0x{:04X}", addr) },
             CpuError::StackUnderflow(addr) => { write!(f, "stack underflow 0x{:04X}", addr) }
             CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) }
+            CpuError::ConfigurationError(s) => { write!(f, "configuration error: {}", s) }
         }
     }
 }

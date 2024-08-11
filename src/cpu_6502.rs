@@ -1,6 +1,8 @@
 use std::collections::HashMap;
-use std::fmt;
+use std::{fmt, io};
 use std::fmt::Display;
+use std::fs::File;
+use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
 use lazy_static::lazy_static;
@@ -140,10 +142,11 @@ struct Instruction {
     execute: fn(&Instruction, &mut Cpu6502, &Operand) -> Result<(), CpuError>,
 }
 
-#[derive(Debug)]
 pub struct Cpu6502 {
     registers: Registers,
     memory: Box<dyn Memory>,
+    instructions_executed: u64,
+    trace: Box<dyn Write>,
 }
 
 impl CPU for Cpu6502 {
@@ -174,6 +177,7 @@ impl CPU for Cpu6502 {
         self.dump_registers();
         self.dump_flags();
         //self.dump_memory();
+        info!("number of instructions executed: {}", self.instructions_executed);
     }
 
     fn dump_registers(&self) {
@@ -220,6 +224,7 @@ impl CPU for Cpu6502 {
                 self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
             }
 
+            self.instructions_executed += 1;
             //sleep(Duration::from_millis(20));
         }
     }
@@ -233,7 +238,14 @@ impl CPU for Cpu6502 {
 }
 
 impl Cpu6502 {
-    pub fn new(memory: Box<dyn Memory>) -> Self {
+    pub fn new(memory: Box<dyn Memory>, trace_file: Option<File>) -> Self {
+
+        let writer: Box<dyn Write> = if let Some(trace_file) = trace_file {
+            Box::new(trace_file)
+        } else {
+            Box::new(io::stdout())
+        };
+
         Cpu6502 {
             registers: Registers {
                 a: 0,
@@ -243,11 +255,13 @@ impl Cpu6502 {
                 sp: 0,
                 pc: 0
             },
-            memory
+            memory,
+            instructions_executed: 0,
+            trace: writer
         }
     }
 
-    fn trace(&self, pc_addr: u16, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
+    fn trace(&mut self, pc_addr: u16, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
         let a = format!("{:04X}", pc_addr);
 
         let mut b = format!("{:02X}", self.memory.read_byte(pc_addr)?);
@@ -282,10 +296,10 @@ impl Cpu6502 {
         let d = format!("A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
             self.registers.a, self.registers.x, self.registers.y, self.registers.p, self.registers.sp);
 
-        print!("{:<6}{:<10}", a, b);
-        print!("{:<padding$}", c, padding = 32);
-        print!("{}", d);
-        println!();
+        write!(&mut self.trace, "{:<6}{:<10}", a, b)?;
+        write!(&mut self.trace, "{:<padding$}", c, padding = 32)?;
+        write!(&mut self.trace, "{}", d)?;
+        writeln!(&mut self.trace)?;
 
         Ok(())
     }
@@ -370,16 +384,15 @@ impl Cpu6502 {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
                 let indexed_addr = addr + (self.registers.x as u16);
-                Operand::Byte(self.memory.read_byte(indexed_addr)?)
+                Operand::Word(indexed_addr)
             }
 
             AddressingMode::AbsoluteIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
                 let indexed_addr = addr + (self.registers.y as u16);
-                Operand::Byte(self.memory.read_byte(indexed_addr)?)
+                Operand::Word(indexed_addr)
             }
-
 
             AddressingMode::ZeroPage => {
                 let pc = self.registers.safe_pc_add(1)?;
@@ -391,7 +404,7 @@ impl Cpu6502 {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
                 let indexed_addr = addr as u16 + self.registers.x as u16;
-                Operand::Word(indexed_addr)
+                Operand::Word(indexed_addr as u16)
             },
 
             AddressingMode::ZeroPageIndexedY => {
@@ -410,15 +423,16 @@ impl Cpu6502 {
             AddressingMode::IndirectIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                let indirect_addr = addr.wrapping_add(self.registers.x);
-                Operand::Word(self.memory.read_word(indirect_addr as u16)?)
+                let indirect_addr0 = addr.wrapping_add(self.registers.x);
+                let indirect_addr1 = self.memory.read_word(indirect_addr0 as u16)?;
+                Operand::Word(indirect_addr1)
             },
 
             AddressingMode::IndirectIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                let indirect_addr = self.memory.read_word(addr as u16)?.wrapping_add(self.registers.y as u16);
-                Operand::Word(indirect_addr)
+                let indirect_addr0 = self.memory.read_word(addr as u16)?.wrapping_add(self.registers.y as u16);
+                Operand::Word(indirect_addr0)
             },
 
             AddressingMode::Relative => {
@@ -445,6 +459,25 @@ impl Cpu6502 {
 
 impl Instruction {
 
+    fn detect_overflow_add(lhs: u8, rhs: u8, sum: u8) -> bool {
+        ((lhs & 0x80 == 0) && (rhs & 0x80 == 0) && (sum & 0x80 != 0)) ||
+        ((lhs & 0x80 != 0) && (rhs & 0x80 != 0) && (sum & 0x80 == 0))
+    }
+
+    fn detect_overflow_sub(lhs: u8, rhs: u8, sum: u8) -> bool {
+        ((lhs & 0x80 == 0) && (rhs & 0x80 != 0) && (sum & 0x80 != 0)) ||
+        ((lhs & 0x80 != 0) && (rhs & 0x80 == 0) && (sum & 0x80 == 0))
+    }
+
+    fn detect_carry_add(lhs: u8, rhs: u8, sum: u8) -> bool {
+        ((lhs & 0x80 ^ rhs & 0x80 != 0) && (sum & 0x80 == 0)) ||
+        ((lhs & 0x80 != 0) && (rhs & 0x80 != 0))
+    }
+
+    fn detect_carry_sub(value0: u8, value1: u8) -> bool {
+        value0 >= value1
+    }
+
     fn get_operand_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u8, CpuError> {
         let result = match operand {
             Operand::Word(addr) => {
@@ -461,16 +494,22 @@ impl Instruction {
 
     fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let value = self.get_operand_value(cpu, operand)?;
+        let carry_in = cpu.registers.get_status(StatusFlag::Carry) as u8;
 
-        let result = cpu.registers.a as u16 + value as u16 + cpu.registers.get_status(StatusFlag::Carry) as u16;
-        cpu.registers.a = result as u8;
+        let sum0 = cpu.registers.a.wrapping_add(value);
+        let overflow0 = Instruction::detect_overflow_add(cpu.registers.a, value, sum0);
+        let carry0 = Instruction::detect_carry_add(cpu.registers.a, value, sum0);
+
+        let sum1 = sum0.wrapping_add(carry_in);
+        let overflow1 = Instruction::detect_overflow_add(sum0, carry_in, sum1);
+        let carry1 = Instruction::detect_carry_add(sum0, carry_in, sum1);
+
+        cpu.registers.a = sum1;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80!= 0);
-        cpu.registers.set_status(StatusFlag::Carry, true);
-
-        //let overflow = ((cpu.registers.a ^ value) & 0x80 == 0) && ((cpu.registers.a ^ result) & 0x80 != 0);
-        cpu.registers.set_status(StatusFlag::Overflow, true);
+        cpu.registers.set_status(StatusFlag::Carry, carry0 | carry1);
+        cpu.registers.set_status(StatusFlag::Overflow, overflow0 | overflow1);
 
         Ok(())
     }
@@ -497,7 +536,6 @@ impl Instruction {
             },
 
             Operand::Word(addr) => {
-                let original_value = cpu.memory.read_byte(*addr)?;
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let result = original_value << 1;
                 cpu.memory.write_byte(*addr, result)?;
@@ -978,14 +1016,22 @@ impl Instruction {
 
     fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let value = self.get_operand_value(cpu, operand)?;
+        let carry_in = cpu.registers.get_status(StatusFlag::Carry) as u8;
 
-        let result = (cpu.registers.a as u16).wrapping_sub(value as u16).wrapping_sub(1 - cpu.registers.get_status(StatusFlag::Carry) as u16);
-        cpu.registers.a = result as u8;
+        let sum0 = cpu.registers.a.wrapping_sub(value);
+        let overflow0 = Instruction::detect_overflow_sub(cpu.registers.a, value, sum0);
+        let carry0 = Instruction::detect_carry_sub(cpu.registers.a, value);
+
+        let sum1 = sum0.wrapping_sub(carry_in);
+        let overflow1 = Instruction::detect_overflow_sub(sum0, carry_in, sum1);
+        let carry1 = Instruction::detect_carry_sub(sum0, carry_in);
+
+        cpu.registers.a = sum1;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
-        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
-        cpu.registers.set_status(StatusFlag::Carry, true);
-        cpu.registers.set_status(StatusFlag::Overflow, true);
+        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80!= 0);
+        cpu.registers.set_status(StatusFlag::Carry, carry0 | carry1);
+        cpu.registers.set_status(StatusFlag::Overflow, overflow0 | overflow1);
 
         Ok(())
     }
