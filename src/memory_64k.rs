@@ -21,7 +21,7 @@ impl Memory for Memory64k {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        debug!("reading byte at 0x{:04X}", addr);
+        //debug!("reading byte at 0x{:04X}", addr);
 
         if !self.is_addr_in_boundary(addr) {
             Err(MemoryError::OutOfBounds(addr))

@@ -93,15 +93,16 @@ impl Registers {
 
     fn set_status(&mut self, flag: StatusFlag, value: bool) {
         if value {
-            debug!("setting status flag: {:?}, {:04}X", flag, flag.bits());
+            debug!("setting status flag: {:?}, {:04X}", flag, flag.bits());
             self.p |= flag.bits();
         } else {
-            debug!("clearing status flag: {:?}, {:04}X", flag, flag.bits());
+            debug!("clearing status flag: {:?}, {:04X}", flag, flag.bits());
             self.p &= !flag.bits();
         }
     }
 
     fn get_status(&self, flag: StatusFlag) -> bool {
+        debug!("status flag: {:?}, {:04X}", flag, flag.bits());
         (self.p & flag.bits()) != 0
     }
 
@@ -277,8 +278,12 @@ impl Cpu6502 {
         let c0 = format!("{:?}", &instruction.opcode);
 
         let c1 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
-            (AddressingMode::Implicit, _, _) |
-            (AddressingMode::Accumulator, _, _) => { "".to_string() },
+            (AddressingMode::Implicit, _, _) => { "".to_string() },
+
+            (AddressingMode::Accumulator, _, _) =>
+                "A".to_string(),
+
+            //(AddressingMode::Accumulator, _, _) => { "".to_string() },
 
             (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
             (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
@@ -348,7 +353,7 @@ impl Cpu6502 {
     fn push_stack(&mut self, value: u8) -> Result<(), CpuError> {
         let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
 
-        debug!("sp (before push): 0x{:02X}, pushing at 0x{:02X}", self.registers.sp, addr);
+        debug!("sp (before push): 0x{:02X}, pushing at 0x{:02X}, value {:02X}", self.registers.sp, addr, value);
         self.memory.write_byte(addr, value)?;
 
         addr = addr - 1;
@@ -368,7 +373,7 @@ impl Cpu6502 {
         self.is_valid_stack_addr(addr)?;
 
         self.registers.sp = addr as u8;
-        debug!("sp (after pop): 0x{:02X}", self.registers.sp);
+        debug!("sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
 
         Ok(value)
     }
@@ -502,13 +507,12 @@ impl Instruction {
         ((lhs & 0x80 != 0) && (rhs & 0x80 == 0) && (sum & 0x80 == 0))
     }
 
-    fn detect_carry_add(lhs: u8, rhs: u8, sum: u8) -> bool {
-        ((lhs & 0x80 ^ rhs & 0x80 != 0) && (sum & 0x80 == 0)) ||
-        ((lhs & 0x80 != 0) && (rhs & 0x80 != 0))
+    fn detect_carry_add(lhs: u8, rhs: u8, carry_in: bool) -> bool {
+        lhs as u16 + rhs as u16 + carry_in as u16 > 0xFF
     }
 
-    fn detect_carry_sub(value0: u8, value1: u8) -> bool {
-        value0 >= value1
+    fn detect_carry_sub(value0: u8, value1: u8, carry_in: bool) -> bool {
+        value0 >= (value1.wrapping_add(!carry_in as u8))
     }
 
     fn get_operand_byte_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u8, CpuError> {
@@ -550,22 +554,18 @@ impl Instruction {
 
     fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let value = self.get_operand_byte_value(cpu, operand)?;
-        let carry_in = cpu.registers.get_status(StatusFlag::Carry) as u8;
+        let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 1 } else { 0 };
 
-        let sum0 = cpu.registers.a.wrapping_add(value);
-        let overflow0 = Instruction::detect_overflow_add(cpu.registers.a, value, sum0);
-        let carry0 = Instruction::detect_carry_add(cpu.registers.a, value, sum0);
+        let result = cpu.registers.a as u16 + value as u16 + carry_in as u16;
 
-        let sum1 = sum0.wrapping_add(carry_in);
-        let overflow1 = Instruction::detect_overflow_add(sum0, carry_in, sum1);
-        let carry1 = Instruction::detect_carry_add(sum0, carry_in, sum1);
+        cpu.registers.set_status(StatusFlag::Carry, result > 0xFF);
+        cpu.registers.set_status(StatusFlag::Zero, result & 0xFF == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
 
-        cpu.registers.a = sum1;
+        let overflow = !(cpu.registers.a ^ value) & (cpu.registers.a ^ result as u8) & 0x80;
+        cpu.registers.set_status(StatusFlag::Overflow, overflow != 0);
 
-        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
-        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80!= 0);
-        cpu.registers.set_status(StatusFlag::Carry, carry0 | carry1);
-        cpu.registers.set_status(StatusFlag::Overflow, overflow0 | overflow1);
+        cpu.registers.a = result as u8;
 
         Ok(())
     }
@@ -676,13 +676,12 @@ impl Instruction {
     }
 
     fn bne_branch_on_result_not_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        let addr = self.get_operand_word_value(cpu, operand)?;
+
         if !cpu.registers.get_status(StatusFlag::Zero) {
-            if let Operand::Address(addr) = operand {
-                cpu.registers.pc = *addr;
-                Ok(())
-            } else {
-                Err(CpuError::InvalidOperand(format!("{}", operand)))
-            }
+            debug!("branching to address {:04X}", addr);
+            cpu.registers.pc = addr;
+            Ok(())
         } else {
             Ok(())
         }
@@ -880,7 +879,7 @@ impl Instruction {
 
     fn jsr_jump_to_new_location_saving_return_address(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let addr = self.get_operand_word_value(cpu, operand)?;
-        let pc = cpu.registers.safe_pc_add(3)?;
+        let pc = cpu.registers.safe_pc_add(2)?;
 
         cpu.push_stack((pc >> 8) as u8)?;
         cpu.push_stack(pc as u8)?;
@@ -1063,28 +1062,25 @@ impl Instruction {
         let pch = cpu.pop_stack()?;
 
         cpu.registers.pc = (pch as u16) << 8 | pcl as u16;
+        cpu.registers.pc = cpu.registers.safe_pc_add(1)?;
 
         Ok(())
     }
 
     fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let value = self.get_operand_byte_value(cpu, operand)?;
-        let carry_in = !cpu.registers.get_status(StatusFlag::Carry) as u8;
+        let borrow = !cpu.registers.get_status(StatusFlag::Carry) as u8;
 
-        let sum0 = cpu.registers.a.wrapping_sub(value);
-        let overflow0 = Instruction::detect_overflow_sub(cpu.registers.a, value, sum0);
-        let carry0 = Instruction::detect_carry_sub(cpu.registers.a, value);
+        let temp = value.wrapping_add(borrow);
+        let result = cpu.registers.a.wrapping_sub(temp);
 
-        let sum1 = sum0.wrapping_sub(carry_in);
-        let overflow1 = Instruction::detect_overflow_sub(sum0, carry_in, sum1);
-        let carry1 = Instruction::detect_carry_sub(sum0, carry_in);
+        cpu.registers.set_status(StatusFlag::Carry, cpu.registers.a >= temp);
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80!= 0);
 
-        cpu.registers.a = sum1;
-
-        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
-        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80!= 0);
-        cpu.registers.set_status(StatusFlag::Carry, carry0 | carry1);
-        cpu.registers.set_status(StatusFlag::Overflow, overflow0 | overflow1);
+        let overflow = ((cpu.registers.a ^ result) & 0x80 != 0) && ((cpu.registers.a ^ value) & 0x80 != 0);
+        cpu.registers.set_status(StatusFlag::Overflow, overflow);
+        cpu.registers.a = result;
 
         Ok(())
     }
