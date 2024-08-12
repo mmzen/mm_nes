@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use crate::loader::LoaderError;
 use crate::memory::MemoryError;
 
 pub trait CPU {
@@ -36,7 +35,6 @@ impl From<std::io::Error> for CpuError {
         CpuError::ConfigurationError(error.to_string())
     }
 }
-
 
 impl Error for CpuError {}
 

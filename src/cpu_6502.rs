@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::{fmt, io};
+use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
@@ -11,9 +12,37 @@ use crate::cpu::{CPU, CpuError};
 use crate::memory::{Memory, MemoryError};
 
 //const CLOCK_HZ: usize = 1_789_773;
-
 const STACK_BASE_ADDRESS: u16 = 0x0100;
 const STACK_END_ADDRESS: u16 = 0x01FF;
+
+
+lazy_static! {
+    static ref INSTRUCTIONS_TABLE: HashMap<u8, Instruction> = {
+        let mut map = HashMap::<u8, Instruction>::new();
+
+        macro_rules! add_instruction {
+            ($map:ident, $opcode:expr, $op:ident, $addr_mode:ident, $bytes:expr, $cycles:expr, $exec:ident) => {
+                $map.insert($opcode, Instruction {
+                    opcode: OpCode::$op,
+                    addressing_mode: AddressingMode::$addr_mode,
+                    bytes: $bytes,
+                    cycles: $cycles,
+                    execute: Instruction::$exec,
+                })
+            };
+        }
+
+        include!("instructions_macro.rs");
+        map
+    };
+}
+
+#[derive(Debug)]
+enum OpCode {
+    ORA, AND, EOR, ADC, STA, LDA, CMP, SBC, ASL, ROL, LSR, ROR, STX, LDX, DEC, INC, JMP, STY, LDY,
+    CPY, CPX, BIT, BPL, BMI, BVC, BVS, BCC, BCS, BNE, BEQ, BRK, JSR, RTI, RTS, PHP, PLP, PHA, PLA,
+    DEY, TAY, INY, INX, CLC, SEC, CLI, SEI, TYA, CLV, CLD, SED, TXA, TXS, TAX, TSX, DEX, NOP
+}
 
 #[derive(Debug)]
 enum Operand {
@@ -38,82 +67,6 @@ impl Display for Operand {
     }
 }
 
-lazy_static! {
-    static ref INSTRUCTIONS_TABLE: HashMap<u8, Instruction> = {
-        let mut map = HashMap::<u8, Instruction>::new();
-
-        macro_rules! add_instruction {
-            ($map:ident, $opcode:expr, $op:ident, $addr_mode:ident, $bytes:expr, $cycles:expr, $exec:ident) => {
-                $map.insert($opcode, Instruction {
-                    opcode: OpCode::$op,
-                    addressing_mode: AddressingMode::$addr_mode,
-                    bytes: $bytes,
-                    cycles: $cycles,
-                    execute: Instruction::$exec,
-                })
-            };
-        }
-
-        include!("instructions_macro.rs");
-        map
-    };
-}
-
-
-
-#[derive(Debug, Copy, Clone)]
-enum StatusFlag {
-    Carry = 0x01,
-    Zero = 0x02,
-    InterruptDisable = 0x04,
-    DecimalMode = 0x08,
-    BreakCommand = 0x10,
-    Unused = 0x20,
-    Overflow = 0x40,
-    Negative = 0x80,
-}
-
-impl StatusFlag {
-    fn bits(self) -> u8 {
-        self as u8
-    }
-}
-
-#[derive(Debug)]
-pub struct Registers  {
-    pub a: u8,      // Accumulator register
-    pub x: u8,      // Index register X
-    pub y: u8,      // Index register Y
-    pub p: u8,      // Status register
-    pub sp: u8,     // Stack pointer
-    pub pc: u16,    // Program counter
-}
-
-impl Registers {
-
-    fn set_status(&mut self, flag: StatusFlag, value: bool) {
-        if value {
-            debug!("setting status flag: {:?}, {:04X}", flag, flag.bits());
-            self.p |= flag.bits();
-        } else {
-            debug!("clearing status flag: {:?}, {:04X}", flag, flag.bits());
-            self.p &= !flag.bits();
-        }
-    }
-
-    fn get_status(&self, flag: StatusFlag) -> bool {
-        debug!("status flag: {:?}, {:04X}", flag, flag.bits());
-        (self.p & flag.bits()) != 0
-    }
-
-    fn safe_pc_add(&self, n: i16) -> Result<u16, CpuError> {
-        let pc = self.pc;
-        let pc = pc.checked_add_signed(n)
-            .ok_or(MemoryError::OutOfBounds(self.pc))?;
-
-        Ok(pc)
-    }
-}
 
 #[derive(Debug)]
 enum AddressingMode {
@@ -132,13 +85,6 @@ enum AddressingMode {
     IndirectIndexedY,       // val = PEEK(PEEK(arg) + PEEK((arg + 1) % 256) * 256 + Y)
 }
 
-#[derive(Debug)]
-enum OpCode {
-    ORA, AND, EOR, ADC, STA, LDA, CMP, SBC, ASL, ROL, LSR, ROR, STX, LDX, DEC, INC, JMP, STY, LDY,
-    CPY, CPX, BIT, BPL, BMI, BVC, BVS, BCC, BCS, BNE, BEQ, BRK, JSR, RTI, RTS, PHP, PLP, PHA, PLA,
-    DEY, TAY, INY, INX, CLC, SEC, CLI, SEI, TYA, CLV, CLD, SED, TXA, TXS, TAX, TSX, DEX, NOP
-}
-
 struct Instruction {
     opcode: OpCode,
     addressing_mode: AddressingMode,
@@ -147,380 +93,16 @@ struct Instruction {
     execute: fn(&Instruction, &mut Cpu6502, &Operand) -> Result<(), CpuError>,
 }
 
-pub struct Cpu6502 {
-    registers: Registers,
-    memory: Box<dyn Memory>,
-    instructions_executed: u64,
-    trace: Box<dyn Write>,
-}
-
-impl CPU for Cpu6502 {
-    fn reset(&mut self) -> Result<(), CpuError> {
-        info!("resetting CPU");
-
-        self.registers.a = 0;
-        self.registers.x = 0;
-        self.registers.y = 0;
-        self.registers.p = 0;
-        self.registers.set_status(StatusFlag::InterruptDisable, true);
-        self.registers.set_status(StatusFlag::Unused, true);
-        self.registers.sp = 0xFD;
-        self.registers.pc = 0xFFFC;
-        Ok(())
-    }
-
-    fn initialize(&mut self) -> Result<(), CpuError> {
-        info!("initializing CPU");
-
-        self.reset()?;
-        //self.memory.initialize()?;
-        Ok(())
-    }
-
-    fn panic(&self, error: &CpuError) {
-        error!("fatal exception: {}", error);
-        self.dump_registers();
-        self.dump_flags();
-        //self.dump_memory();
-        info!("number of instructions executed: {}", self.instructions_executed);
-    }
-
-    fn dump_registers(&self) {
-        info!("CPU registers dump:");
-        info!("- P (status): {:08b}", self.registers.p);
-        info!("- A (accumulator): 0x{:02X}", self.registers.a);
-        info!("- X (index): 0x{:02X}", self.registers.x);
-        info!("- Y (index): 0x{:02X}", self.registers.y);
-        info!("- SP (stack pointer): 0x{:02X}", self.registers.sp);
-        info!("- PC (program counter): 0x{:04X}", self.registers.pc);
-    }
-
-    fn dump_flags(&self) {
-        info!("CPU flags dump:");
-        info!("- carry: {}", self.registers.p & StatusFlag::Carry.bits() != 0);
-        info!("- zero: {}", self.registers.p & StatusFlag::Zero.bits() != 0);
-        info!("- interrupt disable: {}", self.registers.p & StatusFlag::InterruptDisable.bits() != 0);
-        info!("- decimal Mode: {}", self.registers.p & StatusFlag::DecimalMode.bits() != 0);
-        info!("- break Command: {}", self.registers.p & StatusFlag::BreakCommand.bits() != 0);
-        info!("- overflow: {}", self.registers.p & StatusFlag::Overflow.bits() != 0);
-        info!("- negative: {}", self.registers.p & StatusFlag::Negative.bits() != 0);
-    }
-
-    fn dump_memory(&self) {
-        self.memory.dump();
-    }
-
-    fn run(&mut self) -> Result<(), CpuError> {
-        info!("running CPU ...");
-
-        loop {
-            debug!("pc: 0x{:04X}", self.registers.pc);
-            let original_pc = self.registers.pc;
-
-            let byte = self.memory.read_byte(self.registers.pc)?;
-            let instruction = Cpu6502::decode_instruction(byte)?;
-            let operand = self.fetch_operand(instruction)?;
-
-            self.trace(original_pc, &instruction, &operand)?;
-
-            self.execute_instruction(instruction, &operand)?;
-
-            if original_pc == self.registers.pc {
-                self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
-            }
-
-            self.instructions_executed += 1;
-            //sleep(Duration::from_millis(20));
-        }
-    }
-
-    fn run_start_at(&mut self, address: u16) -> Result<(), CpuError> {
-        self.registers.pc = address;
-
-        debug!("pc set to address 0x{:04X} ...", address);
-        self.run()
-    }
-}
-
-impl Cpu6502 {
-    pub fn new(memory: Box<dyn Memory>, trace_file: Option<File>) -> Self {
-
-        let writer: Box<dyn Write> = if let Some(trace_file) = trace_file {
-            Box::new(trace_file)
-        } else {
-            Box::new(io::stdout())
-        };
-
-        Cpu6502 {
-            registers: Registers {
-                a: 0,
-                x: 0,
-                y: 0,
-                p: 0,
-                sp: 0,
-                pc: 0
-            },
-            memory,
-            instructions_executed: 0,
-            trace: writer
-        }
-    }
-
-    fn trace(&mut self, pc_addr: u16, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
-        let a = format!("{:04X}", pc_addr);
-
-        let mut b = format!("{:02X}", self.memory.read_byte(pc_addr)?);
-        for i in 1..instruction.bytes {
-            let o = format!(" {:02X}", self.memory.read_byte(pc_addr + i as u16)?);
-            b.push_str(&o);
-        }
-
-        let c0 = format!("{:?}", &instruction.opcode);
-
-        let c1 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
-            (AddressingMode::Implicit, _, _) => { "".to_string() },
-
-            (AddressingMode::Accumulator, _, _) =>
-                "A".to_string(),
-
-            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
-            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
-                format!("${:04X}", *addr),
-
-            (AddressingMode::Absolute, Operand::Address(addr), _) =>
-                format!("${:04X} = {:02X}", *addr, self.memory.read_byte(*addr)?),
-
-            (AddressingMode::Relative, Operand::Address(addr), _) =>
-                format!("${:04X}", *addr),
-
-            (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
-                format!("${:02X} = {:02X}", *addr as u8, self.memory.read_byte(*addr)?),
-
-            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("${:04X},X", *addr),
-
-            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("${:04X},Y", *addr),
-
-            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("${:02X},X", *addr),
-
-            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, _), _) =>
-                format!("(${:02X}),Y", *addr),
-
-            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("(${:04X}) = {:04X}", *addr, effective),
-
-            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, addr.wrapping_add(self.registers.x as u16), *effective, self.memory.read_byte(*effective)?),
-
-            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(self.registers.y as u16), *effective, self.memory.read_byte(*effective)?),
-
-            (AddressingMode::Immediate, Operand::Byte(byte), _) =>
-                format!("#${:02X}", byte),
-
-            _ => { return Err(CpuError::InvalidOperand(
-                    format!("could not format instruction and operand: {:?}, {:?}",
-                            &instruction.addressing_mode, operand)
-                    )) }
-        };
-        let c = format!("{} {}", c0, c1);
-
-        let d = format!("A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
-            self.registers.a, self.registers.x, self.registers.y, self.registers.p, self.registers.sp);
-
-        write!(&mut self.trace, "{:<6}{:<10}", a, b)?;
-        write!(&mut self.trace, "{:<padding$}", c, padding = 32)?;
-        write!(&mut self.trace, "{}", d)?;
-        writeln!(&mut self.trace)?;
-
-        Ok(())
-    }
-
-    fn is_valid_stack_addr(&self, addr: u16) -> Result<(), CpuError> {
-        if addr > STACK_END_ADDRESS {
-            Err(CpuError::StackOverflow(addr))
-        } else if addr < STACK_BASE_ADDRESS {
-            Err(CpuError::StackUnderflow(addr))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn push_stack(&mut self, value: u8) -> Result<(), CpuError> {
-        let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
-
-        debug!("sp (before push): 0x{:02X}, pushing at 0x{:02X}, value {:02X}", self.registers.sp, addr, value);
-        self.memory.write_byte(addr, value)?;
-
-        addr = addr - 1;
-        self.is_valid_stack_addr(addr)?;
-
-        self.registers.sp = addr as u8;
-        debug!("sp (after push): 0x{:02X}", self.registers.sp);
-
-        Ok(())
-    }
-
-    fn pop_stack(&mut self) -> Result<u8, CpuError> {
-        let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16 + 1;
-
-        debug!("sp (before pop): 0x{:02X}, popping at 0x{:02X}", self.registers.sp, addr);
-        let value = self.memory.read_byte(addr)?;
-        self.is_valid_stack_addr(addr)?;
-
-        self.registers.sp = addr as u8;
-        debug!("sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
-
-        Ok(value)
-    }
-
-    fn decode_instruction<'a>(byte: u8) -> Result<&'a Instruction, CpuError> {
-        let aaa = (byte & 0b1110_0000) >> 2;
-        let cc = byte & 0b0000_0011;
-        let opcode = aaa | cc;
-
-        debug!("decoded instruction: 0x{:02X}: opcode: 0x{:02X}", byte, opcode);
-
-        if let Some(instruction) = INSTRUCTIONS_TABLE.get(&byte) {
-            Ok(instruction)
-        } else {
-            Err(CpuError::IllegalInstruction(byte))
-        }
-    }
-
-    fn fetch_operand(&self, instruction: &Instruction) -> Result<Operand, CpuError> {
-
-        debug!("fetching operand for instruction: {:?}, {:?}", instruction.opcode, instruction.addressing_mode);
-
-        let operand = match instruction.addressing_mode {
-            AddressingMode::Implicit => {
-                Operand::None
-            },
-
-            AddressingMode::Accumulator => {
-                Operand::Accumulator
-            },
-
-            AddressingMode::Immediate => {
-                let pc = self.registers.safe_pc_add(1)?;
-                Operand::Byte(self.memory.read_byte(pc)?)
-            },
-
-            AddressingMode::Absolute => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
-                Operand::Address(addr)
-            },
-
-            AddressingMode::AbsoluteIndexedX => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
-                let effective_addr = addr.wrapping_add(self.registers.x as u16);
-                Operand::AddressAndEffectiveAddress(addr, effective_addr)
-            }
-
-            AddressingMode::AbsoluteIndexedY => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
-                let effective_addr = addr.wrapping_add(self.registers.y as u16);
-                Operand::AddressAndEffectiveAddress(addr, effective_addr)
-            }
-
-            AddressingMode::ZeroPage => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
-                Operand::Address(addr as u16)
-            },
-
-            AddressingMode::ZeroPageIndexedX => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?.wrapping_add(self.registers.x);
-                let effective_addr = self.memory.read_word(addr as u16)?;
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
-            },
-
-            AddressingMode::ZeroPageIndexedY => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
-                let effective_addr = self.memory.read_word(addr as u16)?.wrapping_add(self.registers.y as u16);
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
-            },
-
-            AddressingMode::Indirect => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
-
-                let effective_addr = if (addr & 0xFF) == 0xFF {
-                    let lo = self.memory.read_byte(addr)? as u16;
-                    let hi = self.memory.read_byte(addr - 0xFF)? as u16;
-                    lo | hi << 8
-                } else {
-                    self.memory.read_word(addr as u16)?
-                };
-
-                //let effective_addr = self.memory.read_word(addr)?;
-                Operand::AddressAndEffectiveAddress(addr, effective_addr)
-            },
-
-            AddressingMode::IndirectIndexedX => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
-                let indirect_addr = addr.wrapping_add(self.registers.x);
-
-                let effective_addr = if indirect_addr == 0xFF {
-                    let lo = self.memory.read_byte(0xFF)? as u16;
-                    let hi = self.memory.read_byte(0)? as u16;
-                    lo | hi << 8
-                } else {
-                    self.memory.read_word(indirect_addr as u16)?
-                };
-
-                //let effective_addr = self.memory.read_word(indirect_addr as u16)?;
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
-            },
-
-            AddressingMode::IndirectIndexedY => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
-                let indirect_addr = self.memory.read_word(addr as u16)?;
-                let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
-            },
-
-            AddressingMode::Relative => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let offset = self.memory.read_byte(pc)? as i16;
-                let addr = self.registers.safe_pc_add(offset+2)?;
-
-                Operand::Address(addr)
-            },
-        };
-
-        debug!("fetched operand: {}", operand);
-        Ok(operand)
-    }
-
-    fn execute_instruction(&mut self, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
-        
-        debug!("executing instruction: opcode: {:?}, addressing mode: {:?}, operand: {}",
-            instruction.opcode, instruction.addressing_mode, operand);
-
-        (instruction.execute)(instruction, self, operand)
-    }
-}
-
 impl Instruction {
 
     fn detect_overflow_add(lhs: u8, rhs: u8, sum: u8) -> bool {
         ((lhs & 0x80 == 0) && (rhs & 0x80 == 0) && (sum & 0x80 != 0)) ||
-        ((lhs & 0x80 != 0) && (rhs & 0x80 != 0) && (sum & 0x80 == 0))
+            ((lhs & 0x80 != 0) && (rhs & 0x80 != 0) && (sum & 0x80 == 0))
     }
 
     fn detect_overflow_sub(lhs: u8, rhs: u8, sum: u8) -> bool {
         ((lhs & 0x80 == 0) && (rhs & 0x80 != 0) && (sum & 0x80 != 0)) ||
-        ((lhs & 0x80 != 0) && (rhs & 0x80 == 0) && (sum & 0x80 == 0))
+            ((lhs & 0x80 != 0) && (rhs & 0x80 == 0) && (sum & 0x80 == 0))
     }
 
     fn detect_carry_add(lhs: u8, rhs: u8, carry_in: bool) -> bool {
@@ -534,6 +116,9 @@ impl Instruction {
     fn get_operand_byte_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u8, CpuError> {
 
         let result = match operand {
+            Operand::Accumulator => {
+                Ok(cpu.registers.a)
+            },
             Operand::Byte(value) => {
                 Ok(*value)
             },
@@ -544,8 +129,10 @@ impl Instruction {
             Operand::AddressAndEffectiveAddress(_, effective) => {
                 let value = cpu.memory.read_byte(*effective)?;
                 Ok(value)
-            },
-            _ => Err(CpuError::InvalidOperand(format!("{}", operand)))
+            }
+            Operand::None => {
+                Err(CpuError::InvalidOperand(format!("{}", operand)))
+            }
         };
 
         result
@@ -607,7 +194,8 @@ impl Instruction {
                 (original_value, result)
             },
 
-            Operand::Address(addr) => {
+            Operand::Address(addr) |
+            Operand::AddressAndEffectiveAddress(_, addr) =>{
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let result = original_value << 1;
                 cpu.memory.write_byte(*addr, result)?;
@@ -945,12 +533,15 @@ impl Instruction {
                 cpu.registers.a = result;
                 (original_value, result)
             },
-            Operand::Address(addr) => {
+
+            Operand::Address(addr) |
+            Operand::AddressAndEffectiveAddress(_, addr) =>{
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let result = original_value >> 1;
                 cpu.memory.write_byte(*addr, result)?;
                 (original_value, result)
             },
+
             _ => {
                 return Err(CpuError::InvalidOperand(format!("{}", operand)));
             }
@@ -1179,6 +770,428 @@ impl Instruction {
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum StatusFlag {
+    Carry = 0x01,
+    Zero = 0x02,
+    InterruptDisable = 0x04,
+    DecimalMode = 0x08,
+    BreakCommand = 0x10,
+    Unused = 0x20,
+    Overflow = 0x40,
+    Negative = 0x80,
+}
+
+impl StatusFlag {
+    fn bits(self) -> u8 {
+        self as u8
+    }
+}
+
+#[derive(Debug)]
+struct Registers  {
+    a: u8,      // Accumulator register
+    x: u8,      // Index register X
+    y: u8,      // Index register Y
+    p: u8,      // Status register
+    sp: u8,     // Stack pointer
+    pc: u16,    // Program counter
+}
+
+impl Registers {
+
+    fn set_status(&mut self, flag: StatusFlag, value: bool) {
+        if value {
+            debug!("setting status flag: {:?}, {:04X}", flag, flag.bits());
+            self.p |= flag.bits();
+        } else {
+            debug!("clearing status flag: {:?}, {:04X}", flag, flag.bits());
+            self.p &= !flag.bits();
+        }
+    }
+
+    fn get_status(&self, flag: StatusFlag) -> bool {
+        debug!("status flag: {:?}, {:04X}", flag, flag.bits());
+        (self.p & flag.bits()) != 0
+    }
+
+    fn safe_pc_add(&self, n: i16) -> Result<u16, CpuError> {
+        let pc = self.pc;
+        let pc = pc.checked_add_signed(n)
+            .ok_or(MemoryError::OutOfBounds(self.pc))?;
+
+        Ok(pc)
+    }
+}
+
+pub struct Cpu6502 {
+    registers: Registers,
+    memory: Box<dyn Memory>,
+    instructions_executed: u64,
+    tracer: Tracer,
+}
+
+impl CPU for Cpu6502 {
+    fn reset(&mut self) -> Result<(), CpuError> {
+        info!("resetting CPU");
+
+        self.registers.a = 0;
+        self.registers.x = 0;
+        self.registers.y = 0;
+        self.registers.p = 0;
+        self.registers.set_status(StatusFlag::InterruptDisable, true);
+        self.registers.set_status(StatusFlag::Unused, true);
+        self.registers.sp = 0xFD;
+        self.registers.pc = 0xFFFC;
+        Ok(())
+    }
+
+    fn initialize(&mut self) -> Result<(), CpuError> {
+        info!("initializing CPU");
+
+        self.reset()?;
+        //self.memory.initialize()?;
+        Ok(())
+    }
+
+    fn panic(&self, error: &CpuError) {
+        error!("fatal exception: {}", error);
+        self.dump_registers();
+        self.dump_flags();
+        //self.dump_memory();
+        info!("number of instructions executed: {} ({:.1} %)", self.instructions_executed, (self.instructions_executed as f32 / 8991_f32) * 100_f32);
+    }
+
+    fn dump_registers(&self) {
+        info!("CPU registers dump:");
+        info!("- P (status): {:08b}", self.registers.p);
+        info!("- A (accumulator): 0x{:02X}", self.registers.a);
+        info!("- X (index): 0x{:02X}", self.registers.x);
+        info!("- Y (index): 0x{:02X}", self.registers.y);
+        info!("- SP (stack pointer): 0x{:02X}", self.registers.sp);
+        info!("- PC (program counter): 0x{:04X}", self.registers.pc);
+    }
+
+    fn dump_flags(&self) {
+        info!("CPU flags dump:");
+        info!("- carry: {}", self.registers.p & StatusFlag::Carry.bits() != 0);
+        info!("- zero: {}", self.registers.p & StatusFlag::Zero.bits() != 0);
+        info!("- interrupt disable: {}", self.registers.p & StatusFlag::InterruptDisable.bits() != 0);
+        info!("- decimal Mode: {}", self.registers.p & StatusFlag::DecimalMode.bits() != 0);
+        info!("- break Command: {}", self.registers.p & StatusFlag::BreakCommand.bits() != 0);
+        info!("- overflow: {}", self.registers.p & StatusFlag::Overflow.bits() != 0);
+        info!("- negative: {}", self.registers.p & StatusFlag::Negative.bits() != 0);
+    }
+
+    fn dump_memory(&self) {
+        self.memory.dump();
+    }
+
+    fn run(&mut self) -> Result<(), CpuError> {
+        info!("running CPU ...");
+
+        loop {
+            debug!("pc: 0x{:04X}", self.registers.pc);
+            let original_pc = self.registers.pc;
+
+            let byte = self.memory.read_byte(self.registers.pc)?;
+            let instruction = Cpu6502::decode_instruction(byte)?;
+            let operand = self.fetch_operand(instruction)?;
+
+            self.tracer.trace(&self, &instruction, &operand)?;
+            self.execute_instruction(instruction, &operand)?;
+
+            if original_pc == self.registers.pc {
+                self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
+            }
+
+            self.instructions_executed += 1;
+            //sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn run_start_at(&mut self, address: u16) -> Result<(), CpuError> {
+        self.registers.pc = address;
+
+        debug!("pc set to address 0x{:04X} ...", address);
+        self.run()
+    }
+}
+
+impl Cpu6502 {
+    pub fn new(memory: Box<dyn Memory>, trace_file: Option<File>) -> Self {
+        Cpu6502 {
+            registers: Registers {
+                a: 0,
+                x: 0,
+                y: 0,
+                p: 0,
+                sp: 0,
+                pc: 0
+            },
+            memory,
+            instructions_executed: 0,
+            tracer: Tracer::new_with_file(trace_file)
+        }
+    }
+
+    fn is_valid_stack_addr(&self, addr: u16) -> Result<(), CpuError> {
+        if addr > STACK_END_ADDRESS {
+            Err(CpuError::StackOverflow(addr))
+        } else if addr < STACK_BASE_ADDRESS {
+            Err(CpuError::StackUnderflow(addr))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn push_stack(&mut self, value: u8) -> Result<(), CpuError> {
+        let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+
+        debug!("sp (before push): 0x{:02X}, pushing at 0x{:02X}, value {:02X}", self.registers.sp, addr, value);
+        self.memory.write_byte(addr, value)?;
+
+        addr = addr - 1;
+        self.is_valid_stack_addr(addr)?;
+
+        self.registers.sp = addr as u8;
+        debug!("sp (after push): 0x{:02X}", self.registers.sp);
+
+        Ok(())
+    }
+
+    fn pop_stack(&mut self) -> Result<u8, CpuError> {
+        let addr = STACK_BASE_ADDRESS + self.registers.sp as u16 + 1;
+
+        debug!("sp (before pop): 0x{:02X}, popping at 0x{:02X}", self.registers.sp, addr);
+        let value = self.memory.read_byte(addr)?;
+        self.is_valid_stack_addr(addr)?;
+
+        self.registers.sp = addr as u8;
+        debug!("sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
+
+        Ok(value)
+    }
+
+    fn decode_instruction<'a>(byte: u8) -> Result<&'a Instruction, CpuError> {
+        let aaa = (byte & 0b1110_0000) >> 2;
+        let cc = byte & 0b0000_0011;
+        let opcode = aaa | cc;
+
+        debug!("decoded instruction: 0x{:02X}: opcode: 0x{:02X}", byte, opcode);
+
+        if let Some(instruction) = INSTRUCTIONS_TABLE.get(&byte) {
+            Ok(instruction)
+        } else {
+            Err(CpuError::IllegalInstruction(byte))
+        }
+    }
+
+    fn fetch_operand(&self, instruction: &Instruction) -> Result<Operand, CpuError> {
+
+        debug!("fetching operand for instruction: {:?}, {:?}", instruction.opcode, instruction.addressing_mode);
+
+        let operand = match instruction.addressing_mode {
+            AddressingMode::Implicit => {
+                Operand::None
+            },
+
+            AddressingMode::Accumulator => {
+                Operand::Accumulator
+            },
+
+            AddressingMode::Immediate => {
+                let pc = self.registers.safe_pc_add(1)?;
+
+                Operand::Byte(self.memory.read_byte(pc)?)
+            },
+
+            AddressingMode::Absolute => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_word(pc)?;
+
+                Operand::Address(addr)
+            },
+
+            AddressingMode::AbsoluteIndexedX => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_word(pc)?;
+                let effective_addr = addr.wrapping_add(self.registers.x as u16);
+
+                Operand::AddressAndEffectiveAddress(addr, effective_addr)
+            }
+
+            AddressingMode::AbsoluteIndexedY => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_word(pc)?;
+                let effective_addr = addr.wrapping_add(self.registers.y as u16);
+
+                Operand::AddressAndEffectiveAddress(addr, effective_addr)
+            }
+
+            AddressingMode::ZeroPage => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_byte(pc)?;
+
+                Operand::Address(addr as u16)
+            },
+
+            AddressingMode::ZeroPageIndexedX => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_byte(pc)?;
+                let effective_addr = addr.wrapping_add(self.registers.x) as u16;
+
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+            },
+
+            AddressingMode::ZeroPageIndexedY => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_byte(pc)?;
+                let effective_addr = addr.wrapping_add(self.registers.y) as u16;
+
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+            },
+
+            AddressingMode::Indirect => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_word(pc)?;
+                let effective_addr = self.memory.read_word_with_page_wrap(addr)?;
+
+                Operand::AddressAndEffectiveAddress(addr, effective_addr)
+            },
+
+            AddressingMode::IndirectIndexedX => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_byte(pc)?;
+                let indirect_addr = addr.wrapping_add(self.registers.x);
+                let effective_addr = self.memory.read_word_with_page_wrap(indirect_addr as u16)?;
+
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+            },
+
+            AddressingMode::IndirectIndexedY => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let addr = self.memory.read_byte(pc)?;
+                let indirect_addr = self.memory.read_word_with_page_wrap(addr as u16)?;
+                let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
+
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+            },
+
+            AddressingMode::Relative => {
+                let pc = self.registers.safe_pc_add(1)?;
+                let offset = self.memory.read_byte(pc)? as i16;
+                let addr = self.registers.safe_pc_add(offset+2)?;
+
+                Operand::Address(addr)
+            },
+        };
+
+        debug!("fetched operand: {}", operand);
+        Ok(operand)
+    }
+
+    fn execute_instruction(&mut self, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
+        
+        debug!("executing instruction: opcode: {:?}, addressing mode: {:?}, operand: {}",
+            instruction.opcode, instruction.addressing_mode, operand);
+
+        (instruction.execute)(instruction, self, operand)
+    }
+}
+
+pub struct Tracer {
+    trace: RefCell<Box<dyn Write>>,
+}
+
+impl Tracer {
+    fn new_with_file(trace_file: Option<File>) -> Tracer {
+        let writer: Box<dyn Write> = if let Some(trace_file) = trace_file {
+            Box::new(trace_file)
+        } else {
+            Box::new(io::stdout())
+        };
+
+        Tracer { trace: RefCell::new(writer) }
+    }
+
+    fn trace(&self, cpu: &Cpu6502, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
+        let a = format!("{:04X}", cpu.registers.pc);
+
+        let mut b = format!("{:02X}", cpu.memory.read_byte(cpu.registers.pc)?);
+        for i in 1..instruction.bytes {
+            let o = format!(" {:02X}", cpu.memory.read_byte(cpu.registers.pc + i as u16)?);
+            b.push_str(&o);
+        }
+
+        let c0 = format!("{:?}", &instruction.opcode);
+
+        let c1 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
+            (AddressingMode::Implicit, _, _) => { "".to_string() },
+
+            (AddressingMode::Accumulator, _, _) =>
+                "A".to_string(),
+
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
+                format!("${:04X}", *addr),
+
+            (AddressingMode::Absolute, Operand::Address(addr), _) =>
+                format!("${:04X} = {:02X}", *addr, cpu.memory.read_byte(*addr)?),
+
+            (AddressingMode::Relative, Operand::Address(addr), _) =>
+                format!("${:04X}", *addr),
+
+            (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
+                format!("${:02X} = {:02X}", *addr as u8, cpu.memory.read_byte(*addr)?),
+
+            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+
+            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+
+            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+
+            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+
+            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("(${:04X}) = {:04X}", *addr, effective),
+
+            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x), *effective, cpu.memory.read_byte(*effective)?),
+
+            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16), *effective, cpu.memory.read_byte(*effective)?),
+
+            (AddressingMode::Immediate, Operand::Byte(byte), _) =>
+                format!("#${:02X}", byte),
+
+            _ => {
+                return Err(CpuError::InvalidOperand(
+                    format!("could not format instruction and operand: {:?}, {:?}",
+                            &instruction.addressing_mode, operand)
+                ))
+            }
+        };
+        let c = format!("{} {}", c0, c1);
+
+        let d = format!("A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
+                        cpu.registers.a, cpu.registers.x, cpu.registers.y, cpu.registers.p, cpu.registers.sp);
+
+        let mut output = self.trace.borrow_mut();
+
+        write!(output, "{:<6}{:<10}", a, b)?;
+        write!(output, "{:<padding$}", c, padding = 32)?;
+        write!(output, "{}", d)?;
+        writeln!(output)?;
+
         Ok(())
     }
 }

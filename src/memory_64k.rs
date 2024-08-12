@@ -43,18 +43,29 @@ impl Memory for Memory64k {
         }
     }
 
+    fn read_word_with_page_wrap(&self, addr: u16) -> Result<u16, MemoryError> {
+        let lo = self.read_byte(addr)?;
+
+        let hi = if (addr & 0xFF) == 0xFF {
+            self.read_byte(addr & 0xFF00)?
+        } else {
+            self.read_byte(addr.wrapping_add(1))?
+        };
+
+        Ok((hi as u16) << 8 | lo as u16)
+    }
+
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
-        let lower_byte = self.read_byte(addr)?;
+        let lo = self.read_byte(addr)?;
         let next = addr.checked_add(1).ok_or(MemoryError::OutOfBounds(addr))?;
+        let hi = self.read_byte(next)?;
 
-        let upper_byte = self.read_byte(next)?;
-
-        Ok((upper_byte as u16) << 8 | lower_byte as u16)
+        Ok((hi as u16) << 8 | lo as u16)
     }
 
     fn write_word(&mut self, addr: u16, value: u16) -> Result<u16, MemoryError> {
-        let lower_byte = (value & 0x00FF) as u8;
-        let upper_byte = ((value & 0xFF00) >> 8) as u8;
+        let lower_byte = value as u8;
+        let upper_byte = (value & 0xFF00 >> 8) as u8;
         let next = addr.checked_add(1).ok_or(MemoryError::OutOfBounds(addr))?;
 
         self.write_byte(addr, lower_byte)?;
