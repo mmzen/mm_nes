@@ -32,7 +32,7 @@ lazy_static! {
             };
         }
 
-        include!("instructions_macro.rs");
+        include!("instructions_macro_std.rs");
         map
     };
 }
@@ -113,6 +113,50 @@ impl Instruction {
         value0 >= (value1.wrapping_add(!carry_in as u8))
     }
 
+    fn update_flags_zero_negative(&self, cpu: &mut Cpu6502, value: u8) {
+        cpu.registers.set_status(StatusFlag::Zero, value == 0);
+        cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
+    }
+
+    fn shift_left_and_update_carry_flags(&self, cpu: &mut Cpu6502, value: u8) -> u8 {
+        let original_value = value;
+        let result = value << 1;
+
+        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x80 != 0);
+        self.update_flags_zero_negative(cpu, result);
+
+        result
+    }
+
+    fn shift_right_and_update_carry_flags(&self, cpu: &mut Cpu6502, value: u8) -> u8 {
+        let original_value = value;
+        let result = value >> 1;
+
+        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x01 != 0);
+        self.update_flags_zero_negative(cpu, result);
+
+        result
+    }
+
+    fn overwrite(&self, cpu: &mut Cpu6502, operand: &Operand, value: u8) -> Result<(), CpuError> {
+        match operand {
+            Operand::Address(addr) |
+            Operand::AddressAndEffectiveAddress(_, addr) => {
+                cpu.memory.write_byte(*addr, value)?;
+                Ok(())
+            },
+
+            Operand::Accumulator => {
+                cpu.registers.a = value;
+                Ok(())
+            },
+
+            _ => {
+                Err(CpuError::InvalidOperand(format!("{}", operand)))
+            }
+        }
+    }
+
     fn get_operand_byte_value(&self, cpu: &Cpu6502, operand: &Operand) -> Result<u8, CpuError> {
 
         let result = match operand {
@@ -185,31 +229,11 @@ impl Instruction {
     }
 
     fn asl_shift_left_one_bit(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        let value = self.get_operand_byte_value(cpu, operand)?;
+        let result = self.shift_left_and_update_carry_flags(cpu, value);
 
-        let (original_value, result) = match operand {
-            Operand::Accumulator => {
-                let original_value = cpu.registers.a;
-                let result = original_value << 1;
-                cpu.registers.a = result;
-                (original_value, result)
-            },
-
-            Operand::Address(addr) |
-            Operand::AddressAndEffectiveAddress(_, addr) =>{
-                let original_value = cpu.memory.read_byte(*addr)?;
-                let result = original_value << 1;
-                cpu.memory.write_byte(*addr, result)?;
-                (original_value, result)
-            },
-
-            _ => {
-                return Err(CpuError::InvalidOperand(format!("{}", operand)));
-            }
-        };
-
-        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x80 != 0);
-        cpu.registers.set_status(StatusFlag::Zero, result == 0);
-        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+        self.update_flags_zero_negative(cpu, result);
+        self.overwrite(cpu, operand, result)?;
 
         Ok(())
     }
@@ -402,19 +426,13 @@ impl Instruction {
     }
 
     fn dec_decrement_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Address(addr) = operand {
-            let mut value = cpu.memory.read_byte(*addr)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
+        let result = value.wrapping_sub(1);
 
-            value = value.wrapping_sub(1);
-            cpu.memory.write_byte(*addr, value)?;
+        self.update_flags_zero_negative(cpu, result);
+        self.overwrite(cpu, operand, result)?;
 
-            cpu.registers.set_status(StatusFlag::Zero, value == 0);
-            cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
-
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("Expected a memory address, got: {:?}", operand)))
-        }
+        Ok(())
     }
 
     fn dex_decrement_index_x_by_one(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
@@ -444,19 +462,13 @@ impl Instruction {
     }
 
     fn inc_increment_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        if let Operand::Address(addr) = operand {
-            let mut value = cpu.memory.read_byte(*addr)?;
+        let value = self.get_operand_byte_value(cpu, operand)?;
+        let result = value.wrapping_add(1);
 
-            value = value.wrapping_add(1);
-            cpu.memory.write_byte(*addr, value)?;
+        self.update_flags_zero_negative(cpu, result);
+        self.overwrite(cpu, operand, result)?;
 
-            cpu.registers.set_status(StatusFlag::Zero, value == 0);
-            cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
-
-            Ok(())
-        } else {
-            Err(CpuError::InvalidOperand(format!("{}", operand)))
-        }
+        Ok(())
     }
 
     fn inx_increment_index_x_by_one(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
@@ -526,30 +538,12 @@ impl Instruction {
     }
 
     fn lsr_shift_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        let (original_value, result) = match operand {
-            Operand::Accumulator => {
-                let original_value = cpu.registers.a;
-                let result = original_value >> 1;
-                cpu.registers.a = result;
-                (original_value, result)
-            },
+        let value = self.get_operand_byte_value(cpu, operand)?;
+        let result = self.shift_right_and_update_carry_flags(cpu, value);
 
-            Operand::Address(addr) |
-            Operand::AddressAndEffectiveAddress(_, addr) =>{
-                let original_value = cpu.memory.read_byte(*addr)?;
-                let result = original_value >> 1;
-                cpu.memory.write_byte(*addr, result)?;
-                (original_value, result)
-            },
+        self.update_flags_zero_negative(cpu, result);
+        self.overwrite(cpu, operand, result)?;
 
-            _ => {
-                return Err(CpuError::InvalidOperand(format!("{}", operand)));
-            }
-        };
-
-        cpu.registers.set_status(StatusFlag::Carry, original_value & 0x01 != 0);
-        cpu.registers.set_status(StatusFlag::Zero, result == 0);
-        cpu.registers.set_status(StatusFlag::Negative, false);
         Ok(())
     }
 
@@ -607,7 +601,8 @@ impl Instruction {
                 (original_value, result)
             },
 
-            Operand::Address(addr) => {
+            Operand::Address(addr) |
+            Operand::AddressAndEffectiveAddress(_, addr) =>  {
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 1 } else { 0 };
                 let result = (original_value << 1) | carry_in;
@@ -634,13 +629,16 @@ impl Instruction {
                 cpu.registers.a = result;
                 (original_value, result)
             },
-            Operand::Address(addr) => {
+
+            Operand::Address(addr) |
+            Operand::AddressAndEffectiveAddress(_, addr) =>  {
                 let original_value = cpu.memory.read_byte(*addr)?;
                 let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
                 let result = (original_value >> 1) | carry_in;
                 cpu.memory.write_byte(*addr, result)?;
                 (original_value, result)
             },
+
             _ => {
                 return Err(CpuError::InvalidOperand(format!("{}", operand)));
             }
