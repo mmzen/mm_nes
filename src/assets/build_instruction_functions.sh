@@ -4,8 +4,9 @@ OUTPUT_FILE="instruction_functions.txt"
 
 echo > $OUTPUT_FILE
 
-cat ../instructions_macro.rs |
-    awk -F, '{ print $NF }' |
+cat ../instructions_macro_all.rs |
+    grep Illegal |
+    awk -F, '{ print $(NF - 1) }' |
     sed '/{{/d' |
     sed '/}}/d' |
     sed 's/);$//' |
@@ -16,8 +17,8 @@ cat ../instructions_macro.rs |
     func_name=`echo $line`
 
     echo "=> $func_name" 1>&2
-    echo -e "\tfn $func_name(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-\t\tErr(CpuError::UnImplemented(format!(\"{:?}\", self.opcode)))
+    echo -e "\tfn $func_name(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+\t\tErr(CpuError::Unimplemented(format!(\"{:?}\", self.opcode)))
 \t}
 " >>  $OUTPUT_FILE
 

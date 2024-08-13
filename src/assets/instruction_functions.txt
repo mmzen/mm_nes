@@ -1,225 +1,101 @@
 
-	fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn alr_and_oper_plus_lsr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn and_and_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn anc_and_oper_plus_set_c_as_asl(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn asl_shift_left_one_bit(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn anc_and_oper_plus_set_c_as_rol(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bcc_branch_on_carry_clear(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn ane_or_x_plus_and_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bcs_branch_on_carry_set(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn arr_and_oper_plus_ror(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn beq_branch_on_result_zero(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn dcp__dec_plus_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bit_test_bits_in_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn dcp_dec_oper_plus_cmp_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bmi_branch_on_result_minus(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn isb_inc_plus_sbc(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bne_branch_on_result_not_zero(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn isc_inc_oper_plus_sbc_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bpl_branch_on_result_plus(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn jam_freeze_the_cpu(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn brk_force_break(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn las_lda_tsx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bvc_branch_on_overflow_clear(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn lax_lda_oper_plus_ldx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn bvs_branch_on_overflow_set(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn lxa_store_and_oper_in_a_and_x(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn clc_clear_carry_flag(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn nop_no_operation(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn cld_clear_decimal_mode(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn rla_rol_oper_plus_and_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn cli_clear_interrupt_disable_bit(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn rra_ror_oper_plus_adc_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn clv_clear_overflow_flag(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn sax_axs__aax(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn cmp_compare_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn sbx_cmp_and_dex_at_once__sets_flags_like_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn cpx_compare_memory_and_index_x(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn sha_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn cpy_compare_memory_and_index_y(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn shx_stores_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn dec_decrement_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn shy_stores_y_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn dex_decrement_index_x_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn slo_asl_oper_plus_ora_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn dey_decrement_index_y_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn sre_lsr_oper_plus_eor_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn eor_exclusive_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn tax_puts_a_and_x_in_sp_and_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 
-	fn inc_increment_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn inx_increment_index_x_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn iny_increment_index_y_by_one(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn jmp_jump_to_new_location(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn jsr_jump_to_new_location_saving_return_address(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn lda_load_accumulator_with_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn ldx_load_index_x_with_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn ldy_load_index_y_with_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn lsr_shift_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn nop_no_operation(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn ora_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn pha_push_accumulator_on_stack(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn php_push_processor_status_on_stack(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn pla_pull_accumulator_from_stack(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn plp_pull_processor_status_from_stack(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn rol_rotate_one_bit_left(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn ror_rotate_one_bit_left(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn rti_return_from_interrupt(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn rts_return_from_subroutine(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn sec_set_carry_flag(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn sed_set_decimal_flag(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn sei_set_interrupt_disable_status(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn sta_store_accumulator_in_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn stx_store_index_x_in_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn sty_store_index_y_in_memory(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn tax_transfer_accumulator_to_index_x(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn tay_transfer_accumulator_to_index_y(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn tsx_transfer_stack_pointer_to_index_x(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn txa_transfer_index_x_to_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn txs_transfer_index_x_to_stack_register(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
-	}
-
-	fn tya_transfer_index_y_to_accumulator(&self, cpu: &mut Cpu6502, operand: &Option<Value>) -> Result<(), CpuError> {
-		Err(CpuError::UnImplemented(format!("{:?}", self.opcode)))
+	fn usbc_sbc_oper_plus_nop(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+		Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
 	}
 

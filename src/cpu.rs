@@ -18,6 +18,7 @@ pub trait CPU {
 pub enum CpuError {
     MemoryError(MemoryError),
     IllegalInstruction(u8),
+    Unimplemented(String),
     InvalidOperand(String),
     StackOverflow(u16),
     StackUnderflow(u16),
@@ -44,9 +45,10 @@ impl Display for CpuError {
             CpuError::MemoryError(error) => write!(f, "memory error: {}", error),
             CpuError::IllegalInstruction(op) => write!(f, "illegal instruction 0x{:02X}", op),
             CpuError::StackOverflow(addr) => { write!(f, "stack overflow 0x{:04X}", addr) },
-            CpuError::StackUnderflow(addr) => { write!(f, "stack underflow 0x{:04X}", addr) }
-            CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) }
-            CpuError::ConfigurationError(s) => { write!(f, "configuration error: {}", s) }
+            CpuError::StackUnderflow(addr) => { write!(f, "stack underflow 0x{:04X}", addr) },
+            CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) },
+            CpuError::ConfigurationError(s) => { write!(f, "configuration error: {}", s) },
+            CpuError::Unimplemented(s) => { write!(f, "unimplemented: {}", s) }
         }
     }
 }

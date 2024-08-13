@@ -21,27 +21,30 @@ lazy_static! {
         let mut map = HashMap::<u8, Instruction>::new();
 
         macro_rules! add_instruction {
-            ($map:ident, $opcode:expr, $op:ident, $addr_mode:ident, $bytes:expr, $cycles:expr, $exec:ident) => {
+            ($map:ident, $opcode:expr, $op:ident, $addr_mode:ident, $bytes:expr, $cycles:expr, $exec:ident, $category:ident) => {
                 $map.insert($opcode, Instruction {
                     opcode: OpCode::$op,
                     addressing_mode: AddressingMode::$addr_mode,
                     bytes: $bytes,
                     cycles: $cycles,
                     execute: Instruction::$exec,
+                    category: InstructionCategory::$category
                 })
             };
         }
 
-        include!("instructions_macro_std.rs");
+        include!("instructions_macro_all.rs");
         map
     };
 }
 
 #[derive(Debug)]
 enum OpCode {
-    ORA, AND, EOR, ADC, STA, LDA, CMP, SBC, ASL, ROL, LSR, ROR, STX, LDX, DEC, INC, JMP, STY, LDY,
-    CPY, CPX, BIT, BPL, BMI, BVC, BVS, BCC, BCS, BNE, BEQ, BRK, JSR, RTI, RTS, PHP, PLP, PHA, PLA,
-    DEY, TAY, INY, INX, CLC, SEC, CLI, SEI, TYA, CLV, CLD, SED, TXA, TXS, TAX, TSX, DEX, NOP
+    ADC, ALR, ANC, AND, ANE, ARR, ASL, BCC, BCS, BEQ, BIT, BMI, BNE, BPL, BRK, BVC, BVS, CLC, CLD,
+    CLI, CLV, CMP, CPX, CPY, DCP, DEC, DEX, DEY, EOR, INC, INX, INY, ISB, ISC, JAM, JMP, JSR,
+    LAS, LAX, LDA, LDX, LDY, LSR, LXA, NOP, ORA, PHA, PHP, PLA, PLP, RLA, ROL, ROR, RRA, RTI, RTS,
+    SAX, SBC, SBX, SEC, SED, SEI, SHA, SHX, SHY, SLO, SRE, STA, STX, STY, TAX, TAY, TSX, TXA, TXS,
+    TYA, USBC
 }
 
 #[derive(Debug)]
@@ -67,7 +70,6 @@ impl Display for Operand {
     }
 }
 
-
 #[derive(Debug)]
 enum AddressingMode {
     Implicit,               // implicit addressing mode
@@ -85,11 +87,18 @@ enum AddressingMode {
     IndirectIndexedY,       // val = PEEK(PEEK(arg) + PEEK((arg + 1) % 256) * 256 + Y)
 }
 
+#[derive(Debug, PartialEq)]
+enum InstructionCategory {
+    Standard,
+    Illegal
+}
+
 struct Instruction {
     opcode: OpCode,
     addressing_mode: AddressingMode,
     bytes: usize,
     cycles: usize,
+    category: InstructionCategory,
     execute: fn(&Instruction, &mut Cpu6502, &Operand) -> Result<(), CpuError>,
 }
 
@@ -770,6 +779,104 @@ impl Instruction {
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
         Ok(())
     }
+
+    fn alr_and_oper_plus_lsr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn anc_and_oper_plus_set_c_as_asl(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn anc_and_oper_plus_set_c_as_rol(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn ane_or_x_plus_and_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn arr_and_oper_plus_ror(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn dcp__dec_plus_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn dcp_dec_oper_plus_cmp_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn isb_inc_plus_sbc(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn isc_inc_oper_plus_sbc_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn jam_freeze_the_cpu(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn las_lda_tsx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn lax_lda_oper_plus_ldx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn lxa_store_and_oper_in_a_and_x(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn rla_rol_oper_plus_and_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn rra_ror_oper_plus_adc_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn sax_axs__aax(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn sbx_cmp_and_dex_at_once__sets_flags_like_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn sha_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn shx_stores_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn shy_stores_y_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn slo_asl_oper_plus_ora_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn sre_lsr_oper_plus_eor_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn tax_puts_a_and_x_in_sp_and_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+    fn usbc_sbc_oper_plus_nop(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    }
+
+
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1126,9 +1233,10 @@ impl Tracer {
             b.push_str(&o);
         }
 
-        let c0 = format!("{:?}", &instruction.opcode);
+        let c0 = if instruction.category == InstructionCategory::Illegal { "*" } else { " " };
+        let c1 = format!("{:?}", &instruction.opcode);
 
-        let c1 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
+        let c2 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
             (AddressingMode::Implicit, _, _) => { "".to_string() },
 
             (AddressingMode::Accumulator, _, _) =>
@@ -1178,15 +1286,15 @@ impl Tracer {
                 ))
             }
         };
-        let c = format!("{} {}", c0, c1);
+        let c = format!("{}{} {}", c0, c1, c2);
 
         let d = format!("A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
                         cpu.registers.a, cpu.registers.x, cpu.registers.y, cpu.registers.p, cpu.registers.sp);
 
         let mut output = self.trace.borrow_mut();
 
-        write!(output, "{:<6}{:<10}", a, b)?;
-        write!(output, "{:<padding$}", c, padding = 32)?;
+        write!(output, "{:<6}{:<9}", a, b)?;
+        write!(output, "{:<padding$}", c, padding = 33)?;
         write!(output, "{}", d)?;
         writeln!(output)?;
 
