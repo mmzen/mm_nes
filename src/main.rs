@@ -39,11 +39,19 @@ struct Args {
     pc: u16,
 
     #[arg(
-        short = 'f',
+        short = 't',
         long = "trace-file",
         help = "output for CPU tracing"
     )]
     trace_file: Option<String>,
+
+    #[arg(
+        short = 'f',
+        long = "rom-file",
+        help = "rom file to load",
+        required = true,
+    )]
+    rom_file: String
 }
 
 
@@ -78,7 +86,7 @@ fn main() -> Result<(), CpuError> {
     populate_memory(&mut memory)?;
 
     loader = Box::new(INesLoader::new_with_memory(&mut memory));
-    loader.load_rom("src/assets/nestest.nes").expect("fuck you");
+    loader.load_rom(&args.rom_file).expect("fuck you");
 
     let file = if let Some(trace_file) = args.trace_file {
         debug!("output for traces: {}", trace_file);

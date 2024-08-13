@@ -104,24 +104,6 @@ struct Instruction {
 
 impl Instruction {
 
-    fn detect_overflow_add(lhs: u8, rhs: u8, sum: u8) -> bool {
-        ((lhs & 0x80 == 0) && (rhs & 0x80 == 0) && (sum & 0x80 != 0)) ||
-            ((lhs & 0x80 != 0) && (rhs & 0x80 != 0) && (sum & 0x80 == 0))
-    }
-
-    fn detect_overflow_sub(lhs: u8, rhs: u8, sum: u8) -> bool {
-        ((lhs & 0x80 == 0) && (rhs & 0x80 != 0) && (sum & 0x80 != 0)) ||
-            ((lhs & 0x80 != 0) && (rhs & 0x80 == 0) && (sum & 0x80 == 0))
-    }
-
-    fn detect_carry_add(lhs: u8, rhs: u8, carry_in: bool) -> bool {
-        lhs as u16 + rhs as u16 + carry_in as u16 > 0xFF
-    }
-
-    fn detect_carry_sub(value0: u8, value1: u8, carry_in: bool) -> bool {
-        value0 >= (value1.wrapping_add(!carry_in as u8))
-    }
-
     fn update_flags_zero_negative(&self, cpu: &mut Cpu6502, value: u8) {
         cpu.registers.set_status(StatusFlag::Zero, value == 0);
         cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
@@ -804,44 +786,58 @@ impl Instruction {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn dcp_dec_oper_plus_cmp_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn dcp_dec_oper_plus_cmp_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.dec_decrement_memory_by_one(cpu, operand)?;
+        self.cmp_compare_memory_with_accumulator(cpu, operand)?;
+        Ok(())
     }
 
     fn isb_inc_plus_sbc(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn isc_inc_oper_plus_sbc_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn isc_inc_oper_plus_sbc_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.inc_increment_memory_by_one(cpu, operand)?;
+        self.sbc_subtract_memory_from_accumulator_with_borrow(cpu, operand)?;
+        Ok(())
     }
 
-    fn jam_freeze_the_cpu(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn jam_freeze_the_cpu(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
+        Err(CpuError::Halted(cpu.registers.pc))
     }
 
     fn las_lda_tsx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn lax_lda_oper_plus_ldx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn lax_lda_oper_plus_ldx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.lda_load_accumulator_with_memory(cpu, operand)?;
+        self.ldx_load_index_x_with_memory(cpu, operand)?;
+        Ok(())
     }
 
     fn lxa_store_and_oper_in_a_and_x(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn rla_rol_oper_plus_and_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn rla_rol_oper_plus_and_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.rol_rotate_one_bit_left(cpu, operand)?;
+        self.and_and_memory_with_accumulator(cpu, operand)?;
+        Ok(())
     }
 
-    fn rra_ror_oper_plus_adc_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn rra_ror_oper_plus_adc_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.ror_rotate_one_bit_left(cpu, operand)?;
+        self.adc_add_memory_to_accumulator_with_carry(cpu, operand)?;
+        Ok(())
     }
 
-    fn sax_axs__aax(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn sax_axs__aax(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        let addr = self.get_operand_word_value(cpu, operand)?;
+        let result = cpu.registers.a & cpu.registers.x;
+
+        cpu.memory.write_byte(addr, result)?;
+        Ok(())
     }
 
     fn sbx_cmp_and_dex_at_once__sets_flags_like_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
@@ -860,23 +856,27 @@ impl Instruction {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn slo_asl_oper_plus_ora_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn slo_asl_oper_plus_ora_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.asl_shift_left_one_bit(cpu, operand)?;
+        self.ora_or_memory_with_accumulator(cpu, operand)?;
+        Ok(())
     }
 
-    fn sre_lsr_oper_plus_eor_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn sre_lsr_oper_plus_eor_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.lsr_shift_one_bit_right(cpu, operand)?;
+        self.eor_exclusive_or_memory_with_accumulator(cpu, operand)?;
+        Ok(())
     }
 
     fn tax_puts_a_and_x_in_sp_and_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn usbc_sbc_oper_plus_nop(&self, _: &mut Cpu6502, _: &Operand) -> Result<(), CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn usbc_sbc_oper_plus_nop(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+        self.sbc_subtract_memory_from_accumulator_with_borrow(cpu, operand)?;
+        self.nop_no_operation(cpu, operand)?;
+        Ok(())
     }
-
-
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1189,8 +1189,9 @@ impl Cpu6502 {
 
             AddressingMode::Relative => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let offset = self.memory.read_byte(pc)? as i16;
-                let addr = self.registers.safe_pc_add(offset+2)?;
+                let offset = self.memory.read_byte(pc)? as i8;
+                let addr = self.registers.safe_pc_add(2)?;
+                let addr= addr.wrapping_add_signed(offset as i16);
 
                 Operand::Address(addr)
             },

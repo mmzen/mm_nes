@@ -22,7 +22,8 @@ pub enum CpuError {
     InvalidOperand(String),
     StackOverflow(u16),
     StackUnderflow(u16),
-    ConfigurationError(String)
+    ConfigurationError(String),
+    Halted(u16),
 }
 
 impl From<MemoryError> for CpuError {
@@ -48,7 +49,8 @@ impl Display for CpuError {
             CpuError::StackUnderflow(addr) => { write!(f, "stack underflow 0x{:04X}", addr) },
             CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) },
             CpuError::ConfigurationError(s) => { write!(f, "configuration error: {}", s) },
-            CpuError::Unimplemented(s) => { write!(f, "unimplemented: {}", s) }
+            CpuError::Unimplemented(s) => { write!(f, "unimplemented: {}", s) },
+            CpuError::Halted(addr) => { write!(f, "cpu halted 0x{:04X}", addr) }
         }
     }
 }
