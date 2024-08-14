@@ -9,14 +9,19 @@ use crate::cpu_6502::Cpu6502;
 use crate::ines_loader::INesLoader;
 use crate::loader::Loader;
 use crate::memory::{Memory, MemoryError};
-use crate::memory_64k::Memory64k;
+use crate::memory_bank::MemoryBank;
 
 mod cpu;
 mod cpu_6502;
 mod memory;
-mod memory_64k;
+mod memory_bank;
 mod loader;
 mod ines_loader;
+mod nes_console;
+mod nes_bus;
+mod ppu;
+#[cfg(test)]
+mod tests;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -79,7 +84,7 @@ fn main() -> Result<(), CpuError> {
     info!("emulator bootstrapping...");
 
     let mut cpu;
-    let mut memory : Box<dyn Memory> = Box::new(Memory64k::default());
+    let mut memory : Box<dyn Memory> = Box::new(MemoryBank::default());
     let status;
     let mut loader;
 

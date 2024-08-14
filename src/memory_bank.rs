@@ -2,29 +2,29 @@ use log::debug;
 
 use crate::memory::{Memory, MemoryError};
 
-const MEMORY_SIZE: usize = 64 * 1024;
-const MEMORY_BASE_ADDRESS: usize = 0x0000;
-const MEMORY_END_ADDRESS: usize = MEMORY_BASE_ADDRESS + MEMORY_SIZE - 1;
+pub const MEMORY_DEFAULT_SIZE: usize = 64 * 1024;
+pub const MEMORY_BASE_ADDRESS: usize = 0x0000;
+
 
 #[derive(Debug)]
-pub struct Memory64k {
-    memory: [u8; MEMORY_SIZE]
+pub struct MemoryBank {
+    memory: Vec<u8>
 }
 
-impl Memory for Memory64k {
+impl Memory for MemoryBank {
     #[allow(dead_code)]
     fn initialize(&mut self) -> Result<usize, MemoryError> {
-        debug!("initializing memory: {} kB to 0x{:04X}, 0x{:04X}", self.memory.len() / 1024, MEMORY_BASE_ADDRESS, MEMORY_END_ADDRESS);
+        debug!("initializing memory: {} kB to 0x{:04X}, 0x{:04X}", self.memory.len() / 1024, MEMORY_BASE_ADDRESS, MEMORY_BASE_ADDRESS + self.memory.len() - 1);
 
-        self.memory.fill(0);
-        Ok(MEMORY_SIZE)
+        self.memory.fill(0xFF);
+        Ok(self.size())
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         //debug!("reading byte at 0x{:04X}", addr);
 
         if !self.is_addr_in_boundary(addr) {
-            Err(MemoryError::OutOfBounds(addr))
+            Err(MemoryError::OutOfRange(addr))
         } else {
             let value = self.memory[addr as usize];
             debug!("read byte at 0x{:04X}: {:02X}", addr, value);
@@ -32,45 +32,34 @@ impl Memory for Memory64k {
         }
     }
 
-    fn write_byte(&mut self, addr: u16, value: u8) -> Result<u8, MemoryError> {
+    fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
         debug!("writing byte ({:02X}) at 0x{:04X}", value, addr);
 
         if !self.is_addr_in_boundary(addr) {
-            Err(MemoryError::OutOfBounds(addr))
+            Err(MemoryError::OutOfRange(addr))
         } else {
             self.memory[addr as usize] = value;
-            Ok(value)
+            Ok(())
         }
-    }
-
-    fn read_word_with_page_wrap(&self, addr: u16) -> Result<u16, MemoryError> {
-        let lo = self.read_byte(addr)?;
-
-        let hi = if (addr & 0xFF) == 0xFF {
-            self.read_byte(addr & 0xFF00)?
-        } else {
-            self.read_byte(addr.wrapping_add(1))?
-        };
-
-        Ok((hi as u16) << 8 | lo as u16)
     }
 
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
         let lo = self.read_byte(addr)?;
-        let next = addr.checked_add(1).ok_or(MemoryError::OutOfBounds(addr))?;
+        let next = addr.wrapping_add(1) % self.size() as u16;
         let hi = self.read_byte(next)?;
 
         Ok((hi as u16) << 8 | lo as u16)
     }
 
-    fn write_word(&mut self, addr: u16, value: u16) -> Result<u16, MemoryError> {
+    fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError> {
         let lower_byte = value as u8;
-        let upper_byte = (value & 0xFF00 >> 8) as u8;
-        let next = addr.checked_add(1).ok_or(MemoryError::OutOfBounds(addr))?;
+        let upper_byte = ((value & 0xFF00) >> 8) as u8;
+        let next = addr.wrapping_add(1) % self.size() as u16;
 
         self.write_byte(addr, lower_byte)?;
         self.write_byte(next, upper_byte)?;
-        Ok(value)
+
+        Ok(())
     }
 
     fn dump(&self) {
@@ -91,7 +80,7 @@ impl Memory for Memory64k {
     }
 
     fn size(&self) -> usize {
-        MEMORY_SIZE
+        self.memory.len()
     }
 
     fn as_slice(&mut self) -> &mut [u8] {
@@ -99,13 +88,18 @@ impl Memory for Memory64k {
     }
 }
 
-impl Default for Memory64k {
+impl Default for MemoryBank {
     fn default() -> Self {
-        Memory64k {
-            memory: [0xFF; MEMORY_SIZE],
+        MemoryBank {
+            memory: vec![0xFF; MEMORY_DEFAULT_SIZE],
         }
     }
 }
 
-impl Memory64k {
+impl MemoryBank {
+    pub(crate) fn new_with_size(size: u16) -> Self {
+        MemoryBank {
+            memory: vec![0xFF; size as usize],
+        }
+    }
 }

@@ -113,11 +113,11 @@ add_instruction!(map, 0x26, ROL, ZeroPage, 2, 5, rol_rotate_one_bit_left, Standa
 add_instruction!(map, 0x36, ROL, ZeroPageIndexedX, 2, 6, rol_rotate_one_bit_left, Standard);
 add_instruction!(map, 0x2E, ROL, Absolute, 3, 6, rol_rotate_one_bit_left, Standard);
 add_instruction!(map, 0x3E, ROL, AbsoluteIndexedX, 3, 7, rol_rotate_one_bit_left, Standard);
-add_instruction!(map, 0x6A, ROR, Accumulator, 1, 2, ror_rotate_one_bit_left, Standard);
-add_instruction!(map, 0x66, ROR, ZeroPage, 2, 5, ror_rotate_one_bit_left, Standard);
-add_instruction!(map, 0x76, ROR, ZeroPageIndexedX, 2, 6, ror_rotate_one_bit_left, Standard);
-add_instruction!(map, 0x6E, ROR, Absolute, 3, 6, ror_rotate_one_bit_left, Standard);
-add_instruction!(map, 0x7E, ROR, AbsoluteIndexedX, 3, 7, ror_rotate_one_bit_left, Standard);
+add_instruction!(map, 0x6A, ROR, Accumulator, 1, 2, ror_rotate_one_bit_right, Standard);
+add_instruction!(map, 0x66, ROR, ZeroPage, 2, 5, ror_rotate_one_bit_right, Standard);
+add_instruction!(map, 0x76, ROR, ZeroPageIndexedX, 2, 6, ror_rotate_one_bit_right, Standard);
+add_instruction!(map, 0x6E, ROR, Absolute, 3, 6, ror_rotate_one_bit_right, Standard);
+add_instruction!(map, 0x7E, ROR, AbsoluteIndexedX, 3, 7, ror_rotate_one_bit_right, Standard);
 add_instruction!(map, 0x40, RTI, Implicit, 1, 6, rti_return_from_interrupt, Standard);
 add_instruction!(map, 0x60, RTS, Implicit, 1, 6, rts_return_from_subroutine, Standard);
 add_instruction!(map, 0xE9, SBC, Immediate, 2, 2, sbc_subtract_memory_from_accumulator_with_borrow, Standard);

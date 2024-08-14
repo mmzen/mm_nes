@@ -140,7 +140,7 @@ impl Registers {
     fn safe_pc_add(&self, n: i16) -> Result<u16, CpuError> {
         let pc = self.pc;
         let pc = pc.checked_add_signed(n)
-            .ok_or(MemoryError::OutOfBounds(self.pc))?;
+            .ok_or(MemoryError::OutOfRange(self.pc))?;
 
         Ok(pc)
     }
@@ -228,7 +228,7 @@ impl CPU for Cpu6502 {
             }
 
             self.instructions_executed += 1;
-            //sleep(Duration::from_millis(1));
+            sleep(Duration::from_millis(1));
         }
     }
 
@@ -293,6 +293,18 @@ impl Cpu6502 {
         debug!("sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
 
         Ok(value)
+    }
+
+    fn read_word_with_page_wrap(&self, addr: u16) -> Result<u16, MemoryError> {
+        let lo = self.memory.read_byte(addr)?;
+
+        let hi = if (addr & 0xFF) == 0xFF {
+            self.memory.read_byte(addr & 0xFF00)?
+        } else {
+            self.memory.read_byte(addr.wrapping_add(1))?
+        };
+
+        Ok((hi as u16) << 8 | lo as u16)
     }
 
     fn update_flags_zero_negative(&mut self, value: u8) {
@@ -461,7 +473,7 @@ impl Cpu6502 {
             AddressingMode::Indirect => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_word(pc)?;
-                let effective_addr = self.memory.read_word_with_page_wrap(addr)?;
+                let effective_addr = self.read_word_with_page_wrap(addr)?;
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr)
             },
@@ -470,7 +482,7 @@ impl Cpu6502 {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
                 let indirect_addr = addr.wrapping_add(self.registers.x);
-                let effective_addr = self.memory.read_word_with_page_wrap(indirect_addr as u16)?;
+                let effective_addr = self.read_word_with_page_wrap(indirect_addr as u16)?;
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
             },
@@ -478,7 +490,7 @@ impl Cpu6502 {
             AddressingMode::IndirectIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.memory.read_byte(pc)?;
-                let indirect_addr = self.memory.read_word_with_page_wrap(addr as u16)?;
+                let indirect_addr = self.read_word_with_page_wrap(addr as u16)?;
                 let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
@@ -1031,7 +1043,7 @@ impl Instruction {
         Ok(())
     }
 
-    fn ror_rotate_one_bit_left(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
+    fn ror_rotate_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
         let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
         let result = (value >> 1) | carry_in;
@@ -1240,7 +1252,7 @@ impl Instruction {
     }
 
     fn rra_ror_oper_plus_adc_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
-        self.ror_rotate_one_bit_left(cpu, operand)?;
+        self.ror_rotate_one_bit_right(cpu, operand)?;
         self.adc_add_memory_to_accumulator_with_carry(cpu, operand)?;
         Ok(())
     }
