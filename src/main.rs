@@ -5,7 +5,9 @@ use clap::Parser;
 use clap_num::maybe_hex;
 use crate::bus::BusType;
 use crate::bus_device::BusDeviceType;
+use crate::cartridge::CartridgeType;
 use crate::cpu::{CpuType};
+use crate::loader::LoaderType;
 use crate::memory::MemoryType;
 use crate::nes_console::{NESConsoleBuilder, NESConsoleError};
 
@@ -25,6 +27,7 @@ mod apu;
 mod bus_device;
 mod dummy_device;
 mod cartridge;
+mod nrom128_cartridge;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -90,17 +93,17 @@ fn main() -> Result<(), NESConsoleError> {
 
     info!("emulator bootstrapping...");
 
-    let console = builder
+    let mut console = builder
         .with_cpu_options(CpuType::NES6502, file)
         .with_bus_type(BusType::NESBus)
         .with_bus_device_type(BusDeviceType::WRAM(MemoryType::NESMemory))
-        .build();
-
-    if let Err(error) = console {
-        return Err(error);
-    }
+        .with_bus_device_type(BusDeviceType::CARTRIDGE(CartridgeType::NROM128))
+        .with_loader_type(LoaderType::INESV1)
+        .with_rom_file(&args.rom_file)
+        .build()?;
 
     info!("emulator starting...");
+    console.power_on()?;
 
     //let mut cpu;
     //let mut memory : Box<dyn Memory> = Box::new(MemoryBank::default());

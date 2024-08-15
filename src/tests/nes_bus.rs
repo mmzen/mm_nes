@@ -7,8 +7,9 @@ use crate::bus_device::MockBusDeviceStub;
 use crate::nes_bus::{BUS_ADDRESSABLE_SIZE, NESBus};
 use crate::tests::init;
 
-const DEFAULT_MEMORY_SIZE: usize = 256;
-const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x0000, 0x01FF);
+const DEFAULT_MEMORY_SIZE: usize = 2048;
+const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x0000, 0x1FFF);
+const DEFAULT_DEVICE_NAME: &str = "test device";
 
 enum RequestType {
     None,
@@ -24,43 +25,44 @@ enum RequestData {
     Word(u16),
 }
 
-fn create_bus_device_with_expectations(addr: u16, request: RequestType, length: RequestData) -> MockBusDeviceStub {
+fn create_bus_device_with_expectations(memory_size: usize, memory_range: (u16, u16), expected_addr: u16, request: RequestType, length: RequestData) -> MockBusDeviceStub {
     let mut device = MockBusDeviceStub::new();
 
-    device.expect_size().returning(|| DEFAULT_MEMORY_SIZE);
-    device.expect_get_address_range().times(1).returning(|| DEFAULT_MEMORY_RANGE);
+    device.expect_get_name().returning(|| DEFAULT_DEVICE_NAME.to_string());
+    device.expect_size().returning(move || memory_size);
+    device.expect_get_address_range().returning(move || memory_range);
 
     match (request, length) {
         (RequestType::Read, RequestData::Byte(value)) => {
             device.expect_is_addr_in_boundary().returning(|_| true);
-            device.expect_read_byte().times(1).with(eq(addr)).returning(move |_| Ok(value));
+            device.expect_read_byte().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
         },
 
         (RequestType::Write, RequestData::Byte(value)) => {
             device.expect_is_addr_in_boundary().returning(|_| true);
-            device.expect_write_byte().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
+            device.expect_write_byte().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::Read, RequestData::Word(value)) => {
             device.expect_is_addr_in_boundary().returning(|_| true);
-            device.expect_read_word().times(1).with(eq(addr)).returning(move |_| Ok(value));
+            device.expect_read_word().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
         },
 
         (RequestType::Write, RequestData::Word(value)) => {
             device.expect_is_addr_in_boundary().returning(|_| true);
-            device.expect_write_word().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
+            device.expect_write_word().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Byte(value)) => {
             device.expect_is_addr_in_boundary().returning(|_| true);
-            device.expect_read_byte().times(1).with(eq(addr)).returning(move |_| Ok(value));
-            device.expect_write_byte().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
+            device.expect_read_byte().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
+            device.expect_write_byte().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Word(value)) => {
             device.expect_is_addr_in_boundary().returning(|_| true);
-            device.expect_read_word().times(1).with(eq(addr)).returning(move |_| Ok(value));
-            device.expect_write_word().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
+            device.expect_read_word().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
+            device.expect_write_word().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::Unmapped, _) => {
@@ -80,7 +82,7 @@ fn create_nes_bus() -> NESBus {
 }
 
 fn create_nes_bus_with_bus_device(expected_addr: u16, request: RequestType, length: RequestData) -> NESBus {
-    let device = create_bus_device_with_expectations(expected_addr, request, length);
+    let device = create_bus_device_with_expectations(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE, expected_addr, request, length);
     let mut nes_bus = create_nes_bus();
     let err = nes_bus.add_device(Rc::new(RefCell::new(device)));
 
@@ -189,9 +191,7 @@ fn read_write_word_request_for_valid_address() {
 fn returns_size() {
     init();
 
-    let expected_addr = 0x0000;
-
-    let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::None, RequestData::None);
+    let mut nes_bus = create_nes_bus_with_bus_device(0, RequestType::None, RequestData::None);
 
     let result = nes_bus.size();
 
@@ -218,36 +218,40 @@ fn returns_bus_error_on_unmapped_access() {
 fn mirrors_content_when_address_space_si_larger_than_size() {
     init();
 
-    let expected_addr = 0x0000;
-    let virtual_addr = 0x0100;
+    let addresses = [(0x0000, 0x0000), (0x0800, 0x0000), (0x07FF, 0x07FF), (0x1000, 0x0000), (0x1800, 0x0000), (0x1FFF, 0x07FF)];
     let expected_value = 0xAB;
 
-    let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::ReadWrite, RequestData::Byte(expected_value));
+    for (virtual_addr, expected_addr) in addresses {
+        let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::ReadWrite, RequestData::Byte(expected_value));
 
-    let result0 = nes_bus.write_byte(virtual_addr, expected_value);
-    let result1 = nes_bus.read_byte(virtual_addr);
+        let result0 = nes_bus.write_byte(virtual_addr, expected_value);
+        let result1 = nes_bus.read_byte(virtual_addr);
 
-    assert_eq!(result0, Ok(()));
-    assert_eq!(result1, Ok(expected_value));
+        assert_eq!(result0, Ok(()));
+        assert_eq!(result1, Ok(expected_value));
+    }
 }
 
-/***
 #[test]
-fn should_translate_wram_address() {
+fn read_is_routed_to_right_device() {
     init();
 
-    // Arrange
-    let addresses = [(0x0800, 0x0000), (0x07FF, 0x07FF), (0x1000, 0x0000), (0x1800, 0x0000), (0x1FFF, 0x07FF)];
     let expected_value = 0xAB;
+    let expected_addr = 0x0404;
 
-    for addr in addresses {
-        let wram = create_memory_with_expectations(addr.1, expected_value);
-        let mut nes_bus = create_nes_bus(addr.0, expected_value);
+    let device0 = create_bus_device_with_expectations(
+        4096, (0x1000, 0x2FFF), 0, RequestType::None, RequestData::None);
+    let device1 = create_bus_device_with_expectations(
+        2048, (0x0000, 0x07FF), expected_addr, RequestType::Read, RequestData::Byte(expected_value));
+    let device0 = Rc::new(RefCell::new(device0));
+    let device1 = Rc::new(RefCell::new(device1));
 
-        // Act
-        let result = nes_bus.read_byte(addr.0);
+    let mut nes_bus = create_nes_bus();
 
-        // Assert
-        assert_eq!(result, Ok(expected_value));
-    }
-}***/
+    nes_bus.add_device(device0.clone()).expect("failed to add bus device");
+    nes_bus.add_device(device1.clone()).expect("failed to add bus device");
+
+    let result = nes_bus.read_byte(expected_addr);
+
+    assert_eq!(result, Ok(expected_value));
+}

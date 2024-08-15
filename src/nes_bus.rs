@@ -66,11 +66,15 @@ impl Bus for NESBus {
         let address_space = device.borrow().get_address_range();
         let address_space_size = (address_space.1 - address_space.0 + 1) as usize;
 
+        debug!("adding device {} - size: {} KB, address range: 0x{:04X} - 0x{:04X}",
+            device.borrow().get_name(), size, address_space.0, address_space.1);
+
         if address_space_size % size != 0 {
-            Err(BusError::InvalidDeviceMemorySize(size, address_space_size))
+            Err(BusError::InvalidDeviceMemorySize(address_space_size, size))
         } else {
             self.devices.push(device);
             self.devices.sort();
+            debug!("{} devices attached to the bus", self.devices.len());
 
             Ok(())
         }

@@ -4,6 +4,7 @@ use std::fmt::{Display, Formatter};
 #[cfg(test)]
 use mockall::mock;
 use crate::apu::APUType;
+use crate::cartridge::CartridgeType;
 use crate::memory::{Memory, MemoryType};
 #[cfg(test)]
 use crate::memory::{MemoryError};
@@ -13,7 +14,8 @@ use crate::ppu::PPUType;
 pub enum BusDeviceType {
     WRAM(MemoryType),
     PPU(PPUType),
-    APU(APUType)
+    APU(APUType),
+    CARTRIDGE(CartridgeType),
 }
 
 impl Display for BusDeviceType {
@@ -21,7 +23,8 @@ impl Display for BusDeviceType {
         match self {
             BusDeviceType::WRAM(memory) => write!(f, "device type: WRAM - {}", memory),
             BusDeviceType::PPU(ppu) => write!(f, "device type: PPU - {}", ppu),
-            BusDeviceType::APU(apu) => write!(f, "device type: APU - {}", apu)
+            BusDeviceType::APU(apu) => write!(f, "device type: APU - {}", apu),
+            BusDeviceType::CARTRIDGE(cartridge) => write!(f, "device type: APU - {}", cartridge)
         }
     }
 }
