@@ -11,7 +11,7 @@ use lazy_static::lazy_static;
 use log::{debug, error, info};
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError};
-use crate::memory::{Memory, MemoryError};
+use crate::memory::{MemoryError};
 
 //const CLOCK_HZ: usize = 1_789_773;
 const STACK_BASE_ADDRESS: u16 = 0x0100;

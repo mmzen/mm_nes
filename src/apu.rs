@@ -1,6 +1,5 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use crate::ppu::PPUType;
 
 #[derive(Default, Debug, Clone)]
 pub enum APUType {

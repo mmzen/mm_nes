@@ -5,12 +5,8 @@ use clap::Parser;
 use clap_num::maybe_hex;
 use crate::bus::BusType;
 use crate::bus_device::BusDeviceType;
-use crate::cpu::{CPU, CpuError, CpuType};
-use crate::cpu_6502::Cpu6502;
-use crate::ines_loader::INesLoader;
-use crate::loader::Loader;
-use crate::memory::{Memory, MemoryError, MemoryType};
-use crate::memory_bank::MemoryBank;
+use crate::cpu::{CpuType};
+use crate::memory::MemoryType;
 use crate::nes_console::{NESConsoleBuilder, NESConsoleError};
 
 mod cpu;
@@ -75,13 +71,6 @@ fn logger_init(debug: bool) {
     };
 
     SimpleLogger::init(log_level,   Config::default()).unwrap();
-}
-
-fn populate_memory(memory: &mut Box<dyn Memory>) -> Result<(), MemoryError> {
-    debug!("populating memory with ROM data...");
-
-    memory.initialize()?;
-    Ok(())
 }
 
 fn main() -> Result<(), NESConsoleError> {

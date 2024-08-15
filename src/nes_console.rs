@@ -3,16 +3,14 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::rc::Rc;
 use log::debug;
-use crate::apu::APUType;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::cpu::{CPU, CpuError, CpuType};
+use crate::cpu::{CPU, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::dummy_device::DummyDevice;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
-use crate::ppu::PPUType;
 
 const WRAM_MEMORY_SIZE: usize = 64 * 1024;
 const WRAM_START_ADDR: u16 = 0x0000;
@@ -211,7 +209,7 @@ impl NESConsoleBuilder {
         Ok(console)
     }
 
-    pub fn build(mut self) -> Result<NESConsole, NESConsoleError> {
+    pub fn build(self) -> Result<NESConsole, NESConsoleError> {
         if let (Some(_), Some(_)) = (&self.bus_type, &self.cpu_type) {
             self.build_nes()
         } else {

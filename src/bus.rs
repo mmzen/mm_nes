@@ -6,7 +6,8 @@ use std::rc::Rc;
 use mockall::mock;
 use crate::bus_device::BusDevice;
 use crate::memory::Memory;
-use crate::memory::MemoryError;
+#[cfg(test)]
+use crate::memory::{MemoryError};
 
 #[derive(Debug, Default)]
 pub enum BusType {
@@ -58,7 +59,7 @@ impl Display for BusError {
 
             BusError::InvalidDeviceMemorySize(address_space_size, effective_size) => {
                 write!(f, "invalid device memory size: address space size: {}, effective size: {}, %: {}",
-                       address_space_size, effective_size, effective_size % address_space_size)
+                       address_space_size, effective_size, address_space_size % effective_size)
             }
         }
     }

@@ -3,10 +3,7 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 #[cfg(test)]
 use mockall::automock;
-
-use crate::bus::{Bus, BusError};
-use crate::bus_device::BusDeviceType;
-use crate::cpu::CpuError;
+use crate::bus::BusError;
 
 #[derive(Default, Debug, Clone)]
 pub enum MemoryType {

@@ -8,7 +8,7 @@ use crate::nes_bus::{BUS_ADDRESSABLE_SIZE, NESBus};
 use crate::tests::init;
 
 const DEFAULT_MEMORY_SIZE: usize = 256;
-const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x0000, 0x00FF);
+const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x0000, 0x01FF);
 
 enum RequestType {
     None,
@@ -32,39 +32,39 @@ fn create_bus_device_with_expectations(addr: u16, request: RequestType, length: 
 
     match (request, length) {
         (RequestType::Read, RequestData::Byte(value)) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| true);
+            device.expect_is_addr_in_boundary().returning(|_| true);
             device.expect_read_byte().times(1).with(eq(addr)).returning(move |_| Ok(value));
         },
 
         (RequestType::Write, RequestData::Byte(value)) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| true);
+            device.expect_is_addr_in_boundary().returning(|_| true);
             device.expect_write_byte().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::Read, RequestData::Word(value)) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| true);
+            device.expect_is_addr_in_boundary().returning(|_| true);
             device.expect_read_word().times(1).with(eq(addr)).returning(move |_| Ok(value));
         },
 
         (RequestType::Write, RequestData::Word(value)) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| true);
+            device.expect_is_addr_in_boundary().returning(|_| true);
             device.expect_write_word().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Byte(value)) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| true);
+            device.expect_is_addr_in_boundary().returning(|_| true);
             device.expect_read_byte().times(1).with(eq(addr)).returning(move |_| Ok(value));
             device.expect_write_byte().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Word(value)) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| true);
+            device.expect_is_addr_in_boundary().returning(|_| true);
             device.expect_read_word().times(1).with(eq(addr)).returning(move |_| Ok(value));
             device.expect_write_word().times(1).with(eq(addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::Unmapped, _) => {
-            device.expect_is_addr_in_boundary().with(eq(addr)).returning(|_| false);
+            device.expect_is_addr_in_boundary().returning(|_| false);
             device.expect_read_byte().times(0);
             device.expect_write_byte().times(0);
         },
@@ -214,6 +214,22 @@ fn returns_bus_error_on_unmapped_access() {
     assert_eq!(result1, Err(MemoryError::BusError(expected_addr)));
 }
 
+#[test]
+fn mirrors_content_when_address_space_si_larger_than_size() {
+    init();
+
+    let expected_addr = 0x0000;
+    let virtual_addr = 0x0100;
+    let expected_value = 0xAB;
+
+    let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::ReadWrite, RequestData::Byte(expected_value));
+
+    let result0 = nes_bus.write_byte(virtual_addr, expected_value);
+    let result1 = nes_bus.read_byte(virtual_addr);
+
+    assert_eq!(result0, Ok(()));
+    assert_eq!(result1, Ok(expected_value));
+}
 
 /***
 #[test]

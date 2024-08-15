@@ -4,7 +4,9 @@ use std::fmt::{Display, Formatter};
 #[cfg(test)]
 use mockall::mock;
 use crate::apu::APUType;
-use crate::memory::{Memory, MemoryType, MemoryError};
+use crate::memory::{Memory, MemoryType};
+#[cfg(test)]
+use crate::memory::{MemoryError};
 use crate::ppu::PPUType;
 
 #[derive(Debug, Clone)]

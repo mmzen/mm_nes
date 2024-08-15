@@ -4,7 +4,6 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus::{Bus, BusError};
 use crate::bus_device::BusDevice;
-use crate::cpu::CpuError::Unimplemented;
 use crate::memory::{Memory, MemoryError};
 
 pub const BUS_ADDRESSABLE_SIZE: usize = 64 * 1024;
@@ -67,7 +66,7 @@ impl Bus for NESBus {
         let address_space = device.borrow().get_address_range();
         let address_space_size = (address_space.1 - address_space.0 + 1) as usize;
 
-        if size % address_space_size != 0 {
+        if address_space_size % size != 0 {
             Err(BusError::InvalidDeviceMemorySize(size, address_space_size))
         } else {
             self.devices.push(device);
@@ -92,7 +91,6 @@ impl NESBus {
     }
 
     fn lookup_address(&self, addr: u16) -> Result<(Rc<RefCell<dyn BusDevice>>, u16), BusError> {
-
         for device in &self.devices {
             if device.borrow().is_addr_in_boundary(addr) {
                 let effective_addr = addr & (device.borrow().size() - 1) as u16;

@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
-use crate::bus::{Bus, BusError};
+use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::memory::{Memory, MemoryError, MemoryType};
+use crate::memory::{Memory, MemoryError};
 use crate::memory::MemoryType::NESMemory;
 
 pub const MEMORY_BASE_ADDRESS: usize = 0x0000;
@@ -122,12 +122,6 @@ impl MemoryBank {
             address_space_size,
             device_type: BusDeviceType::WRAM(NESMemory),
         }
-    }
-
-    fn lookup_address(&self, addr: u16) -> Result<u16, MemoryError> {
-        let effective_addr = addr & 0x07FF;
-
-        Ok(0)
     }
 
     fn wrapping_add(&self, addr: u16, n: u16) -> u16 {
