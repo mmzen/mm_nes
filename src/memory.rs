@@ -1,7 +1,26 @@
 use std::error::Error;
+use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 #[cfg(test)]
 use mockall::automock;
+
+use crate::bus::{Bus, BusError};
+use crate::bus_device::BusDeviceType;
+use crate::cpu::CpuError;
+
+#[derive(Default, Debug, Clone)]
+pub enum MemoryType {
+    #[default]
+    NESMemory,
+}
+
+impl Display for MemoryType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            MemoryType::NESMemory => write!(f, "memory type: NESMemory"),
+        }
+    }
+}
 
 #[cfg_attr(test, automock)]
 pub trait Memory: Debug {
@@ -12,7 +31,6 @@ pub trait Memory: Debug {
     fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError>;
     #[allow(dead_code)]
     fn dump(&self);
-    fn is_addr_in_boundary(&self, addr: u16) -> bool;
     fn size(&self) -> usize;
     fn as_slice(&mut self) -> &mut [u8];
 }
@@ -20,6 +38,7 @@ pub trait Memory: Debug {
 #[derive(Debug, PartialEq)]
 pub enum MemoryError {
     OutOfRange(u16),
+    BusError(u16)
 }
 
 impl Error for MemoryError {}
@@ -27,7 +46,17 @@ impl Error for MemoryError {}
 impl Display for MemoryError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            MemoryError::OutOfRange(addr) => write!(f, "memory access out of bounds: 0x{:04X}", addr)
+            MemoryError::OutOfRange(addr) => write!(f, "memory access out of bounds: 0x{:04X}", addr),
+            MemoryError::BusError(addr) => { write!(f, "bus error: 0x{:04X}", addr) }
+        }
+    }
+}
+
+impl From<BusError> for MemoryError {
+    fn from(error: BusError) -> Self {
+        match error {
+            BusError::Unmapped(address) => MemoryError::BusError(address),
+            BusError::InvalidDeviceMemorySize(size, _) => { MemoryError::BusError(size as u16) }
         }
     }
 }

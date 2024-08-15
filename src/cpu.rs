@@ -2,6 +2,13 @@ use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
 
+
+#[derive(Default, Debug)]
+pub enum CpuType {
+    #[default]
+    NES6502
+}
+
 pub trait CPU {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;

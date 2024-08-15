@@ -1,7 +1,13 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+use crate::bus::MockBusStub;
+use crate::bus_device::BusDevice;
 use crate::memory::{Memory, MemoryError};
-use crate::memory_bank::{MEMORY_DEFAULT_SIZE, MemoryBank};
+use crate::memory_bank::MemoryBank;
 use crate::tests::init;
 
+const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x1000, 0x1FFF);
+const DEFAULT_MEMORY_SIZE: usize = 4096;
 
 fn check_memory(mut memory: MemoryBank) {
     for byte in memory.as_slice().iter() {
@@ -9,44 +15,46 @@ fn check_memory(mut memory: MemoryBank) {
     }
 }
 
-#[test]
-fn test_initialize_memory_with_default_size() {
-    init();
+fn create_bus() -> MockBusStub {
+    let bus = MockBusStub::new();
+    bus
+}
 
-    let mut memory_bank = MemoryBank::default();
-    let expected_size = MEMORY_DEFAULT_SIZE;
+fn creat_memory_bank(size: usize, address_range: (u16, u16)) -> MemoryBank {
+    let bus = Rc::new(RefCell::new(create_bus()));
+    let mut memory_bank = MemoryBank::new(size, bus, address_range);
 
-    assert_eq!(memory_bank.initialize().unwrap(), expected_size);
-    assert_eq!(memory_bank.size(), expected_size);
 
-    check_memory(memory_bank)
+    memory_bank
 }
 
 #[test]
 fn test_initialize_memory_with_specified_size() {
     init();
 
-    let mut memory_bank = MemoryBank::new_with_size(512);
-    assert_eq!(memory_bank.initialize().unwrap(), 512);
+    let mut memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    assert_eq!(memory_bank.initialize().unwrap(), DEFAULT_MEMORY_SIZE);
 
     check_memory(memory_bank)
 }
 
 #[test]
-fn test_is_in_boundary_works() {
+fn is_in_boundary_works() {
     init();
 
-    let mut memory_bank = MemoryBank::new_with_size(512);
-    assert_eq!(memory_bank.is_addr_in_boundary(1024), false);
-    assert_eq!(memory_bank.is_addr_in_boundary(256), true);
+    let memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+
+    assert_eq!(memory_bank.is_addr_in_boundary(0x0000), false);
+    assert_eq!(memory_bank.is_addr_in_boundary(0x2000), false);
+    assert_eq!(memory_bank.is_addr_in_boundary(0x1ABC), true);
 }
 
 #[test]
 fn read_byte_out_of_range_error() {
     init();
 
-    let mut memory_bank = MemoryBank::new_with_size(64);
-    let out_of_range_addr = memory_bank.size() as u16 + 1;
+    let memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let out_of_range_addr = DEFAULT_MEMORY_RANGE.0 + DEFAULT_MEMORY_SIZE as u16;
 
     assert_eq!(
         memory_bank.read_byte(out_of_range_addr),
@@ -58,8 +66,8 @@ fn read_byte_out_of_range_error() {
 fn write_byte_out_of_range_returns_error() {
     init();
 
-    let mut memory_bank = MemoryBank::new_with_size(64);
-    let out_of_range_addr = (memory_bank.size() + 1) as u16;
+    let mut memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let out_of_range_addr = DEFAULT_MEMORY_RANGE.0 + DEFAULT_MEMORY_SIZE as u16;
     let value = 0xAB;
 
     assert_eq!(
@@ -69,59 +77,52 @@ fn write_byte_out_of_range_returns_error() {
 }
 
 #[test]
-fn test_read_write_byte() {
+fn write_byte() {
     init();
 
-    let mut memory = MemoryBank::default();
-    let test_address = 0x1000;
+    let mut memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let test_address = 0x1200;
     let test_value = 0xAB;
 
-    memory.write_byte(test_address, test_value).unwrap();
-    assert_eq!(memory.read_byte(test_address).unwrap(), test_value);
+    memory_bank.write_byte(test_address, test_value).unwrap();
+    assert_eq!(memory_bank.read_byte(test_address).unwrap(), test_value);
 }
 
 #[test]
-fn should_read_and_write_word_correctly_at_specific_address() {
+fn read_and_write_word_correctly_at_specific_address() {
     init();
 
-    let mut memory_bank = MemoryBank::new_with_size(0x1000);
-    let test_addr = 0x0200;
-    let test_value = 0xABCD;
+    let mut memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let test_address = 0x1200;
+    let test_value = 0xAB;
 
-    // Write a word to the memory
-    memory_bank.write_word(test_addr, test_value).unwrap();
+    memory_bank.write_word(test_address, test_value).unwrap();
+    let read_value = memory_bank.read_word(test_address).unwrap();
 
-    // Read the word from the memory
-    let read_value = memory_bank.read_word(test_addr).unwrap();
-
-    // Assert that the written and read values are equal
     assert_eq!(read_value, test_value);
 }
 
 #[test]
-fn test_word_read_write_across_boundaries() {
+fn word_read_write_across_boundaries() {
     init();
 
-    let mut memory = MemoryBank::new_with_size(0x1000);
-    let addr = 0x0FFF;
+    let mut memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let addr = DEFAULT_MEMORY_RANGE.1;
     let value = 0xABCD;
 
-    memory.write_word(addr, value).unwrap();
+    memory_bank.write_word(addr, value).unwrap();
 
-    assert_eq!(memory.read_word(addr).unwrap(), value);
+    assert_eq!(memory_bank.read_word(addr).unwrap(), value);
 }
 
 #[test]
-fn test_read_write_unaligned_word() {
+fn read_write_unaligned_word() {
     init();
 
-    let mut memory = MemoryBank::new_with_size(256);
+    let mut memory_bank = creat_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
 
-    // Write unaligned word
-    assert_eq!(memory.write_word(1, 0xABCD), Ok(()));
-
-    // Read unaligned word
-    assert_eq!(memory.read_word(1), Ok(0xABCD));
+    assert_eq!(memory_bank.write_word(DEFAULT_MEMORY_RANGE.0 + 1, 0x1ABC), Ok(()));
+    assert_eq!(memory_bank.read_word(DEFAULT_MEMORY_RANGE.0 + 1), Ok(0x1ABC));
 }
 
 

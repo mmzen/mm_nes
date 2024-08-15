@@ -1,14 +1,21 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use log::debug;
+use crate::bus::{Bus, BusError};
+use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::memory::{Memory, MemoryError, MemoryType};
+use crate::memory::MemoryType::NESMemory;
 
-use crate::memory::{Memory, MemoryError};
-
-pub const MEMORY_DEFAULT_SIZE: usize = 64 * 1024;
 pub const MEMORY_BASE_ADDRESS: usize = 0x0000;
-
+const DEVICE_NAME: &str = "Memory Bank";
 
 #[derive(Debug)]
 pub struct MemoryBank {
-    memory: Vec<u8>
+    memory: Vec<u8>,
+    bus: Rc<RefCell<dyn Bus>>,
+    address_space: (u16, u16),
+    address_space_size: usize,
+    device_type: BusDeviceType,
 }
 
 impl Memory for MemoryBank {
@@ -26,7 +33,8 @@ impl Memory for MemoryBank {
         if !self.is_addr_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
         } else {
-            let value = self.memory[addr as usize];
+            let effective_addr = addr - self.address_space.0;
+            let value = self.memory[effective_addr as usize];
             debug!("read byte at 0x{:04X}: {:02X}", addr, value);
             Ok(value)
         }
@@ -38,14 +46,15 @@ impl Memory for MemoryBank {
         if !self.is_addr_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
         } else {
-            self.memory[addr as usize] = value;
+            let effective_addr = addr - self.address_space.0;
+            self.memory[effective_addr as usize] = value;
             Ok(())
         }
     }
 
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
         let lo = self.read_byte(addr)?;
-        let next = addr.wrapping_add(1) % self.size() as u16;
+        let next = self.wrapping_add(addr, 1);
         let hi = self.read_byte(next)?;
 
         Ok((hi as u16) << 8 | lo as u16)
@@ -54,7 +63,7 @@ impl Memory for MemoryBank {
     fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError> {
         let lower_byte = value as u8;
         let upper_byte = ((value & 0xFF00) >> 8) as u8;
-        let next = addr.wrapping_add(1) % self.size() as u16;
+        let next = self.wrapping_add(addr, 1);
 
         self.write_byte(addr, lower_byte)?;
         self.write_byte(next, upper_byte)?;
@@ -75,10 +84,6 @@ impl Memory for MemoryBank {
         println!();
     }
 
-    fn is_addr_in_boundary(&self, addr: u16) -> bool {
-        (addr as usize) < self.memory.len()
-    }
-
     fn size(&self) -> usize {
         self.memory.len()
     }
@@ -88,18 +93,48 @@ impl Memory for MemoryBank {
     }
 }
 
-impl Default for MemoryBank {
-    fn default() -> Self {
-        MemoryBank {
-            memory: vec![0xFF; MEMORY_DEFAULT_SIZE],
-        }
+impl BusDevice for MemoryBank {
+    fn get_name(&self) -> String {
+        DEVICE_NAME.to_string()
+    }
+
+    fn get_device_type(&self) -> BusDeviceType {
+        self.device_type.clone()
+    }
+
+    fn get_address_range(&self) -> (u16, u16) {
+        self.address_space
+    }
+
+    fn is_addr_in_boundary(&self, addr: u16) -> bool {
+        self.address_space.0 <= addr && addr <= self.address_space.1
     }
 }
 
 impl MemoryBank {
-    pub(crate) fn new_with_size(size: u16) -> Self {
+    pub(crate) fn new(size: usize, bus: Rc<RefCell<dyn Bus>>, address_range: (u16, u16)) -> Self {
+        let address_space_size = (address_range.1 - address_range.0 + 1) as usize;
+
         MemoryBank {
-            memory: vec![0xFF; size as usize],
+            memory: vec![0xFF; size],
+            bus,
+            address_space: address_range,
+            address_space_size,
+            device_type: BusDeviceType::WRAM(NESMemory),
+        }
+    }
+
+    fn lookup_address(&self, addr: u16) -> Result<u16, MemoryError> {
+        let effective_addr = addr & 0x07FF;
+
+        Ok(0)
+    }
+
+    fn wrapping_add(&self, addr: u16, n: u16) -> u16 {
+        if addr == self.address_space.1 {
+            self.address_space.0
+        } else {
+            addr + n
         }
     }
 }

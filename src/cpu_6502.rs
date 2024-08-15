@@ -4,10 +4,12 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
+use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
+use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError};
 use crate::memory::{Memory, MemoryError};
 
@@ -148,7 +150,7 @@ impl Registers {
 
 pub struct Cpu6502 {
     registers: Registers,
-    memory: Box<dyn Memory>,
+    bus: Rc<RefCell<dyn Bus>>,
     instructions_executed: u64,
     tracer: Tracer,
 }
@@ -206,7 +208,7 @@ impl CPU for Cpu6502 {
     }
 
     fn dump_memory(&self) {
-        self.memory.dump();
+        self.bus.borrow().dump();
     }
 
     fn run(&mut self) -> Result<(), CpuError> {
@@ -216,7 +218,7 @@ impl CPU for Cpu6502 {
             debug!("pc: 0x{:04X}", self.registers.pc);
             let original_pc = self.registers.pc;
 
-            let byte = self.memory.read_byte(self.registers.pc)?;
+            let byte = self.bus.borrow().read_byte(self.registers.pc)?;
             let instruction = Cpu6502::decode_instruction(byte)?;
             let operand = self.fetch_operand(instruction)?;
 
@@ -241,7 +243,7 @@ impl CPU for Cpu6502 {
 }
 
 impl Cpu6502 {
-    pub fn new(memory: Box<dyn Memory>, trace_file: Option<File>) -> Self {
+    pub fn new(bus: Rc<RefCell<dyn Bus>>, trace_file: Option<File>) -> Self {
         Cpu6502 {
             registers: Registers {
                 a: 0,
@@ -251,7 +253,7 @@ impl Cpu6502 {
                 sp: 0,
                 pc: 0
             },
-            memory,
+            bus,
             instructions_executed: 0,
             tracer: Tracer::new_with_file(trace_file)
         }
@@ -271,7 +273,7 @@ impl Cpu6502 {
         let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
 
         debug!("sp (before push): 0x{:02X}, pushing at 0x{:02X}, value {:02X}", self.registers.sp, addr, value);
-        self.memory.write_byte(addr, value)?;
+        self.bus.borrow_mut().write_byte(addr, value)?;
 
         addr = addr - 1;
         self.is_valid_stack_addr(addr)?;
@@ -286,7 +288,7 @@ impl Cpu6502 {
         let addr = STACK_BASE_ADDRESS + self.registers.sp as u16 + 1;
 
         debug!("sp (before pop): 0x{:02X}, popping at 0x{:02X}", self.registers.sp, addr);
-        let value = self.memory.read_byte(addr)?;
+        let value = self.bus.borrow().read_byte(addr)?;
         self.is_valid_stack_addr(addr)?;
 
         self.registers.sp = addr as u8;
@@ -296,12 +298,12 @@ impl Cpu6502 {
     }
 
     fn read_word_with_page_wrap(&self, addr: u16) -> Result<u16, MemoryError> {
-        let lo = self.memory.read_byte(addr)?;
+        let lo = self.bus.borrow().read_byte(addr)?;
 
         let hi = if (addr & 0xFF) == 0xFF {
-            self.memory.read_byte(addr & 0xFF00)?
+            self.bus.borrow().read_byte(addr & 0xFF00)?
         } else {
-            self.memory.read_byte(addr.wrapping_add(1))?
+            self.bus.borrow().read_byte(addr.wrapping_add(1))?
         };
 
         Ok((hi as u16) << 8 | lo as u16)
@@ -336,7 +338,7 @@ impl Cpu6502 {
         match operand {
             Operand::Address(addr) |
             Operand::AddressAndEffectiveAddress(_, addr) => {
-                self.memory.write_byte(*addr, value)?;
+                self.bus.borrow_mut().write_byte(*addr, value)?;
                 Ok(())
             },
 
@@ -360,11 +362,11 @@ impl Cpu6502 {
                 Ok(*value)
             },
             Operand::Address(addr) => {
-                let value = self.memory.read_byte(*addr)?;
+                let value = self.bus.borrow().read_byte(*addr)?;
                 Ok(value)
             },
             Operand::AddressAndEffectiveAddress(_, effective) => {
-                let value = self.memory.read_byte(*effective)?;
+                let value = self.bus.borrow().read_byte(*effective)?;
                 Ok(value)
             }
             Operand::None => {
@@ -421,19 +423,19 @@ impl Cpu6502 {
             AddressingMode::Immediate => {
                 let pc = self.registers.safe_pc_add(1)?;
 
-                Operand::Byte(self.memory.read_byte(pc)?)
+                Operand::Byte(self.bus.borrow().read_byte(pc)?)
             },
 
             AddressingMode::Absolute => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
+                let addr = self.bus.borrow().read_word(pc)?;
 
                 Operand::Address(addr)
             },
 
             AddressingMode::AbsoluteIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
+                let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.x as u16);
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr)
@@ -441,7 +443,7 @@ impl Cpu6502 {
 
             AddressingMode::AbsoluteIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
+                let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.y as u16);
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr)
@@ -449,14 +451,14 @@ impl Cpu6502 {
 
             AddressingMode::ZeroPage => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
+                let addr = self.bus.borrow().read_byte(pc)?;
 
                 Operand::Address(addr as u16)
             },
 
             AddressingMode::ZeroPageIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
+                let addr = self.bus.borrow().read_byte(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.x) as u16;
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
@@ -464,7 +466,7 @@ impl Cpu6502 {
 
             AddressingMode::ZeroPageIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
+                let addr = self.bus.borrow().read_byte(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.y) as u16;
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
@@ -472,7 +474,7 @@ impl Cpu6502 {
 
             AddressingMode::Indirect => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_word(pc)?;
+                let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = self.read_word_with_page_wrap(addr)?;
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr)
@@ -480,7 +482,7 @@ impl Cpu6502 {
 
             AddressingMode::IndirectIndexedX => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
+                let addr = self.bus.borrow().read_byte(pc)?;
                 let indirect_addr = addr.wrapping_add(self.registers.x);
                 let effective_addr = self.read_word_with_page_wrap(indirect_addr as u16)?;
 
@@ -489,7 +491,7 @@ impl Cpu6502 {
 
             AddressingMode::IndirectIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.memory.read_byte(pc)?;
+                let addr = self.bus.borrow().read_byte(pc)?;
                 let indirect_addr = self.read_word_with_page_wrap(addr as u16)?;
                 let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
 
@@ -498,7 +500,7 @@ impl Cpu6502 {
 
             AddressingMode::Relative => {
                 let pc = self.registers.safe_pc_add(1)?;
-                let offset = self.memory.read_byte(pc)? as i8;
+                let offset = self.bus.borrow().read_byte(pc)? as i8;
                 let addr = self.registers.safe_pc_add(2)?;
                 let addr= addr.wrapping_add_signed(offset as i16);
 
@@ -537,9 +539,9 @@ impl Tracer {
     fn trace(&self, cpu: &Cpu6502, instruction: &Instruction, operand: &Operand) -> Result<(), CpuError> {
         let a = format!("{:04X}", cpu.registers.pc);
 
-        let mut b = format!("{:02X}", cpu.memory.read_byte(cpu.registers.pc)?);
+        let mut b = format!("{:02X}", cpu.bus.borrow().read_byte(cpu.registers.pc)?);
         for i in 1..instruction.bytes {
-            let o = format!(" {:02X}", cpu.memory.read_byte(cpu.registers.pc + i as u16)?);
+            let o = format!(" {:02X}", cpu.bus.borrow().read_byte(cpu.registers.pc + i as u16)?);
             b.push_str(&o);
         }
 
@@ -557,34 +559,34 @@ impl Tracer {
                 format!("${:04X}", *addr),
 
             (AddressingMode::Absolute, Operand::Address(addr), _) =>
-                format!("${:04X} = {:02X}", *addr, cpu.memory.read_byte(*addr)?),
+                format!("${:04X} = {:02X}", *addr, cpu.bus.borrow().read_byte(*addr)?),
 
             (AddressingMode::Relative, Operand::Address(addr), _) =>
                 format!("${:04X}", *addr),
 
             (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
-                format!("${:02X} = {:02X}", *addr as u8, cpu.memory.read_byte(*addr)?),
+                format!("${:02X} = {:02X}", *addr as u8, cpu.bus.borrow().read_byte(*addr)?),
 
             (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.memory.read_byte(*effective)?),
+                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
                 format!("(${:04X}) = {:04X}", *addr, effective),
 
             (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x), *effective, cpu.memory.read_byte(*effective)?),
+                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x), *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
-                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16), *effective, cpu.memory.read_byte(*effective)?),
+                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16), *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::Immediate, Operand::Byte(byte), _) =>
                 format!("#${:02X}", byte),
@@ -703,7 +705,7 @@ impl Instruction {
 
     fn bit_test_bits_in_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
-        let value = cpu.memory.read_byte(addr)?;
+        let value = cpu.bus.borrow().read_byte(addr)?;
         let result = cpu.registers.a & value;
 
         cpu.registers.set_status(StatusFlag::Zero, result == 0);
@@ -762,7 +764,7 @@ impl Instruction {
         cpu.push_stack(cpu.registers.p)?;
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
-        cpu.registers.pc = cpu.memory.read_word(0xFFFE)?;
+        cpu.registers.pc = cpu.bus.borrow().read_word(0xFFFE)?;
 
         Ok(())
     }
@@ -1116,7 +1118,7 @@ impl Instruction {
     fn sta_store_accumulator_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
 
-        cpu.memory.write_byte(addr, cpu.registers.a)?;
+        cpu.bus.borrow_mut().write_byte(addr, cpu.registers.a)?;
 
         Ok(())
     }
@@ -1124,7 +1126,7 @@ impl Instruction {
     fn stx_store_index_x_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
 
-        cpu.memory.write_byte(addr, cpu.registers.x)?;
+        cpu.bus.borrow_mut().write_byte(addr, cpu.registers.x)?;
 
         Ok(())
     }
@@ -1132,7 +1134,7 @@ impl Instruction {
     fn sty_store_index_y_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<(), CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
 
-        cpu.memory.write_byte(addr, cpu.registers.y)?;
+        cpu.bus.borrow_mut().write_byte(addr, cpu.registers.y)?;
 
         Ok(())
     }
@@ -1261,7 +1263,7 @@ impl Instruction {
         let addr = cpu.get_operand_word_value(operand)?;
         let result = cpu.registers.a & cpu.registers.x;
 
-        cpu.memory.write_byte(addr, result)?;
+        cpu.bus.borrow_mut().write_byte(addr, result)?;
         Ok(())
     }
 
