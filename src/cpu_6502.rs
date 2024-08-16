@@ -4,7 +4,6 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
-use std::process::exit;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -231,10 +230,6 @@ impl CPU for Cpu6502 {
             let additional_cycles = self.execute_instruction(instruction, &operand)?;
             cycles = cycles + instruction.cycles + additional_cycles;
 
-            /***if self.registers.pc == 0xDF63 {
-                exit(1)
-            }***/
-
             if original_pc == self.registers.pc {
                 self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
             }
@@ -417,7 +412,6 @@ impl Cpu6502 {
     fn get_cycles_by_page_crossing_for_load(&self, operand: &Operand) -> u32 {
         match operand {
             Operand::AddressAndEffectiveAddress(_, _, page_crossed) => {
-                debug!("||||||||||| {}", page_crossed);
                 if *page_crossed { 1 } else { 0 }
             },
             _ => 0
@@ -478,8 +472,6 @@ impl Cpu6502 {
                 let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.y as u16);
                 let page_crossed = self.is_page_crossed(addr, effective_addr);
-
-                debug!("============> addr: 0x{:04X}, effective_addr: 0x{:04X}, page_crossed: {}", addr, effective_addr, page_crossed);
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr, page_crossed)
             }

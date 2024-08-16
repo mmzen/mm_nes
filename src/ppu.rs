@@ -1,6 +1,5 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use crate::memory::MemoryType;
 
 #[derive(Default, Debug, Clone)]
 pub enum PPUType {

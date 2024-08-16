@@ -1,7 +1,6 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::bus_device::BusDevice;
-use crate::ppu::PPUType;
 
 #[derive(Default, Debug, Clone)]
 pub enum CartridgeType {

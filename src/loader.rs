@@ -4,7 +4,7 @@ use std::io::Error;
 use std::path::PathBuf;
 use std::rc::Rc;
 use crate::bus::Bus;
-use crate::memory::{Memory, MemoryError};
+use crate::memory::MemoryError;
 
 #[derive(Default, Debug)]
 pub enum LoaderType {

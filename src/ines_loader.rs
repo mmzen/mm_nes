@@ -2,12 +2,10 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::process::exit;
 use std::rc::Rc;
 use log::debug;
 use crate::bus::Bus;
 use crate::loader::{Loader, LoaderError};
-use crate::memory::Memory;
 
 const HEADER_SIZE: usize = 16;
 const TRAINER_BIT_MASK: u8 = 0b00000100;

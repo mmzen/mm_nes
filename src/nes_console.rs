@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::cmp::PartialEq;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::path::PathBuf;
@@ -7,7 +6,7 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::cartridge::{Cartridge, CartridgeType};
+use crate::cartridge::Cartridge;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::dummy_device::DummyDevice;
@@ -16,7 +15,6 @@ use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
-use crate::nrom128_cartridge;
 use crate::nrom128_cartridge::NROM128Cartridge;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
@@ -107,7 +105,6 @@ pub struct NESConsoleBuilder {
     bus_type: Option<BusType>,
     device_types: Vec<BusDeviceType>,
     devices: Vec<Rc<RefCell<dyn BusDevice>>>,
-    cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
     entry_point: Option<u16>,
@@ -123,7 +120,6 @@ impl NESConsoleBuilder {
             bus_type: None,
             device_types: Vec::new(),
             devices: Vec::new(),
-            cartridge: None,
             loader_type: None,
             rom_file: None,
             entry_point: None,

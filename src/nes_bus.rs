@@ -91,7 +91,7 @@ impl NESBus {
     }
 
     fn is_addr_in_boundary(&self, addr: u16) -> bool {
-        addr >= 0x0000 && addr < BUS_ADDRESSABLE_SIZE as u16
+        addr < BUS_ADDRESSABLE_SIZE as u16
     }
 
     fn lookup_address(&self, addr: u16) -> Result<(Rc<RefCell<dyn BusDevice>>, u16), BusError> {
