@@ -28,6 +28,7 @@ mod bus_device;
 mod dummy_device;
 mod cartridge;
 mod nrom128_cartridge;
+mod util;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

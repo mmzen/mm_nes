@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
+use std::process::exit;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -53,7 +54,7 @@ enum OpCode {
 enum Operand {
     Byte(u8),
     Address(u16),
-    AddressAndEffectiveAddress(u16, u16),
+    AddressAndEffectiveAddress(u16, u16, bool),
     Accumulator,
     None
 }
@@ -65,8 +66,8 @@ impl Display for Operand {
             Operand::Address(addr) => write!(f, "word: 0x{:04X}", addr),
             Operand::Accumulator => write!(f, "accumulator"),
             Operand::None => { write!(f, "none") }
-            Operand::AddressAndEffectiveAddress(addr, effective) => {
-                write!(f, "address: 0x{:04X}, effective address: 0x{:04X}", addr, effective)
+            Operand::AddressAndEffectiveAddress(addr, effective, page_crossed) => {
+                write!(f, "address: 0x{:04X}, effective address: 0x{:04X}, page crossed: {}", addr, effective, page_crossed)
             }
         }
     }
@@ -230,6 +231,10 @@ impl CPU for Cpu6502 {
             let additional_cycles = self.execute_instruction(instruction, &operand)?;
             cycles = cycles + instruction.cycles + additional_cycles;
 
+            /***if self.registers.pc == 0xDF63 {
+                exit(1)
+            }***/
+
             if original_pc == self.registers.pc {
                 self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
             }
@@ -342,7 +347,7 @@ impl Cpu6502 {
     fn overwrite(&mut self, operand: &Operand, value: u8) -> Result<(), CpuError> {
         match operand {
             Operand::Address(addr) |
-            Operand::AddressAndEffectiveAddress(_, addr) => {
+            Operand::AddressAndEffectiveAddress(_, addr, _) => {
                 self.bus.borrow_mut().write_byte(*addr, value)?;
                 Ok(())
             },
@@ -370,7 +375,7 @@ impl Cpu6502 {
                 let value = self.bus.borrow().read_byte(*addr)?;
                 Ok(value)
             },
-            Operand::AddressAndEffectiveAddress(_, effective) => {
+            Operand::AddressAndEffectiveAddress(_, effective, _) => {
                 let value = self.bus.borrow().read_byte(*effective)?;
                 Ok(value)
             }
@@ -388,7 +393,7 @@ impl Cpu6502 {
                 let value = *addr;
                 Ok(value)
             },
-            Operand::AddressAndEffectiveAddress(_, effective) => {
+            Operand::AddressAndEffectiveAddress(_, effective, _) => {
                 let value = *effective;
                 Ok(value)
             },
@@ -398,15 +403,25 @@ impl Cpu6502 {
         value
     }
 
-    fn is_on_same_page(&self, addr1: u16, addr2: u16) -> bool {
+    fn is_page_crossed(&self, addr1: u16, addr2: u16) -> bool {
         let page1 = addr1 & 0xFF00;
         let page2 = addr2 & 0xFF00;
 
-        page1 == page2
+        page1 != page2
     }
 
-    fn get_cycles_by_page_crossing(&self, source: u16, destination: u16) -> u32 {
-        if self.is_on_same_page(source, destination) { 1 } else { 2 }
+    fn get_cycles_by_page_crossing_for_conditional_jump(&self, source: u16, destination: u16) -> u32 {
+        if self.is_page_crossed(source, destination) { 2 } else { 1 }
+    }
+
+    fn get_cycles_by_page_crossing_for_load(&self, operand: &Operand) -> u32 {
+        match operand {
+            Operand::AddressAndEffectiveAddress(_, _, page_crossed) => {
+                debug!("||||||||||| {}", page_crossed);
+                if *page_crossed { 1 } else { 0 }
+            },
+            _ => 0
+        }
     }
 
     fn decode_instruction<'a>(byte: u8) -> Result<&'a Instruction, CpuError> {
@@ -453,16 +468,20 @@ impl Cpu6502 {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.x as u16);
+                let page_crossed = self.is_page_crossed(addr, effective_addr);
 
-                Operand::AddressAndEffectiveAddress(addr, effective_addr)
+                Operand::AddressAndEffectiveAddress(addr, effective_addr, page_crossed)
             }
 
             AddressingMode::AbsoluteIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.y as u16);
+                let page_crossed = self.is_page_crossed(addr, effective_addr);
 
-                Operand::AddressAndEffectiveAddress(addr, effective_addr)
+                debug!("============> addr: 0x{:04X}, effective_addr: 0x{:04X}, page_crossed: {}", addr, effective_addr, page_crossed);
+
+                Operand::AddressAndEffectiveAddress(addr, effective_addr, page_crossed)
             }
 
             AddressingMode::ZeroPage => {
@@ -477,15 +496,16 @@ impl Cpu6502 {
                 let addr = self.bus.borrow().read_byte(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.x) as u16;
 
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, false)
             },
 
             AddressingMode::ZeroPageIndexedY => {
                 let pc = self.registers.safe_pc_add(1)?;
                 let addr = self.bus.borrow().read_byte(pc)?;
                 let effective_addr = addr.wrapping_add(self.registers.y) as u16;
+                let page_crossed = self.is_page_crossed(addr as u16, effective_addr);
 
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, page_crossed)
             },
 
             AddressingMode::Indirect => {
@@ -493,7 +513,7 @@ impl Cpu6502 {
                 let addr = self.bus.borrow().read_word(pc)?;
                 let effective_addr = self.read_word_with_page_wrap(addr)?;
 
-                Operand::AddressAndEffectiveAddress(addr, effective_addr)
+                Operand::AddressAndEffectiveAddress(addr, effective_addr, false)
             },
 
             AddressingMode::IndirectIndexedX => {
@@ -502,7 +522,7 @@ impl Cpu6502 {
                 let indirect_addr = addr.wrapping_add(self.registers.x);
                 let effective_addr = self.read_word_with_page_wrap(indirect_addr as u16)?;
 
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, false)
             },
 
             AddressingMode::IndirectIndexedY => {
@@ -510,8 +530,9 @@ impl Cpu6502 {
                 let addr = self.bus.borrow().read_byte(pc)?;
                 let indirect_addr = self.read_word_with_page_wrap(addr as u16)?;
                 let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
+                let page_crossed = self.is_page_crossed(indirect_addr, effective_addr);
 
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr)
+                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, page_crossed)
             },
 
             AddressingMode::Relative => {
@@ -583,25 +604,25 @@ impl Tracer {
             (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
                 format!("${:02X} = {:02X}", *addr as u8, cpu.bus.borrow().read_byte(*addr)?),
 
-            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
-            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
-            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
-            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
 
-            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:04X}) = {:04X}", *addr, effective),
 
-            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x), *effective, cpu.bus.borrow().read_byte(*effective)?),
 
-            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective), _) =>
+            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16), *effective, cpu.bus.borrow().read_byte(*effective)?),
 
             (AddressingMode::Immediate, Operand::Byte(byte), _) =>
@@ -651,6 +672,7 @@ impl Instruction {
     fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
         let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 1 } else { 0 };
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         let result = cpu.registers.a as u16 + value as u16 + carry_in as u16;
 
@@ -663,18 +685,19 @@ impl Instruction {
 
         cpu.registers.a = result as u8;
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn and_and_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         cpu.registers.a = cpu.registers.a & value;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn asl_shift_left_one_bit(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
@@ -690,7 +713,7 @@ impl Instruction {
     fn bcc_branch_on_carry_clear(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Carry) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -704,7 +727,7 @@ impl Instruction {
     fn bcs_branch_on_carry_set(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Carry) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -718,7 +741,7 @@ impl Instruction {
     fn beq_branch_on_result_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Zero) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -744,7 +767,7 @@ impl Instruction {
     fn bmi_branch_on_result_minus(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Negative) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -758,7 +781,7 @@ impl Instruction {
     fn bne_branch_on_result_not_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Zero) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -772,7 +795,7 @@ impl Instruction {
     fn bpl_branch_on_result_plus(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Negative) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -801,7 +824,7 @@ impl Instruction {
     fn bvc_branch_on_overflow_clear(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Overflow) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -815,7 +838,7 @@ impl Instruction {
     fn bvs_branch_on_overflow_set(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Overflow) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("branching to address {:04X}", addr);
             cpu.registers.pc = addr;
@@ -848,6 +871,7 @@ impl Instruction {
 
     fn cmp_compare_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         let result = cpu.registers.a.wrapping_sub(value);
 
@@ -855,7 +879,7 @@ impl Instruction {
         cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
         cpu.registers.set_status(StatusFlag::Carry, value <= cpu.registers.a);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn cpx_compare_memory_and_index_x(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
@@ -912,13 +936,14 @@ impl Instruction {
 
     fn eor_exclusive_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         cpu.registers.a = cpu.registers.a ^ value;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn inc_increment_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
@@ -971,40 +996,40 @@ impl Instruction {
     }
 
 
-    /***
-     * en fonction du mode d'adressage, récupèrer l'addresse + ajuster le nombre de cycles
-     */
     fn lda_load_accumulator_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         cpu.registers.a = value;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn ldx_load_index_x_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         cpu.registers.x = value;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.x == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.x & 0x80 != 0);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn ldy_load_index_y_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         cpu.registers.y = value;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.y == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.y & 0x80 != 0);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn lsr_shift_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
@@ -1017,19 +1042,21 @@ impl Instruction {
         Ok(0)
     }
 
-    fn nop_no_operation(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        Ok(0)
+    fn nop_no_operation(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        let cycle = cpu.get_cycles_by_page_crossing_for_load(operand);
+        Ok(cycle)
     }
 
     fn ora_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         cpu.registers.a = cpu.registers.a | value;
 
         cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
         cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn pha_push_accumulator_on_stack(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
@@ -1121,6 +1148,7 @@ impl Instruction {
     fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let value = cpu.get_operand_byte_value(operand)?;
         let borrow = !cpu.registers.get_status(StatusFlag::Carry) as u8;
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
         let temp = value.wrapping_add(borrow);
         let result = cpu.registers.a.wrapping_sub(temp);
@@ -1133,7 +1161,7 @@ impl Instruction {
         cpu.registers.set_status(StatusFlag::Overflow, overflow);
         cpu.registers.a = result;
 
-        Ok(0)
+        Ok(cycles)
     }
 
     fn sec_set_carry_flag(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
@@ -1274,9 +1302,12 @@ impl Instruction {
     }
 
     fn lax_lda_oper_plus_ldx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
+
         self.lda_load_accumulator_with_memory(cpu, operand)?;
         self.ldx_load_index_x_with_memory(cpu, operand)?;
-        Ok(0)
+
+        Ok(cycles)
     }
 
     fn lxa_store_and_oper_in_a_and_x(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
