@@ -7,7 +7,7 @@ use crate::cartridge::CartridgeType::NROM128;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 
-const MEMORY_RANGE: (u16, u16) = (0x8000, 0xBFFF);
+const MEMORY_RANGE: (u16, u16) = (0x8000, 0xFFFF);
 const MEMORY_SIZE: usize = 16 * 1024;
 const MAPPER_NAME: &str = "NROM-128";
 
@@ -73,7 +73,7 @@ impl BusDevice for NROM128Cartridge {
         MEMORY_RANGE
     }
 
-    fn is_addr_in_boundary(&self, addr: u16) -> bool {
-        self.memory.is_addr_in_boundary(addr)
+    fn is_addr_in_address_space(&self, addr: u16) -> bool {
+        self.memory.is_addr_in_address_space(addr)
     }
 }

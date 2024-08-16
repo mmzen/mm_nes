@@ -1,8 +1,10 @@
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Error;
+use std::path::PathBuf;
 use std::rc::Rc;
-use crate::memory::Memory;
+use crate::bus::Bus;
+use crate::memory::{Memory, MemoryError};
 
 #[derive(Default, Debug)]
 pub enum LoaderType {
@@ -11,15 +13,16 @@ pub enum LoaderType {
 }
 
 pub trait Loader: Debug  {
-    fn load_rom(&mut self, path: &str) -> Result<(), LoaderError>;
-    fn set_target_memory(&mut self, memory: Rc<RefCell<dyn Memory>>) {}
+    fn load_rom(&mut self, path: &PathBuf) -> Result<(), LoaderError>;
+    fn set_target_memory(&mut self, bus: Rc<RefCell<dyn Bus>>) {}
 }
 
 #[derive(Debug)]
 pub enum LoaderError {
     IoError(Error),
     InvalidRomFormat,
-    NotConfigured(String)
+    NotConfigured(String),
+    MemoryError(MemoryError),
 }
 
 impl From<Error> for LoaderError {
@@ -28,12 +31,20 @@ impl From<Error> for LoaderError {
     }
 }
 
+impl From<MemoryError> for LoaderError {
+    fn from(error: MemoryError) -> Self {
+        LoaderError::MemoryError(error)
+    }
+}
+
+
 impl Display for LoaderError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             LoaderError::IoError(e) => { write!(f, "i/o error {}", e) },
             LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format") }
-            LoaderError::NotConfigured(_) => { write!(f, "missing target memory") }
+            LoaderError::NotConfigured(s) => { write!(f, "missing target memory: {}", s) }
+            LoaderError::MemoryError(e) => { write!(f, "memory error: {}", e) }
         }
     }
 }

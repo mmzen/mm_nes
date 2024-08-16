@@ -23,31 +23,29 @@ impl Memory for MemoryBank {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         debug!("initializing memory: {} kB to 0x{:04X}, 0x{:04X}", self.memory.len() / 1024, MEMORY_BASE_ADDRESS, MEMORY_BASE_ADDRESS + self.memory.len() - 1);
 
-        self.memory.fill(0xFF);
+        self.memory.fill(0x00);
         Ok(self.size())
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         //debug!("reading byte at 0x{:04X}", addr);
 
-        if !self.is_addr_in_boundary(addr) {
+        if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
         } else {
-            let effective_addr = addr - self.address_space.0;
-            let value = self.memory[effective_addr as usize];
-            debug!("read byte at 0x{:04X}: {:02X}", addr, value);
+            let value = self.memory[addr as usize];
+            //debug!("read byte at 0x{:04X}: {:02X}", addr, value);
             Ok(value)
         }
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        debug!("writing byte ({:02X}) at 0x{:04X}", value, addr);
+        //debug!("writing byte ({:02X}) at 0x{:04X}", value, addr);
 
-        if !self.is_addr_in_boundary(addr) {
+        if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
         } else {
-            let effective_addr = addr - self.address_space.0;
-            self.memory[effective_addr as usize] = value;
+            self.memory[addr as usize] = value;
             Ok(())
         }
     }
@@ -106,7 +104,7 @@ impl BusDevice for MemoryBank {
         self.address_space
     }
 
-    fn is_addr_in_boundary(&self, addr: u16) -> bool {
+    fn is_addr_in_address_space(&self, addr: u16) -> bool {
         self.address_space.0 <= addr && addr <= self.address_space.1
     }
 }
@@ -116,7 +114,7 @@ impl MemoryBank {
         let address_space_size = (address_range.1 - address_range.0 + 1) as usize;
 
         MemoryBank {
-            memory: vec![0xFF; size],
+            memory: vec![0x00; size],
             bus,
             address_space: address_range,
             address_space_size,
@@ -130,5 +128,9 @@ impl MemoryBank {
         } else {
             addr + n
         }
+    }
+
+    fn addr_is_in_boundary(&self, addr: u16) -> bool {
+        (addr as usize) < self.memory.len()
     }
 }

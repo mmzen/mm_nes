@@ -83,7 +83,7 @@ fn main() -> Result<(), NESConsoleError> {
 
     let builder = NESConsoleBuilder::new();
 
-    let file = if let Some(trace_file) = args.trace_file {
+    let trace_file = if let Some(trace_file) = args.trace_file {
         debug!("output for traces: {}", trace_file);
         Some(File::create(trace_file)?)
     } else {
@@ -94,38 +94,17 @@ fn main() -> Result<(), NESConsoleError> {
     info!("emulator bootstrapping...");
 
     let mut console = builder
-        .with_cpu_options(CpuType::NES6502, file)
+        .with_cpu_options(CpuType::NES6502, trace_file)
         .with_bus_type(BusType::NESBus)
         .with_bus_device_type(BusDeviceType::WRAM(MemoryType::NESMemory))
         .with_bus_device_type(BusDeviceType::CARTRIDGE(CartridgeType::NROM128))
         .with_loader_type(LoaderType::INESV1)
-        .with_rom_file(&args.rom_file)
+        .with_rom_file(args.rom_file)
+        .with_entry_point(args.pc)
         .build()?;
 
     info!("emulator starting...");
     console.power_on()?;
 
-    //let mut cpu;
-    //let mut memory : Box<dyn Memory> = Box::new(MemoryBank::default());
-    //let status;
-    //let mut loader;
-
-    //populate_memory(&mut memory)?;
-
-    //loader = Box::new(INesLoader::new_with_memory(&mut memory));
-    //loader.load_rom(&args.rom_file).expect("fuck you");
-
-
-
-    //cpu = Cpu6502::new(memory, file);
-    //cpu.initialize().expect("cpu initialization failed");
-    //status = cpu.run_start_at(args.pc);
-
-    //if let Err(error) = status {
-    //    cpu.panic(&error);
-    //    Err(error)
-    //} else {
-    //    Ok(())
-    //}
     Ok(())
 }

@@ -56,7 +56,7 @@ impl Memory for NESBus {
     }
 
     fn as_slice(&mut self) -> &mut [u8] {
-        todo!()
+        panic!("can not cast to mutable slice for NESBus");
     }
 }
 
@@ -96,9 +96,12 @@ impl NESBus {
 
     fn lookup_address(&self, addr: u16) -> Result<(Rc<RefCell<dyn BusDevice>>, u16), BusError> {
         for device in &self.devices {
-            if device.borrow().is_addr_in_boundary(addr) {
-                let effective_addr = addr & (device.borrow().size() - 1) as u16;
-                debug!("translated address 0x{:04X} to effective address 0x{:04X}", addr, effective_addr);
+            if device.borrow().is_addr_in_address_space(addr) {
+                let d = device.borrow();
+                let effective_addr = addr & (d.size() - 1) as u16;
+
+                //debug!("translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
+                //    addr, d.get_name(), d.get_device_type(), d.get_address_range().0, d.get_address_range().1, effective_addr);
 
                 return Ok((Rc::clone(&device), effective_addr));
             }

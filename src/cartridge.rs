@@ -1,5 +1,7 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use crate::bus_device::BusDevice;
+use crate::ppu::PPUType;
 
 #[derive(Default, Debug, Clone)]
 pub enum CartridgeType {
@@ -17,4 +19,14 @@ impl Display for CartridgeType {
     }
 }
 
-pub trait Cartridge {}
+impl PartialEq for CartridgeType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (CartridgeType::NESCARTRIDGE, CartridgeType::NESCARTRIDGE) => true,
+            (CartridgeType::NROM128, CartridgeType::NROM128) => true,
+            _ => false,
+        }
+    }
+}
+
+pub trait Cartridge: BusDevice {}

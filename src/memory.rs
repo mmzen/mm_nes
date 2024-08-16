@@ -19,6 +19,14 @@ impl Display for MemoryType {
     }
 }
 
+impl PartialEq for MemoryType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (MemoryType::NESMemory, MemoryType::NESMemory) => true
+        }
+    }
+}
+
 #[cfg_attr(test, automock)]
 pub trait Memory: Debug {
     fn initialize(&mut self) -> Result<usize, MemoryError>;

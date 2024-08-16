@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use crate::ppu::PPUType;
 
 #[derive(Default, Debug, Clone)]
 pub enum APUType {
@@ -13,6 +14,16 @@ impl Display for APUType {
         match self {
             APUType::NESAPU => write!(f, "apu type: NESAPU"),
             APUType::DUMMY => write!(f, "apu type: DUMMY")
+        }
+    }
+}
+
+impl PartialEq for APUType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (APUType::NESAPU, APUType::NESAPU) => true,
+            (APUType::DUMMY, APUType::DUMMY) => true,
+            _ => false,
         }
     }
 }

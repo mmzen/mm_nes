@@ -40,7 +40,7 @@ impl BusDevice for DummyDevice {
         self.address_range
     }
 
-    fn is_addr_in_boundary(&self, addr: u16) -> bool {
+    fn is_addr_in_address_space(&self, addr: u16) -> bool {
         self.address_range.0 <= addr && addr <= self.address_range.1
     }
 }

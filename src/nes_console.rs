@@ -1,15 +1,18 @@
 use std::cell::RefCell;
+use std::cmp::PartialEq;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
+use std::path::PathBuf;
 use std::rc::Rc;
 use log::debug;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::cpu::{CPU, CpuType};
+use crate::cartridge::{Cartridge, CartridgeType};
+use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::dummy_device::DummyDevice;
 use crate::ines_loader::INesLoader;
-use crate::loader::{Loader, LoaderType};
+use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
@@ -31,10 +34,18 @@ pub struct NESConsole {
     bus: Rc<RefCell<dyn Bus>>,
     devices: Vec<Rc<RefCell<dyn BusDevice>>>,
     loader: Box<dyn Loader>,
+    rom_file: PathBuf,
+    entry_point: u16,
 }
 
 impl NESConsole {
     pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
+        self.loader.set_target_memory(self.bus.clone());
+        self.loader.load_rom(&self.rom_file)?;
+
+        self.cpu.initialize()?;
+        self.cpu.run_start_at(self.entry_point)?;
+
         Ok(())
     }
 }
@@ -43,6 +54,8 @@ impl NESConsole {
 pub enum NESConsoleError {
     BuilderError(String),
     IOError(String),
+    ProgramLoaderError(String),
+    CpuError(String),
 }
 
 impl From<std::io::Error> for NESConsoleError {
@@ -57,9 +70,21 @@ impl From<MemoryError> for NESConsoleError {
     }
 }
 
+impl From<CpuError> for NESConsoleError {
+    fn from(error: CpuError) -> Self {
+        NESConsoleError::CpuError(error.to_string())
+    }
+}
+
 impl From<BusError> for NESConsoleError {
     fn from(error: BusError) -> Self {
         NESConsoleError::BuilderError(error.to_string())
+    }
+}
+
+impl From<LoaderError> for NESConsoleError {
+    fn from(error: LoaderError) -> Self {
+        NESConsoleError::ProgramLoaderError(error.to_string())
     }
 }
 
@@ -68,6 +93,8 @@ impl Display for NESConsoleError {
         match self {
             NESConsoleError::BuilderError(s) => { write!(f, "builder error: {}", s) }
             NESConsoleError::IOError(s) => { write!(f, "i/o error: {}", s) }
+            NESConsoleError::ProgramLoaderError(s) => { write!(f, "program loader error: {}", s) }
+            NESConsoleError::CpuError(s) => { write!(f, "cpu error: {}", s) }
         }
     }
 }
@@ -80,7 +107,10 @@ pub struct NESConsoleBuilder {
     bus_type: Option<BusType>,
     device_types: Vec<BusDeviceType>,
     devices: Vec<Rc<RefCell<dyn BusDevice>>>,
-    loader_type: Option<LoaderType>
+    cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
+    loader_type: Option<LoaderType>,
+    rom_file: Option<String>,
+    entry_point: Option<u16>,
 }
 
 impl NESConsoleBuilder {
@@ -93,7 +123,10 @@ impl NESConsoleBuilder {
             bus_type: None,
             device_types: Vec::new(),
             devices: Vec::new(),
-            loader_type: None
+            cartridge: None,
+            loader_type: None,
+            rom_file: None,
+            entry_point: None,
         }
     }
 
@@ -116,6 +149,18 @@ impl NESConsoleBuilder {
 
     pub fn with_bus_device_type(mut self, device_type: BusDeviceType) -> Self {
         self.device_types.push(device_type);
+        self
+    }
+
+    pub fn with_rom_file(mut self, rom_file: String) -> Self {
+        debug!("setting rom file: {}", rom_file);
+
+        self.rom_file = Some(rom_file);
+        self
+    }
+
+    pub fn with_entry_point(mut self, entry_point: u16) -> Self {
+        self.entry_point = Some(entry_point);
         self
     }
 
@@ -231,7 +276,6 @@ impl NESConsoleBuilder {
         }
     }
 
-
     fn build_nes(mut self) -> Result<NESConsole, NESConsoleError> {
 
         let bus = self.build_bus()?;
@@ -250,14 +294,16 @@ impl NESConsoleBuilder {
             cpu: self.cpu.take().unwrap(),
             bus: self.bus.take().unwrap(),
             devices: self.devices,
-            loader
+            loader,
+            rom_file: PathBuf::from(self.rom_file.unwrap()),
+            entry_point: self.entry_point.take().unwrap()
         };
 
         Ok(console)
     }
 
     pub fn build(self) -> Result<NESConsole, NESConsoleError> {
-        if let (Some(_), Some(_), Some(_)) = (&self.bus_type, &self.cpu_type, &self.loader_type) {
+        if let (Some(_), Some(_), Some(_), Some(_), Some(_)) = (&self.bus_type, &self.cpu_type, &self.loader_type, &self.rom_file, &self.entry_point) {
             self.build_nes()
         } else {
             Err(NESConsoleError::BuilderError("missing required components".to_string()))

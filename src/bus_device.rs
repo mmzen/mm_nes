@@ -24,7 +24,19 @@ impl Display for BusDeviceType {
             BusDeviceType::WRAM(memory) => write!(f, "device type: WRAM - {}", memory),
             BusDeviceType::PPU(ppu) => write!(f, "device type: PPU - {}", ppu),
             BusDeviceType::APU(apu) => write!(f, "device type: APU - {}", apu),
-            BusDeviceType::CARTRIDGE(cartridge) => write!(f, "device type: APU - {}", cartridge)
+            BusDeviceType::CARTRIDGE(cartridge) => write!(f, "device type: CARTRIDGE - {}", cartridge)
+        }
+    }
+}
+
+impl PartialEq for BusDeviceType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (BusDeviceType::WRAM(a), BusDeviceType::WRAM(b)) => a == b,
+            (BusDeviceType::PPU(a), BusDeviceType::PPU(b)) => a == b,
+            (BusDeviceType::APU(a), BusDeviceType::APU(b)) => a == b,
+            (BusDeviceType::CARTRIDGE(a), BusDeviceType::CARTRIDGE(b)) => a == b,
+            _ => false,
         }
     }
 }
@@ -33,7 +45,7 @@ pub trait BusDevice: Memory {
     fn get_name(&self) -> String;
     fn get_device_type(&self) -> BusDeviceType;
     fn get_address_range(&self) -> (u16, u16);
-    fn is_addr_in_boundary(&self, addr: u16) -> bool;
+    fn is_addr_in_address_space(&self, addr: u16) -> bool;
 }
 
 #[cfg(test)]
@@ -45,7 +57,7 @@ mock! {
         fn get_name(&self) -> String;
         fn get_device_type(&self) -> BusDeviceType;
         fn get_address_range(&self) -> (u16, u16);
-        fn is_addr_in_boundary(&self, addr: u16) -> bool;
+        fn is_addr_in_address_space(&self, addr: u16) -> bool;
     }
 
     #[derive(Debug)]

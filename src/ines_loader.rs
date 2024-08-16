@@ -1,22 +1,26 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::process::exit;
 use std::rc::Rc;
 use log::debug;
+use crate::bus::Bus;
 use crate::loader::{Loader, LoaderError};
 use crate::memory::Memory;
 
 const HEADER_SIZE: usize = 16;
 const TRAINER_BIT_MASK: u8 = 0b00000100;
 const ROM_BLOCK_UNIT: usize = 16384;
+const CARTRIDGE_START_ADDR: u16 = 0x8000;
 
 #[derive(Debug)]
 pub struct INesLoader {
-    memory: Option<Rc<RefCell<dyn Memory>>>
+    bus: Option<Rc<RefCell<dyn Bus>>>
 }
 
 impl Loader for INesLoader {
-    fn load_rom(&mut self, path: &str) -> Result<(), LoaderError> {
+    fn load_rom(&mut self, path: &PathBuf) -> Result<(), LoaderError> {
         let mut file = File::open(path)?;
         let header = self.load_header(&mut file)?;
 
@@ -28,7 +32,7 @@ impl Loader for INesLoader {
 
         let prg_size = header.rom_size as usize * ROM_BLOCK_UNIT;
 
-        debug!("loader: ROM starting at address: 0x{}, {} bytes", prg_addr, prg_size);
+        debug!("loader: rom data starting at offset 0x{:04x}, {} bytes", prg_addr, prg_size);
         debug!("loader: mapper: {}", header.flags_6);
 
         self.load_prg_rom(&mut file, prg_addr, prg_size)?;
@@ -36,8 +40,8 @@ impl Loader for INesLoader {
         Ok(())
     }
 
-    fn set_target_memory(&mut self, memory: Rc<RefCell<dyn Memory>>) {
-        self.memory = Some(memory.clone());
+    fn set_target_memory(&mut self, bus: Rc<RefCell<dyn Bus>>) {
+        self.bus = Some(bus.clone());
     }
 }
 
@@ -65,20 +69,32 @@ impl  INesLoader  {
     }
 
     fn load_prg_rom(&mut self, file: &mut File, start_addr: usize, size: usize) -> Result<(), LoaderError> {
-        if let None = self.memory {
-            Err(LoaderError::NotConfigured("missing target memory".to_string()))
+        if let None = self.bus {
+            Err(LoaderError::NotConfigured("bus is missing".to_string()))
         } else {
-            let target_memory = self.memory.as_mut().unwrap();
 
             file.seek(SeekFrom::Start(start_addr as u64))?;
-            file.read_exact(&mut target_memory.borrow_mut().as_slice()[0x8000..0x8000 + size])?;
+
+            let mut bus = self.bus.as_ref().unwrap().borrow_mut();
+
+            debug!("loading rom data: {} bytes", size);
+
+            file.bytes()
+                .take(size)
+                .enumerate()
+                .try_for_each(|(i, byte)| {
+                    let byte = byte.unwrap();
+                    let address = CARTRIDGE_START_ADDR + i as u16;
+                    bus.write_byte(address, byte)
+                })?;
+
             Ok(())
         }
     }
 
     pub fn new() -> Box<INesLoader> {
         let loader = INesLoader {
-            memory: None,
+            bus: None,
         };
 
         Box::new(loader)
