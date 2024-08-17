@@ -10,6 +10,7 @@ use crate::cpu::{CpuType};
 use crate::loader::LoaderType;
 use crate::memory::MemoryType;
 use crate::nes_console::{NESConsoleBuilder, NESConsoleError};
+use crate::ppu::PpuType;
 
 mod cpu;
 mod cpu_6502;
@@ -29,6 +30,7 @@ mod dummy_device;
 mod cartridge;
 mod nrom128_cartridge;
 mod util;
+mod ppu_2c02;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -43,12 +45,11 @@ struct Args {
 
     #[arg(
         short = 'x',
-        long = "addr",
-        help = "set PC address at startup",
-        value_parser=maybe_hex::<u16>,
-        default_value_t = 0xc000
+        long = "pc-addr",
+        help = "set PC immediate address at startup",
+        value_parser=maybe_hex::<u16>
     )]
-    pc: u16,
+    pc: Option<u16>,
 
     #[arg(
         short = 't',
@@ -99,6 +100,7 @@ fn main() -> Result<(), NESConsoleError> {
         .with_bus_type(BusType::NESBus)
         .with_bus_device_type(BusDeviceType::WRAM(MemoryType::NESMemory))
         .with_bus_device_type(BusDeviceType::CARTRIDGE(CartridgeType::NROM128))
+        .with_bus_device_type(BusDeviceType::PPU(PpuType::NES2C02))
         .with_loader_type(LoaderType::INESV1)
         .with_rom_file(args.rom_file)
         .with_entry_point(args.pc)

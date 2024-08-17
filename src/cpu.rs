@@ -18,7 +18,8 @@ pub trait CPU {
     #[allow(dead_code)]
     fn dump_memory(&self);
     fn run(&mut self) -> Result<(), CpuError>;
-    fn run_start_at(&mut self, address: u16) -> Result<(), CpuError>;
+    fn run_with_pc_immediate(&mut self, address: u16) -> Result<(), CpuError>;
+    fn run_with_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
 }
 
 #[derive(Debug)]

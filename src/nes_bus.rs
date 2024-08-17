@@ -66,7 +66,7 @@ impl Bus for NESBus {
         let address_space = device.borrow().get_address_range();
         let address_space_size = (address_space.1 - address_space.0 + 1) as usize;
 
-        debug!("adding device {} - size: {} KB, address range: 0x{:04X} - 0x{:04X}",
+        debug!("adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
             device.borrow().get_name(), size, address_space.0, address_space.1);
 
         if address_space_size % size != 0 {

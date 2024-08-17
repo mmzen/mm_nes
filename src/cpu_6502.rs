@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
+use std::process::exit;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -142,8 +143,12 @@ impl Registers {
 
     fn safe_pc_add(&self, n: i16) -> Result<u16, CpuError> {
         let pc = self.pc;
-        let pc = pc.checked_add_signed(n)
-            .ok_or(MemoryError::OutOfRange(self.pc))?;
+
+        let pc = if n >= 0 {
+            pc.wrapping_add(n as u16)
+        } else {
+            pc.wrapping_sub((-n) as u16)
+        };
 
         Ok(pc)
     }
@@ -239,10 +244,20 @@ impl CPU for Cpu6502 {
         }
     }
 
-    fn run_start_at(&mut self, address: u16) -> Result<(), CpuError> {
+    fn run_with_pc_immediate(&mut self, address: u16) -> Result<(), CpuError> {
         self.registers.pc = address;
 
-        debug!("pc set to address 0x{:04X} ...", address);
+        debug!("pc set to effective address 0x{:04X}", self.registers.pc);
+
+        self.run()
+    }
+
+    fn run_with_pc_indirect(&mut self, address: u16) -> Result<(), CpuError> {
+        self.registers.pc = self.bus.borrow().read_word(address)?;
+
+        debug!("pc set to effective address 0x{:04X} (address: 0x{:04X})",
+            self.registers.pc, address);
+
         self.run()
     }
 }
@@ -570,7 +585,7 @@ impl Tracer {
 
         let mut b = format!("{:02X}", cpu.bus.borrow().read_byte(cpu.registers.pc)?);
         for i in 1..instruction.bytes {
-            let o = format!(" {:02X}", cpu.bus.borrow().read_byte(cpu.registers.pc + i as u16)?);
+            let o = format!(" {:02X}", cpu.bus.borrow().read_byte(cpu.registers.safe_pc_add(i as i16)?)?);
             b.push_str(&o);
         }
 

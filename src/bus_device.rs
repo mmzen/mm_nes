@@ -8,12 +8,12 @@ use crate::cartridge::CartridgeType;
 use crate::memory::{Memory, MemoryType};
 #[cfg(test)]
 use crate::memory::{MemoryError};
-use crate::ppu::PPUType;
+use crate::ppu::PpuType;
 
 #[derive(Debug, Clone)]
 pub enum BusDeviceType {
     WRAM(MemoryType),
-    PPU(PPUType),
+    PPU(PpuType),
     APU(APUType),
     CARTRIDGE(CartridgeType),
 }
