@@ -54,7 +54,7 @@ fn read_byte_out_of_range_error() {
     init();
 
     let memory_bank = create_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
-    let out_of_range_addr = DEFAULT_MEMORY_SIZE as u16 + 1;
+    let out_of_range_addr = DEFAULT_MEMORY_RANGE.1 + 1;
 
     assert_eq!(
         memory_bank.read_byte(out_of_range_addr),
@@ -67,7 +67,7 @@ fn write_byte_out_of_range_returns_error() {
     init();
 
     let mut memory_bank = create_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
-    let out_of_range_addr = DEFAULT_MEMORY_SIZE as u16 + 1;
+    let out_of_range_addr = DEFAULT_MEMORY_RANGE.1 + 1;
     let value = 0xAB;
 
     assert_eq!(

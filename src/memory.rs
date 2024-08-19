@@ -37,7 +37,6 @@ pub trait Memory: Debug {
     #[allow(dead_code)]
     fn dump(&self);
     fn size(&self) -> usize;
-    fn as_slice(&mut self) -> &mut [u8];
 }
 
 #[derive(Debug, PartialEq)]
@@ -65,4 +64,5 @@ impl From<BusError> for MemoryError {
         }
     }
 }
+
 

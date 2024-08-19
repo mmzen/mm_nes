@@ -6,6 +6,7 @@ use std::sync::Once;
 
 mod nes_bus;
 mod memory_bank;
+mod ppu_2c02;
 
 static START: Once = Once::new();
 

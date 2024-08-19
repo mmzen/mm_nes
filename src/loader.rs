@@ -3,26 +3,24 @@ use std::fmt::{Debug, Display, Formatter};
 use std::io::Error;
 use std::path::PathBuf;
 use std::rc::Rc;
-use crate::bus::Bus;
+use crate::cartridge::Cartridge;
 use crate::memory::MemoryError;
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub enum LoaderType {
     #[default]
     INESV1
 }
 
 pub trait Loader: Debug  {
-    fn load_rom(&mut self, path: &PathBuf) -> Result<(), LoaderError>;
-    fn set_target_memory(&mut self, bus: Rc<RefCell<dyn Bus>>) {}
+    fn load(&mut self, path: &PathBuf) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError>;
 }
 
 #[derive(Debug)]
 pub enum LoaderError {
     IoError(Error),
     InvalidRomFormat,
-    NotConfigured(String),
-    MemoryError(MemoryError),
+    MemoryError(MemoryError)
 }
 
 impl From<Error> for LoaderError {
@@ -42,8 +40,7 @@ impl Display for LoaderError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             LoaderError::IoError(e) => { write!(f, "i/o error {}", e) },
-            LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format") }
-            LoaderError::NotConfigured(s) => { write!(f, "missing target memory: {}", s) }
+            LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format") },
             LoaderError::MemoryError(e) => { write!(f, "memory error: {}", e) }
         }
     }

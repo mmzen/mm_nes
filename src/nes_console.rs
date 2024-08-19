@@ -9,50 +9,40 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
-use crate::dummy_device::DummyDevice;
 use crate::ines_loader::INesLoader;
 use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
-use crate::nrom128_cartridge::NROM128Cartridge;
 use crate::ppu::{PpuError, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
 const WRAM_START_ADDR: u16 = 0x0000;
 const WRAM_END_ADDR: u16 = 0x1FFF;
-const PPU_REGISTERS_START_ADDR: u16 = 0x2000;
-const PPU_REGISTERS_END_ADDR: u16 = 0x3FFF;
-const APU_REGISTERS_START_ADDR: u16 = 0x4000;
-const APU_REGISTERS_END_ADDR: u16 = 0x401F;
-const CARTRIDGE_START_ADDR: u16 = 0x8000;
-const CARTRIDGE_END_ADDR: u16 = 0xFFFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 
 pub struct NESConsole {
     cpu: Box<dyn CPU>,
-    bus: Rc<RefCell<dyn Bus>>,
-    devices: Vec<Rc<RefCell<dyn BusDevice>>>,
-    loader: Box<dyn Loader>,
-    rom_file: PathBuf,
     entry_point: Option<u16>,
 }
 
 impl NESConsole {
     pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
-        self.loader.set_target_memory(self.bus.clone());
-        self.loader.load_rom(&self.rom_file)?;
-
         self.cpu.initialize()?;
 
-        if let Some(pc) = self.entry_point {
-            self.cpu.run_with_pc_immediate(pc)?;
+        let result = if let Some(pc) = self.entry_point {
+            self.cpu.run_with_pc_immediate(pc)
         } else {
-            self.cpu.run_with_pc_indirect(DEFAULT_START_ADDRESS)?;
-        }
+            self.cpu.run_with_pc_indirect(DEFAULT_START_ADDRESS)
+        };
 
-        Ok(())
+        if let Err(error) = result {
+            self.cpu.panic(&error);
+            Err(NESConsoleError::CpuError("giving up".to_string()))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -120,10 +110,10 @@ pub struct NESConsoleBuilder {
     bus: Option<Rc<RefCell<dyn Bus>>>,
     bus_type: Option<BusType>,
     device_types: Vec<BusDeviceType>,
-    devices: Vec<Rc<RefCell<dyn BusDevice>>>,
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
     entry_point: Option<u16>,
+    cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
 }
 
 impl NESConsoleBuilder {
@@ -135,10 +125,10 @@ impl NESConsoleBuilder {
             bus: None,
             bus_type: None,
             device_types: Vec::new(),
-            devices: Vec::new(),
             loader_type: None,
             rom_file: None,
             entry_point: None,
+            cartridge: None,
         }
     }
 
@@ -177,7 +167,7 @@ impl NESConsoleBuilder {
     }
 
     fn build_cpu(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Result<Box<dyn CPU>, NESConsoleError> {
-        debug!("creating cpu: {:?}", self.cpu_type);
+        debug!("creating cpu: {:?}", self.cpu_type.clone().unwrap());
 
         let result: Result<Box<dyn CPU>, NESConsoleError> = match &self.cpu_type {
             Some(CpuType::NES6502) => {
@@ -194,7 +184,7 @@ impl NESConsoleBuilder {
     }
 
     fn build_bus(&self) -> Result<Rc<RefCell<dyn Bus>>, NESConsoleError> {
-        debug!("creating bus: {:?}", self.bus_type);
+        debug!("creating bus: {:?}", self.bus_type.clone().unwrap());
 
         let result: Result<Rc<RefCell<dyn Bus>>, NESConsoleError> = match self.bus_type {
             Some(BusType::NESBus) => {
@@ -210,12 +200,12 @@ impl NESConsoleBuilder {
         result
     }
 
-    fn build_wram_device(&self, memory_type: &MemoryType, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_wram_device(&self, memory_type: &MemoryType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating wram: {:?}", memory_type);
 
         let mut wram = match memory_type {
             MemoryType::NESMemory => {
-                MemoryBank::new(WRAM_MEMORY_SIZE, bus,(WRAM_START_ADDR, WRAM_END_ADDR))
+                MemoryBank::new(WRAM_MEMORY_SIZE, (WRAM_START_ADDR, WRAM_END_ADDR))
             },
         };
 
@@ -223,12 +213,12 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
-    fn build_ppu_device(&self, ppu_type: &PpuType, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_ppu_device(&self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
         let mut ppu = match ppu_type {
             PpuType::NES2C02 => {
-                Ppu2c02::new(bus)?
+                Ppu2c02::new(chr_rom)?
             },
         };
 
@@ -236,62 +226,54 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(ppu)))
     }
 
-    fn build_cartridge_device(&self, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_cartridge_device(&self) -> Result<Rc<RefCell<dyn Cartridge>>, NESConsoleError> {
         debug!("creating cartridge");
 
-        let cartridge = NROM128Cartridge::new(bus);
-        Ok(Rc::new(RefCell::new(cartridge)))
+        if let Some(ref rom_file) = self.rom_file {
+            let rom_path = PathBuf::from(rom_file);
+            let mut loader = self.build_loader()?;
+            let cartridge = loader.load(&rom_path)?;
+
+            Ok(cartridge)
+        } else {
+            Err(NESConsoleError::BuilderError("rom file not specified".to_string()))
+        }
     }
 
-    fn build_dummy_device(&self, device_type: &BusDeviceType, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
-        debug!("creating dummy device: {:?}", device_type);
-
-        let address_range = match device_type {
-            BusDeviceType::WRAM(_) => {
-                (WRAM_START_ADDR, WRAM_END_ADDR)
-            },
-            BusDeviceType::PPU(_) => {
-                (PPU_REGISTERS_START_ADDR, PPU_REGISTERS_END_ADDR)
-            },
-            BusDeviceType::APU(_) => {
-                (APU_REGISTERS_START_ADDR, APU_REGISTERS_END_ADDR)
-            },
-            BusDeviceType::CARTRIDGE(_) => {
-                (CARTRIDGE_START_ADDR, CARTRIDGE_END_ADDR)
-            }
-        };
-
-        let dummy = DummyDevice::new(bus, device_type.clone(), address_range);
-        Ok(Rc::new(RefCell::new(dummy)))
-    }
-
-
-    fn build_device(&self, device_type: &BusDeviceType, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType, bus: Rc<RefCell<dyn Bus>>) -> Result<(), NESConsoleError> {
         debug!("creating device: {:?}", device_type);
 
-        let result = match device_type {
-            BusDeviceType::WRAM(memory_type) => {
-                self.build_wram_device(memory_type, bus)
-            },
-
-            BusDeviceType::PPU(pputype) => {
-                self.build_ppu_device(pputype, bus)
-            },
-
-            BusDeviceType::APU(_) => {
-                self.build_dummy_device(device_type, bus)
-            },
-
+        match device_type {
             BusDeviceType::CARTRIDGE(_) => {
-                self.build_cartridge_device(bus)
-            }
+                let cartridge = self.build_cartridge_device()?;
+                bus.borrow_mut().add_device(cartridge.borrow().get_prg_rom())?;
+                self.cartridge = Some(cartridge);
+            },
+
+            BusDeviceType::WRAM(memory_type) => {
+                let memory = self.build_wram_device(memory_type)?;
+                bus.borrow_mut().add_device(memory)?;
+            },
+
+            BusDeviceType::PPU(ppu_type) => {
+                let chr_rom = self
+                    .cartridge
+                    .as_ref()
+                    .map(|cartridge| cartridge.borrow().get_chr_rom())
+                    .ok_or(NESConsoleError::BuilderError("no cartridge to load".to_string()))?;
+
+                let ppu = self.build_ppu_device(ppu_type, chr_rom)?;
+                bus.borrow_mut().add_device(ppu)?;
+            },
+
+            _ => {}
         };
 
-        result
+        Ok(())
     }
 
     fn build_loader(&self) -> Result<Box<dyn Loader>, NESConsoleError> {
-        debug!("creating loader: {:?}", self.loader_type);
+        debug!("creating loader: {:?}", self.loader_type.clone().unwrap());
 
         match self.loader_type {
             None => {
@@ -310,19 +292,17 @@ impl NESConsoleBuilder {
         self.bus = Some(bus.clone());
         self.cpu = Some(self.build_cpu(bus.clone())?);
 
-        for device_type in &self.device_types {
-            let device = self.build_device(device_type, bus.clone())?;
-            bus.borrow_mut().add_device(device.clone())?;
+        let device_types = self.device_types.clone();
+
+        for device_type in device_types {
+            self.build_device_and_connect_to_bus(&device_type, bus.clone())?;
         }
 
-        let loader = self.build_loader()?;
+        let cpu = self.cpu.take()
+            .ok_or(NESConsoleError::BuilderError("cpu missing".to_string()))?;
 
         let console = NESConsole {
-            cpu: self.cpu.take().unwrap(),
-            bus: self.bus.take().unwrap(),
-            devices: self.devices,
-            loader,
-            rom_file: PathBuf::from(self.rom_file.unwrap()),
+            cpu,
             entry_point: self.entry_point.take()
         };
 

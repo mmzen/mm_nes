@@ -4,7 +4,6 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
-use std::process::exit;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -1280,7 +1279,7 @@ impl Instruction {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
-    fn dcp__dec_plus_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
+    fn dcp_dec_plus_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 
@@ -1333,7 +1332,7 @@ impl Instruction {
         Ok(0)
     }
 
-    fn sax_axs__aax(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+    fn sax_axs_aax(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
         let result = cpu.registers.a & cpu.registers.x;
 
@@ -1341,7 +1340,7 @@ impl Instruction {
         Ok(0)
     }
 
-    fn sbx_cmp_and_dex_at_once__sets_flags_like_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
+    fn sbx_cmp_and_dex_at_once_sets_flags_like_cmp(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
         Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
     }
 

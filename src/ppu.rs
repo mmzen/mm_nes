@@ -2,7 +2,6 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::bus::BusError;
-use crate::cpu::CpuError;
 use crate::memory::MemoryError;
 
 #[derive(Default, Debug, Clone)]
@@ -36,7 +35,8 @@ pub trait PPU {
 #[derive(Debug)]
 pub enum PpuError {
     BusError(BusError),
-    MemoryError(MemoryError)
+    MemoryError(MemoryError),
+    RegisterError(u16),
 }
 
 impl Error for PpuError {}
@@ -46,6 +46,7 @@ impl Display for PpuError {
         match self {
             PpuError::BusError(e) => { write!(f, "bus error: {}", e) }
             PpuError::MemoryError(e) => { write!(f, "memory error: {}", e) }
+            PpuError::RegisterError(a) => { write!(f, "register access error at address 0x{:04X}", a) }
         }
     }
 }

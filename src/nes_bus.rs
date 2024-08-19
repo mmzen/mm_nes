@@ -54,10 +54,6 @@ impl Memory for NESBus {
     fn size(&self) -> usize {
         BUS_ADDRESSABLE_SIZE
     }
-
-    fn as_slice(&mut self) -> &mut [u8] {
-        panic!("can not cast to mutable slice for NESBus");
-    }
 }
 
 impl Bus for NESBus {

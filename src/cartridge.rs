@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 use crate::bus_device::BusDevice;
 
 #[derive(Default, Debug, Clone)]
@@ -28,4 +30,7 @@ impl PartialEq for CartridgeType {
     }
 }
 
-pub trait Cartridge: BusDevice {}
+pub trait Cartridge: BusDevice {
+    fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
+    fn get_prg_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
+}

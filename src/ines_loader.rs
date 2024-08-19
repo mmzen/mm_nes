@@ -4,21 +4,20 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::rc::Rc;
 use log::debug;
-use crate::bus::Bus;
+use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
+use crate::nrom128_cartridge::NROM128Cartridge;
 
 const HEADER_SIZE: usize = 16;
 const TRAINER_BIT_MASK: u8 = 0b00000100;
-const ROM_BLOCK_UNIT: usize = 16384;
-const CARTRIDGE_START_ADDR: u16 = 0x8000;
+const PRG_ROM_BLOCK_UNIT: usize = 16384;
+const CHR_ROM_BLOCK_UNIT: usize = 8192;
 
 #[derive(Debug)]
-pub struct INesLoader {
-    bus: Option<Rc<RefCell<dyn Bus>>>
-}
+pub struct INesLoader;
 
 impl Loader for INesLoader {
-    fn load_rom(&mut self, path: &PathBuf) -> Result<(), LoaderError> {
+    fn load(&mut self, path: &PathBuf) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
         let mut file = File::open(path)?;
         let header = self.load_header(&mut file)?;
 
@@ -28,22 +27,24 @@ impl Loader for INesLoader {
             HEADER_SIZE
         };
 
-        let prg_size = header.rom_size as usize * ROM_BLOCK_UNIT;
+        let prg_rom_size = header.prg_rom as usize * PRG_ROM_BLOCK_UNIT;
+        let chr_rom_size = header.chr_rom as usize * CHR_ROM_BLOCK_UNIT;
 
-        debug!("loader: rom data starting at offset 0x{:04x}, {} bytes", prg_addr, prg_size);
+        let chr_addr = prg_addr + prg_rom_size;
+
+        debug!("loader: prg rom data starting at offset 0x{:04x}, {} bytes", prg_addr, prg_rom_size);
+        debug!("loader: chr rom data starting at offset 0x{:04x}, {} bytes", chr_addr, chr_rom_size);
         debug!("loader: mapper: {}", header.flags_6);
 
-        self.load_prg_rom(&mut file, prg_addr, prg_size)?;
+        File::seek(&mut file, SeekFrom::Start(prg_addr as u64))?;
+        let cartridge = self.build_cartridge(file, prg_rom_size, chr_rom_size)?;
 
-        Ok(())
-    }
-
-    fn set_target_memory(&mut self, bus: Rc<RefCell<dyn Bus>>) {
-        self.bus = Some(bus.clone());
+        Ok(cartridge)
     }
 }
 
 impl  INesLoader  {
+
     fn load_header(&mut self, file: &mut File) -> Result<INesRomHeader, LoaderError> {
         let mut buffer = vec![0u8; HEADER_SIZE];
         file.read_exact(&mut buffer)?;
@@ -66,33 +67,15 @@ impl  INesLoader  {
         }
     }
 
-    fn load_prg_rom(&mut self, file: &mut File, start_addr: usize, size: usize) -> Result<(), LoaderError> {
-        if let None = self.bus {
-            Err(LoaderError::NotConfigured("bus is missing".to_string()))
-        } else {
+    fn build_cartridge(&self, file: File, prg_rom_size: usize, chr_rom_size: usize) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
+        debug!("creating cartridge");
 
-            file.seek(SeekFrom::Start(start_addr as u64))?;
-
-            let mut bus = self.bus.as_ref().unwrap().borrow_mut();
-
-            debug!("loading rom data: {} bytes", size);
-
-            file.bytes()
-                .take(size)
-                .enumerate()
-                .try_for_each(|(i, byte)| {
-                    let byte = byte.unwrap();
-                    let address = CARTRIDGE_START_ADDR + i as u16;
-                    bus.write_byte(address, byte)
-                })?;
-
-            Ok(())
-        }
+        let cartridge = NROM128Cartridge::new(file.bytes(), prg_rom_size, chr_rom_size)?;
+        Ok(Rc::new(RefCell::new(cartridge)))
     }
 
     pub fn new() -> Box<INesLoader> {
         let loader = INesLoader {
-            bus: None,
         };
 
         Box::new(loader)
@@ -103,8 +86,8 @@ impl  INesLoader  {
 #[derive(Debug)]
 struct INesRomHeader {
     preamble: [u8; 4],
-    rom_size: u8,
-    ram_size: u8,
+    prg_rom: u8,
+    chr_rom: u8,
     flags_6: u8,
     flags_7: u8,
     flags_8: u8,
@@ -118,8 +101,8 @@ impl INesRomHeader {
 
         INesRomHeader {
             preamble: [bytes[0], bytes[1], bytes[2], bytes[3]],
-            rom_size: bytes[4],
-            ram_size: bytes[5],
+            prg_rom: bytes[4],
+            chr_rom: bytes[5],
             flags_6: bytes[6],
             flags_7: bytes[7],
             flags_8: bytes[8],

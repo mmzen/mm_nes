@@ -1,7 +1,4 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use log::debug;
-use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
 use crate::memory::MemoryType::NESMemory;
@@ -12,7 +9,6 @@ const DEVICE_NAME: &str = "Memory Bank";
 #[derive(Debug)]
 pub struct MemoryBank {
     memory: Vec<u8>,
-    bus: Rc<RefCell<dyn Bus>>,
     address_space: (u16, u16),
     address_space_size: usize,
     device_type: BusDeviceType,
@@ -21,7 +17,7 @@ pub struct MemoryBank {
 impl Memory for MemoryBank {
     #[allow(dead_code)]
     fn initialize(&mut self) -> Result<usize, MemoryError> {
-        debug!("initializing memory: {} kB to 0x{:04X}, 0x{:04X}", self.memory.len() / 1024, MEMORY_BASE_ADDRESS, MEMORY_BASE_ADDRESS + self.memory.len() - 1);
+        debug!("initializing memory: {} B to 0x{:04X}, 0x{:04X}", self.memory.len(), MEMORY_BASE_ADDRESS, MEMORY_BASE_ADDRESS + self.memory.len() - 1);
 
         self.memory.fill(0x00);
         Ok(self.size())
@@ -85,10 +81,6 @@ impl Memory for MemoryBank {
     fn size(&self) -> usize {
         self.memory.len()
     }
-
-    fn as_slice(&mut self) -> &mut [u8] {
-        self.memory.as_mut_slice()
-    }
 }
 
 impl BusDevice for MemoryBank {
@@ -110,12 +102,11 @@ impl BusDevice for MemoryBank {
 }
 
 impl MemoryBank {
-    pub(crate) fn new(size: usize, bus: Rc<RefCell<dyn Bus>>, address_range: (u16, u16)) -> Self {
+    pub(crate) fn new(size: usize, address_range: (u16, u16)) -> Self {
         let address_space_size = (address_range.1 - address_range.0 + 1) as usize;
 
         MemoryBank {
             memory: vec![0x00; size],
-            bus,
             address_space: address_range,
             address_space_size,
             device_type: BusDeviceType::WRAM(NESMemory),

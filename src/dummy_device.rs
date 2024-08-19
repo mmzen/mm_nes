@@ -1,25 +1,19 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use log::info;
-use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
 
 const DEFAULT_CONTENT: u8 = 0x00;
-const DEVICE_NAME: &str = "Dummy Device";
 
 #[derive(Debug)]
 pub struct DummyDevice {
-    bus: Rc<RefCell<dyn Bus>>,
     device_type: BusDeviceType,
     address_range: (u16, u16),
     memory: Vec<u8>,
 }
 
 impl DummyDevice {
-    pub fn new(bus: Rc<RefCell<dyn Bus>>, device_type: BusDeviceType, address_range:(u16, u16)) -> Self {
+    pub fn new(device_type: BusDeviceType, address_range:(u16, u16)) -> Self {
         DummyDevice {
-            bus,
             device_type,
             address_range,
             memory: vec![DEFAULT_CONTENT],
@@ -72,9 +66,5 @@ impl Memory for DummyDevice {
 
     fn size(&self) -> usize {
         1
-    }
-
-    fn as_slice(&mut self) -> &mut [u8] {
-        self.memory.as_mut_slice()
     }
 }

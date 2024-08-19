@@ -1,65 +1,142 @@
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
-use log::info;
-use crate::bus::{Bus, BusError};
+use log::{debug, info};
+use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuType};
 
-const PPU_WRAM_SIZE: usize = 2 * 1024;
-const PPU_WRAM_ADDR_START: u16 = 0x0000;
-const PPU_WRAM_ADDR_END: u16 = 0x3FFF;
 const PPU_NAME: &str = "PPU 2C02";
-const PPU_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
-const PPU_MEMORY_SIZE: usize = 8;
 
-pub struct Ppu2c02 {
-    register: Register,
-    internal_bus: Rc<RefCell<dyn Bus>>,
-    bus: Rc<RefCell<dyn Bus>>,
-    address_space: (u16, u16),
-    address_space_size: usize,
-    device_type: BusDeviceType,
+const CHR_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
+const NAME_TABLE_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x2FFF);
+const NAME_TABLE_SIZE: usize = 2 * 1024;
+const PALETTE_ADDRESS_SPACE: (u16, u16) = (0x3F00, 0x3FFF);
+const PALETTE_SIZE: usize = 32;
+const V_INCR_GOING_ACROSS: u16 = 1;
+const V_INCR_GOING_DOWN: u16 = 32;
+const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
+const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
+
+#[derive(Debug, Copy, Clone)]
+enum ControlFlag {
+    BaseNameTableAddr1 = 0x01,
+    BaseNameTableAddr2 = 0x02,
+    VramIncrement = 0x04,
+    SpritePatternAddr = 0x08,
+    BackgroundPatternTableAddr = 0x10,
+    SpriteSize = 0x20,
+    MasterSlaveSelect = 0x40,
+    GenerateNmi = 0x80
+}
+
+impl ControlFlag {
+    fn bits(self) -> u8 {
+        self as u8
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum LatchState {
+    HIGH,
+    LOW
+}
+
+#[derive(Debug)]
+struct LatchRegister {
+    value: u16,
+    latch: LatchState
+}
+
+impl LatchRegister {
+
+    fn new() -> Self {
+        LatchRegister {
+            value: 0,
+            latch: LatchState::HIGH
+        }
+    }
+
+    fn latch(&mut self) {
+        if self.latch == LatchState::LOW {
+            self.latch = LatchState::HIGH
+        } else {
+            self.latch = LatchState::LOW;
+        }
+    }
+
+    fn increment(&mut self, value: u16) -> u16 {
+        self.value.wrapping_add(value)
+    }
+
+    fn write(&mut self, value: u8) {
+        match self.latch {
+            LatchState::LOW => {
+                self.value = (self.value & 0xFF00) | (value as u16);
+            },
+            LatchState::HIGH => {
+                self.value = (self.value & 0x00FF) | (value as u16) << 8 ;
+            }
+        }
+        self.latch();
+    }
+
+    fn read(&self) -> u8 {
+        match self.latch {
+            LatchState::LOW => {
+                (self.value & 0x00FF) as u8
+            },
+            LatchState::HIGH => {
+                (self.value & 0xFF00) as u8
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Register {
-    controller: u8,
+    control: u8,
     mask: u8,
     status: u8,
     oam_addr: u8,
     oam_data: u8,
     scroll: u8,
-    addr: u16,
-    data: u8,
-    oam_dma: u8
+    addr: u8,
+    data: u8
 }
 
 impl Register {
     fn new() -> Self {
         Register {
-            controller: 0,
+            control: 0,
             mask: 0,
             status: 0,
             oam_addr: 0,
             oam_data: 0,
             scroll: 0,
             addr: 0,
-            data: 0,
-            oam_dma: 0
+            data: 0
         }
     }
 }
 
+pub struct Ppu2c02 {
+    register: RefCell<Register>,
+    bus: Box<dyn Bus>,
+    v: RefCell<LatchRegister>
+}
+
 impl PPU for Ppu2c02 {
     fn reset(&mut self) -> Result<(), PpuError> {
-        self.register.controller = 0;
-        self.register.mask = 0;
-        self.register.scroll = 0;
-        self.register.data = 0;
+        self.register.borrow_mut().control = 0;
+        self.register.borrow_mut().mask = 0;
+        self.register.borrow_mut().scroll = 0;
+        self.register.borrow_mut().data = 0;
+
+        self.v.borrow_mut().write(0);
         Ok(())
     }
 
@@ -75,23 +152,62 @@ impl PPU for Ppu2c02 {
 
 impl Memory for Ppu2c02 {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
-        Ok(PPU_MEMORY_SIZE)
+        Ok(PPU_EXTERNAL_MEMORY_SIZE)
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        self.internal_bus.borrow_mut().read_byte(addr)
+        let effective_addr = PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1));
+
+        let value = match effective_addr {
+            0x2000 => self.register.borrow().control,
+            0x2001 => self.register.borrow().mask,
+            0x2002 => self.register.borrow().status,
+            0x2003 => self.register.borrow().oam_addr,
+            0x2004 => self.register.borrow().oam_data,
+            0x2005 => self.register.borrow().scroll,
+            0x2006 => self.v.borrow().read(),
+            0x2007 => {
+                let previous_read = self.register.borrow().data;
+                let video_addr = self.v.borrow().value;
+                let incr = self.get_v_increment_value();
+
+                self.register.borrow_mut().data = self.bus.read_byte(video_addr)?;
+                self.v.borrow_mut().increment(incr);
+
+                previous_read
+            },
+            _ => return Err(MemoryError::OutOfRange(effective_addr)),
+        };
+
+        Ok(value)
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        self.internal_bus.borrow_mut().write_byte(addr, value)
+        let effective_addr = PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1));
+
+        match effective_addr {
+            0x2000 => self.register.borrow_mut().control = value,
+            0x2001 => self.register.borrow_mut().mask = value,
+            0x2002 => self.register.borrow_mut().status = value,
+            0x2003 => self.register.borrow_mut().oam_addr = value,
+            0x2004 => self.register.borrow_mut().oam_data = value,
+            0x2005 => self.register.borrow_mut().scroll = value,
+            0x2006 => {
+                self.v.borrow_mut().write(value)
+            },
+            0x2007 => self.register.borrow_mut().data = value,
+            _ => return Err(MemoryError::OutOfRange(effective_addr)),
+        };
+
+        Ok(())
     }
 
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
-        self.internal_bus.borrow_mut().read_word(addr)
+        Err(MemoryError::OutOfRange(addr))
     }
 
-    fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError> {
-        self.internal_bus.borrow_mut().write_word(addr, value)
+    fn write_word(&mut self, addr: u16, _: u16) -> Result<(), MemoryError> {
+        Err(MemoryError::OutOfRange(addr))
     }
 
     fn dump(&self) {
@@ -99,11 +215,7 @@ impl Memory for Ppu2c02 {
     }
 
     fn size(&self) -> usize {
-        PPU_MEMORY_SIZE
-    }
-
-    fn as_slice(&mut self) -> &mut [u8] {
-        todo!()
+        PPU_EXTERNAL_MEMORY_SIZE
     }
 }
 
@@ -119,35 +231,85 @@ impl BusDevice for Ppu2c02 {
     }
 
     fn get_device_type(&self) -> BusDeviceType {
-        self.device_type.clone()
+        BusDeviceType::PPU(PpuType::NES2C02)
     }
 
     fn get_address_range(&self) -> (u16, u16) {
-        self.address_space
+        PPU_EXTERNAL_ADDRESS_SPACE
     }
 
     fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        self.address_space.0 <= addr && addr <= self.address_space.1
+        PPU_EXTERNAL_ADDRESS_SPACE.0 <= addr && addr <= PPU_EXTERNAL_ADDRESS_SPACE.1
     }
 }
 
 impl Ppu2c02 {
-    pub fn new(bus: Rc<RefCell<dyn Bus>>) -> Result<Self, PpuError> {
-        let internal_bus = Rc::new(RefCell::new(NESBus::new()));
-        let memory = Rc::new(RefCell::new(MemoryBank::new(PPU_WRAM_SIZE, bus.clone(), (PPU_WRAM_ADDR_START, PPU_WRAM_ADDR_END))));
+    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>) -> Result<Self, PpuError> {
+        let mut bus = Box::new(NESBus::new());
+
+        let memory = Rc::new(RefCell::new(
+            MemoryBank::new(NAME_TABLE_SIZE, NAME_TABLE_ADDRESS_SPACE)
+        ));
+
+        let palette_table = Rc::new(RefCell::new(
+            MemoryBank::new(PALETTE_SIZE, PALETTE_ADDRESS_SPACE)
+        ));
 
         memory.borrow_mut().initialize()?;
-        internal_bus.borrow_mut().add_device(memory)?;
+        palette_table.borrow_mut().initialize()?;
+
+        bus.add_device(memory)?;
+        bus.add_device(palette_table)?;
+        bus.add_device(chr_rom)?;
 
         let ppu = Ppu2c02 {
-            register: Register::new(),
-            internal_bus,
+            register: RefCell::new(Register::new()),
             bus,
-            address_space: PPU_ADDRESS_SPACE,
-            address_space_size: PPU_MEMORY_SIZE,
-            device_type: BusDeviceType::PPU(PpuType::NES2C02)
+            v: RefCell::new(LatchRegister::new())
         };
 
         Ok(ppu)
+    }
+
+    #[cfg(test)]
+    pub fn get_register_value(&self, name: &str) -> u8 {
+        match name {
+            "controller" => self.register.borrow().control,
+            "mask" => self.register.borrow().mask,
+            "status" => self.register.borrow().status,
+            "oam_addr" => self.register.borrow().oam_addr,
+            "oam_data" => self.register.borrow().oam_data,
+            "scroll" => self.register.borrow().scroll,
+            "addr" => self.v.borrow().read(),
+            "data" => self.register.borrow().data,
+            _ => 0,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn get_v_value(&self) -> u16 {
+        self.v.borrow().value
+    }
+
+    fn set_controller_flag(&mut self, flag: ControlFlag, value: bool) {
+        if value {
+            debug!("setting control flag: {:?}, {:04X}", flag, flag.bits());
+            self.register.borrow_mut().control |= flag.bits();
+        } else {
+            debug!("clearing status flag: {:?}, {:04X}", flag, flag.bits());
+            self.register.borrow_mut().control &= !flag.bits();
+        }
+    }
+
+    fn get_control(&self, flag: ControlFlag) -> bool {
+        debug!("control flag: {:?}, {:04X}", flag, flag.bits());
+        (self.register.borrow().control & flag.bits()) != 0
+    }
+
+    fn get_v_increment_value(&self) -> u16 {
+        match self.get_control(ControlFlag::VramIncrement) {
+            false => V_INCR_GOING_ACROSS,
+            true => V_INCR_GOING_DOWN,
+        }
     }
 }

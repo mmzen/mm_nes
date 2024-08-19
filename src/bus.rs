@@ -9,7 +9,7 @@ use crate::memory::Memory;
 #[cfg(test)]
 use crate::memory::{MemoryError};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub enum BusType {
     #[default]
     NESBus

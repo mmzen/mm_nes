@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
 
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub enum CpuType {
     #[default]
     NES6502
