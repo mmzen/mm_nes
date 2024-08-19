@@ -8,6 +8,7 @@ use crate::cartridge::Cartridge;
 use crate::cartridge::CartridgeType::NROM128;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
+use crate::ppu::PpuNameTableMirroring;
 
 const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
 const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
@@ -21,7 +22,8 @@ pub struct NROM128Cartridge {
     chr_rom: Rc<RefCell<MemoryBank>>,
     device_type: BusDeviceType,
     prg_rom_size: usize,
-    chr_rom_size: usize
+    chr_rom_size: usize,
+    mirroring: PpuNameTableMirroring
 }
 
 impl NROM128Cartridge {
@@ -43,7 +45,7 @@ impl NROM128Cartridge {
         Ok(())
     }
 
-    pub fn new<I>(mut data: I, prg_rom_size: usize, chr_rom_size: usize) -> Result<Self, MemoryError>
+    pub fn new<I>(mut data: I, prg_rom_size: usize, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<Self, MemoryError>
     where
         I: Iterator<Item = io::Result<u8>>,{
 
@@ -62,6 +64,7 @@ impl NROM128Cartridge {
             device_type: BusDeviceType::CARTRIDGE(NROM128),
             prg_rom_size,
             chr_rom_size,
+            mirroring,
         };
 
         Ok(cartridge)
@@ -128,5 +131,9 @@ impl Cartridge for NROM128Cartridge {
 
     fn get_prg_rom(&self) -> Rc<RefCell<dyn BusDevice>> {
         self.prg_rom.clone()
+    }
+
+    fn get_mirroring(&self) -> PpuNameTableMirroring {
+        self.mirroring.clone()
     }
 }

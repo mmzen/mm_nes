@@ -7,6 +7,7 @@ use log::debug;
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::nrom128_cartridge::NROM128Cartridge;
+use crate::ppu::PpuNameTableMirroring;
 
 const HEADER_SIZE: usize = 16;
 const TRAINER_BIT_MASK: u8 = 0b00000100;
@@ -29,15 +30,17 @@ impl Loader for INesLoader {
 
         let prg_rom_size = header.prg_rom as usize * PRG_ROM_BLOCK_UNIT;
         let chr_rom_size = header.chr_rom as usize * CHR_ROM_BLOCK_UNIT;
+        let mirroring = if header.flags_6 & 0x01 == 0 { PpuNameTableMirroring::Horizontal } else { PpuNameTableMirroring::Vertical };
 
         let chr_addr = prg_addr + prg_rom_size;
 
         debug!("loader: prg rom data starting at offset 0x{:04x}, {} bytes", prg_addr, prg_rom_size);
         debug!("loader: chr rom data starting at offset 0x{:04x}, {} bytes", chr_addr, chr_rom_size);
+        debug!("loader: name tables mirroring: {:?}", mirroring);
         debug!("loader: mapper: {}", header.flags_6);
 
         File::seek(&mut file, SeekFrom::Start(prg_addr as u64))?;
-        let cartridge = self.build_cartridge(file, prg_rom_size, chr_rom_size)?;
+        let cartridge = self.build_cartridge(file, prg_rom_size, chr_rom_size, mirroring)?;
 
         Ok(cartridge)
     }
@@ -67,10 +70,10 @@ impl  INesLoader  {
         }
     }
 
-    fn build_cartridge(&self, file: File, prg_rom_size: usize, chr_rom_size: usize) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
+    fn build_cartridge(&self, file: File, prg_rom_size: usize, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
         debug!("creating cartridge");
 
-        let cartridge = NROM128Cartridge::new(file.bytes(), prg_rom_size, chr_rom_size)?;
+        let cartridge = NROM128Cartridge::new(file.bytes(), prg_rom_size, chr_rom_size, mirroring)?;
         Ok(Rc::new(RefCell::new(cartridge)))
     }
 

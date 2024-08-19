@@ -4,6 +4,12 @@ use std::fmt::{Display, Formatter};
 use crate::bus::BusError;
 use crate::memory::MemoryError;
 
+#[derive(Debug, Clone)]
+pub enum PpuNameTableMirroring {
+    Vertical,
+    Horizontal
+}
+
 #[derive(Default, Debug, Clone)]
 pub enum PpuType {
     #[default]

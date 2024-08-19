@@ -3,6 +3,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use crate::bus_device::BusDevice;
+use crate::ppu::PpuNameTableMirroring;
 
 #[derive(Default, Debug, Clone)]
 pub enum CartridgeType {
@@ -33,4 +34,5 @@ impl PartialEq for CartridgeType {
 pub trait Cartridge: BusDevice {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
     fn get_prg_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
+    fn get_mirroring(&self) -> PpuNameTableMirroring;
 }

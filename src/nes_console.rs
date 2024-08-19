@@ -14,7 +14,7 @@ use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
-use crate::ppu::{PpuError, PpuType};
+use crate::ppu::{PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
@@ -213,12 +213,12 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
-    fn build_ppu_device(&self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_ppu_device(&self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
         let mut ppu = match ppu_type {
             PpuType::NES2C02 => {
-                Ppu2c02::new(chr_rom)?
+                Ppu2c02::new(chr_rom, mirroring)?
             },
         };
 
@@ -262,7 +262,13 @@ impl NESConsoleBuilder {
                     .map(|cartridge| cartridge.borrow().get_chr_rom())
                     .ok_or(NESConsoleError::BuilderError("no cartridge to load".to_string()))?;
 
-                let ppu = self.build_ppu_device(ppu_type, chr_rom)?;
+                let mirroring = self
+                    .cartridge
+                    .as_ref()
+                    .map(|cartridge| cartridge.borrow().get_mirroring())
+                    .ok_or(NESConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
+
+                let ppu = self.build_ppu_device(ppu_type, chr_rom, mirroring)?;
                 bus.borrow_mut().add_device(ppu)?;
             },
 

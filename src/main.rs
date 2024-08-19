@@ -31,6 +31,8 @@ mod cartridge;
 mod nrom128_cartridge;
 mod util;
 mod ppu_2c02;
+mod palette;
+mod palette_2c02;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
