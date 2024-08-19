@@ -1,0 +1,27 @@
+image: rust:latest
+
+options:
+  max-time: 2
+
+pipelines:
+  default:
+    - step:
+        caches:
+          - cargo-home
+          - cargo-target
+        name: Build
+        script:
+          - rustup update
+          - cargo build --verbose --features full
+    - step:
+        caches:
+          - cargo-home
+          - cargo-target
+        name: Test
+        script:
+          - rustup update
+          - cargo test --verbose --features full,in_container
+definitions:
+  caches:
+    cargo-home: $HOME/.cargo
+    cargo-target: target
