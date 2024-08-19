@@ -12,7 +12,7 @@ pipelines:
         name: Build
         script:
           - rustup update
-          - cargo build --verbose --features full
+          - cargo build --verbose
     - step:
         caches:
           - cargo-home
@@ -20,7 +20,7 @@ pipelines:
         name: Test
         script:
           - rustup update
-          - cargo test --verbose --features full,in_container
+          - cargo test --verbose
 definitions:
   caches:
     cargo-home: $HOME/.cargo
