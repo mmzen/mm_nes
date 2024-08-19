@@ -140,11 +140,6 @@ impl PPU for Ppu2c02 {
         Ok(())
     }
 
-    fn initialize(&mut self) -> Result<(), PpuError> {
-        info!("initializing PPU");
-        Ok(())
-    }
-
     fn panic(&self, _: &PpuError) {
         todo!()
     }
@@ -152,6 +147,7 @@ impl PPU for Ppu2c02 {
 
 impl Memory for Ppu2c02 {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
+        info!("initializing PPU");
         Ok(PPU_EXTERNAL_MEMORY_SIZE)
     }
 

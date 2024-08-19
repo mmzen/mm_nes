@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use crate::bus::MockBusStub;
 use crate::bus_device::BusDevice;
 use crate::memory::{Memory, MemoryError};
@@ -9,9 +7,10 @@ use crate::tests::init;
 const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x1000, 0x1FFF);
 const DEFAULT_MEMORY_SIZE: usize = 4096;
 
-fn check_memory(mut memory: MemoryBank) {
-    for byte in memory.as_slice().iter() {
-        assert_eq!(*byte, 0x00);
+fn check_memory(memory: MemoryBank) {
+    for i in 0..memory.size() {
+        let byte = memory.read_byte(i as u16).unwrap();
+        assert_eq!(byte, 0x00);
     }
 }
 
@@ -21,11 +20,7 @@ fn create_bus() -> MockBusStub {
 }
 
 fn create_memory_bank(size: usize, address_range: (u16, u16)) -> MemoryBank {
-    let bus = Rc::new(RefCell::new(create_bus()));
-    let mut memory_bank = MemoryBank::new(size, bus, address_range);
-
-
-    memory_bank
+    MemoryBank::new(size, address_range)
 }
 
 #[test]

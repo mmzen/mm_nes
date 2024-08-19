@@ -1,6 +1,4 @@
-use std::process::exit;
-use log::{debug, LevelFilter};
-use once_cell::sync::Lazy;
+use log::LevelFilter;
 use simplelog::{Config, TestLogger};
 use std::sync::Once;
 

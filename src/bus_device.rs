@@ -70,7 +70,6 @@ mock! {
         #[allow(dead_code)]
         fn dump(&self);
         fn size(&self) -> usize;
-        fn as_slice(&mut self) -> &mut [u8];
     }
 }
 

@@ -28,7 +28,6 @@ impl PartialEq for PpuType {
 
 pub trait PPU {
     fn reset(&mut self) -> Result<(), PpuError>;
-    fn initialize(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
 }
 

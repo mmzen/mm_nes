@@ -1,13 +1,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
-use crate::bus_device::BusDevice;
-use crate::memory::{Memory, MemoryError};
+use crate::bus_device::{BusDevice, BusDeviceType, MockBusDeviceStub};
+use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::tests::init;
 
-const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x2000, 0x3FFF);
-const DEFAULT_MEMORY_SIZE: usize = 8;
+const CHR_MEMORY_RANGE: (u16, u16) = (0x0000, 0x1FFF);
+const CHR_MEMORY_SIZE: usize = 8192;
+const CHR_NAME: &str = "Test CHR-ROM";
+const PPU_EXTERNAL_MEMORY_RANGE: (u16, u16) = (0x2000, 0x3FFF);
+const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 
 fn check_memory(_: Ppu2c02) {
 }
@@ -18,10 +21,13 @@ fn create_bus() -> MockBusStub {
 }
 
 fn create_ppu() -> Ppu2c02 {
-    let bus = Rc::new(RefCell::new(create_bus()));
-    let mut ppu = Ppu2c02::new(bus);
-    
-    ppu.unwrap()
+    let mut chr_rom = MockBusDeviceStub::new();
+
+    chr_rom.expect_size().returning(|| CHR_MEMORY_SIZE);
+    chr_rom.expect_get_address_range().returning(|| CHR_MEMORY_RANGE);
+    chr_rom.expect_get_name().returning(|| CHR_NAME.to_string());
+
+    Ppu2c02::new(Rc::new(RefCell::new(chr_rom))).unwrap()
 }
 
 #[test]
@@ -29,7 +35,7 @@ fn test_initialize_ppu() {
     init();
 
     let mut ppu = create_ppu();
-    assert_eq!(ppu.initialize().unwrap(), DEFAULT_MEMORY_SIZE);
+    assert_eq!(ppu.initialize().unwrap(), PPU_EXTERNAL_MEMORY_SIZE);
 
     check_memory(ppu)
 }

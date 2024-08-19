@@ -115,7 +115,7 @@ fn read_byte_request_for_valid_address() {
     let expected_addr = 0x0000;
     let expected_value = 0xAB;
 
-    let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::Read, RequestData::Byte(expected_value));
+    let nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::Read, RequestData::Byte(expected_value));
 
     let result = nes_bus.read_byte(expected_addr);
 
@@ -158,7 +158,7 @@ fn read_word_request_for_valid_address() {
     let expected_addr = 0x0000;
     let expected_value = 0xABCD;
 
-    let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::Read, RequestData::Word(expected_value));
+    let nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::Read, RequestData::Word(expected_value));
 
     let result = nes_bus.read_word(expected_addr);
     assert_eq!(result, Ok(expected_value));
@@ -197,7 +197,7 @@ fn read_write_word_request_for_valid_address() {
 fn returns_size() {
     init();
 
-    let mut nes_bus = create_nes_bus_with_bus_device(0, RequestType::None, RequestData::None);
+    let nes_bus = create_nes_bus_with_bus_device(0, RequestType::None, RequestData::None);
 
     let result = nes_bus.size();
 
