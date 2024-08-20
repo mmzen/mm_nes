@@ -9,12 +9,13 @@ use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::VramIncrement;
-use crate::ppu_2c02::PPUFlag::{Control, Mask, Status};
+use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
 
 const PPU_NAME: &str = "PPU 2C02";
 const CHR_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
-const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x23FF), (0x2400, 0x27FF)];
-const NAME_TABLE_VERTICAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x27FF);
+//const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x2FFF)];
+const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x3EFF)];
+const NAME_TABLE_VERTICAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3EFF);
 const NAME_TABLE_HORIZONTAL_SIZE: usize = 1024;
 const NAME_TABLE_VERTICAL_SIZE: usize = 2048;
 const PALETTE_ADDRESS_SPACE: (u16, u16) = (0x3F00, 0x3FFF);
@@ -24,13 +25,14 @@ const V_INCR_GOING_DOWN: u16 = 32;
 const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 
-enum PPUFlag {
+#[derive(Debug)]
+enum PpuFlag {
     Control(ControlFlag),
     Mask(MaskFlag),
     Status(StatusFlag)
 }
 
-impl PPUFlag {
+impl PpuFlag {
     fn bits(&self) -> u8 {
         match self {
             Control(flag) => *flag as u8,
@@ -102,7 +104,8 @@ impl LatchRegister {
     }
 
     fn increment(&mut self, value: u16) -> u16 {
-        self.value.wrapping_add(value)
+        self.value = self.value.wrapping_add(value);
+        self.value
     }
 
     fn write(&mut self, value: u8) {
@@ -161,6 +164,10 @@ struct SpriteDisplay {
     tile_number: u8,
     attributes: u8,
     pattern_table_index: u8
+}
+
+struct Latch8to16 {
+    value: u16
 }
 
 impl Default for SpriteDisplay {
@@ -238,7 +245,7 @@ impl Memory for Ppu2c02 {
 
                 previous_read
             },
-            _ => return Err(MemoryError::OutOfRange(effective_addr)),
+            _ => unreachable!(),
         };
 
         Ok(value)
@@ -271,11 +278,10 @@ impl Memory for Ppu2c02 {
             0x2007 => {
                 let incr = self.get_v_increment_value();
 
-                self.register.borrow_mut().data = value;
                 self.bus.write_byte(self.v.borrow().value, value)?;
                 self.v.borrow_mut().increment(incr);
             },
-            _ => return Err(MemoryError::OutOfRange(effective_addr)),
+            _ => unreachable!(),
         };
 
         Ok(())
@@ -390,42 +396,52 @@ impl Ppu2c02 {
         self.v.borrow().value
     }
 
-    fn set_flag(&mut self, flag: PPUFlag) {
-        match flag {
+    #[cfg(test)]
+    pub fn ext_set_flag(&mut self, flag: PpuFlag, value: bool) {
+        self.set_flag(flag, value);
+    }
+
+
+    fn set_flag(&mut self, flag: PpuFlag, value: bool) {
+        let p = match flag {
             Control(_) => {
-                self.register.borrow_mut().control |= flag.bits();
+                &mut self.register.borrow_mut().control
             },
 
             Mask(_) => {
-                self.register.borrow_mut().mask |= flag.bits();
+                &mut self.register.borrow_mut().mask
             },
 
             Status(_) => {
-                self.register.borrow_mut().status |= flag.bits();
+                &mut self.register.borrow_mut().status
             }
+        };
+
+        if value {
+            *p |= flag.bits()
+        } else {
+            *p &= !flag.bits()
         }
     }
 
-    fn get_flag(&self, flag: PPUFlag) -> bool {
+    #[cfg(test)]
+    pub fn ext_get_flag(&mut self, flag: PpuFlag) {
+        self.get_flag(flag);
+    }
+
+
+    fn get_flag(&self, flag: PpuFlag) -> bool {
         match flag {
-            Control(_) => {
-                (self.register.borrow_mut().control & flag.bits()) != 0
-            },
-
-            Mask(_) => {
-                (self.register.borrow_mut().mask & flag.bits()) != 0
-            },
-
-            Status(_) => {
-                (self.register.borrow_mut().status & flag.bits()) != 0
-            }
+            Control(_) => (self.register.borrow_mut().control & flag.bits()) != 0,
+            Mask(_) => (self.register.borrow_mut().mask & flag.bits()) != 0,
+            Status(_) => (self.register.borrow_mut().status & flag.bits()) != 0
         }
     }
 
     fn get_v_increment_value(&self) -> u16 {
         match self.get_flag(Control(VramIncrement)) {
-            false => V_INCR_GOING_ACROSS,
-            true => V_INCR_GOING_DOWN,
+            true => V_INCR_GOING_ACROSS,
+            false => V_INCR_GOING_DOWN,
         }
     }
 }
