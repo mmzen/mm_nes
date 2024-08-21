@@ -51,6 +51,30 @@ pub trait BusDevice: Memory {
     fn is_addr_in_address_space(&self, addr: u16) -> bool;
 }
 
+impl Ord for dyn BusDevice {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.get_address_range().0 {
+            a if a < other.get_address_range().0 => Ordering::Less,
+            a if a > other.get_address_range().0 => Ordering::Greater,
+            _ => Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for dyn BusDevice {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for dyn BusDevice {}
+
+impl PartialEq for dyn BusDevice {
+    fn eq(&self, other: &Self) -> bool {
+        self.get_address_range() == other.get_address_range()
+    }
+}
+
 #[cfg(test)]
 mock! {
     #[derive(Debug)]
@@ -73,29 +97,5 @@ mock! {
         #[allow(dead_code)]
         fn dump(&self);
         fn size(&self) -> usize;
-    }
-}
-
-impl Ord for dyn BusDevice {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self.get_address_range().0 {
-            a if a < other.get_address_range().0 => Ordering::Less,
-            a if a > other.get_address_range().0 => Ordering::Greater,
-            _ => Ordering::Equal,
-        }
-    }
-}
-
-impl PartialOrd for dyn BusDevice {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for dyn BusDevice {}
-
-impl PartialEq for dyn BusDevice {
-    fn eq(&self, other: &Self) -> bool {
-        self.get_address_range() == other.get_address_range()
     }
 }

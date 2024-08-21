@@ -2,6 +2,8 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::bus::BusError;
+use crate::bus_device::BusDevice;
+use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
 
 #[derive(Debug, Clone)]
@@ -32,7 +34,7 @@ impl PartialEq for PpuType {
     }
 }
 
-pub trait PPU {
+pub trait PPU: BusDevice + DmaDevice {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
 }

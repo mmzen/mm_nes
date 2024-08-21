@@ -3,7 +3,9 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use log::debug;
 use crate::dma_device::DmaDevice;
+use crate::memory::MemoryError;
 
 #[derive(Debug, Clone)]
 pub enum DmaType {
@@ -46,5 +48,5 @@ impl Display for DmaError {
 impl Error for DmaError {}
 
 pub trait Dma {
-    fn link_device(&mut self, device: Rc<RefCell<dyn DmaDevice>>) -> Result<(), DmaError>;
+    fn transfer_memory(&mut self, value: u8) -> Result<u16, MemoryError>;
 }

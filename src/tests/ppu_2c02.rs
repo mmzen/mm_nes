@@ -20,9 +20,6 @@ const VALID_DATA_VALUE: u8 = 0x14;
 const CONTROL_REGISTER_INCR_1: u8 = 0x04;
 const CONTROL_REGISTER_INCR_32: u8 = 0x00;
 
-fn check_memory(_: Ppu2c02) {
-}
-
 fn create_bus() -> MockBusStub {
     let bus = MockBusStub::new();
     bus
@@ -78,8 +75,6 @@ fn test_initialize_ppu() {
 
     let mut ppu = create_ppu();
     assert_eq!(ppu.initialize().unwrap(), PPU_EXTERNAL_MEMORY_SIZE);
-
-    check_memory(ppu)
 }
 
 #[test]
@@ -193,12 +188,10 @@ fn read_to_data_registers_with_increments_to_name_tables_works() {
     let increments: [usize; 2] = [1, 32];
 
     for inc in increments {
-        println!("increment: {}", inc);
         let mut ppu = create_ppu();
         set_v_increment(&mut ppu, inc as u8);
 
         for (index, value) in (VALID_NAME_TABLE_ADDRESS..).step_by(inc).take(iterations).enumerate() {
-            println!("writing value (0x{:0}) at 0x{:04X}", VALID_DATA_VALUE + index as u8, value);
             write_address_to_addr_register(&mut ppu, value).unwrap();
             ppu.write_byte(data, VALID_DATA_VALUE + index as u8).unwrap();
         }
@@ -208,7 +201,6 @@ fn read_to_data_registers_with_increments_to_name_tables_works() {
 
         for (index, _) in (VALID_NAME_TABLE_ADDRESS..).step_by(inc).take(iterations).enumerate() {
             let result = ppu.read_byte(data).unwrap();
-            println!("read value (0x{:0})", result);
             assert_eq!(result, VALID_DATA_VALUE + index as u8);
         }
     }
@@ -223,14 +215,12 @@ fn write_to_data_registers_with_increments_to_name_tables_works() {
     let increments: [usize; 2] = [1, 32];
 
     for inc in increments {
-        println!("increment: {}", inc);
         let mut ppu = create_ppu();
         set_v_increment(&mut ppu, inc as u8);
 
         write_address_to_addr_register(&mut ppu, VALID_NAME_TABLE_ADDRESS).unwrap();
 
         for (index, value) in (VALID_NAME_TABLE_ADDRESS..).step_by(inc).take(iterations).enumerate() {
-            println!("writing value (0x{:0}) at 0x{:04X}", VALID_DATA_VALUE + index as u8, value);
             ppu.write_byte(data, VALID_DATA_VALUE + index as u8).unwrap();
         }
 
@@ -238,7 +228,6 @@ fn write_to_data_registers_with_increments_to_name_tables_works() {
             write_address_to_addr_register(&mut ppu, value).unwrap();
             let _ = ppu.read_byte(data).unwrap();
             let result = ppu.read_byte(data).unwrap();
-            println!("read value (0x{:0})", result);
             assert_eq!(result, VALID_DATA_VALUE + index as u8);
         }
     }

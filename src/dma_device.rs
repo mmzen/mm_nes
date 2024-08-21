@@ -1,5 +1,7 @@
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
+#[cfg(test)]
+use mockall::mock;
 use crate::memory::MemoryError;
 
 #[derive(Debug, Clone)]
@@ -17,4 +19,14 @@ impl Display for DmaDeviceType {
 
 pub trait DmaDevice: Debug {
     fn dma_write(&mut self, offset: u8, value: u8) -> Result<(), MemoryError>;
+}
+
+#[cfg(test)]
+mock! {
+    #[derive(Debug)]
+    pub DmaDeviceStub {}
+
+    impl DmaDevice for DmaDeviceStub {
+        fn dma_write(&mut self, offset: u8, value: u8) -> Result<(), MemoryError>;
+    }
 }

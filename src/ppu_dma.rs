@@ -20,9 +20,21 @@ pub struct PpuDma {
 }
 
 impl Dma for PpuDma {
-    fn link_device(&mut self, device: Rc<RefCell<dyn DmaDevice>>) -> Result<(), DmaError> {
-        self.device = device;
-        Ok(())
+    fn transfer_memory(&mut self, value: u8) -> Result<u16, MemoryError> {
+        let source = (value as u16) << 8;
+        let last_value = source | 0x00FF;
+
+        debug!("transferring 256 bytes of memory from 0x{:04X} to PPU", source);
+
+        let mut index = 0;
+
+        for addr in source..=last_value {
+            let data = self.bus.borrow().read_byte(addr)?;
+            self.device.borrow_mut().dma_write(index as u8, data)?;
+            index += 1;
+        }
+
+        Ok(index)
     }
 }
 
@@ -62,7 +74,7 @@ impl Memory for PpuDma {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        self.transfer_memory(addr, value)?;
+        self.transfer_memory(value)?;
         self.last_transfer_addr = value;
 
         Ok(())
@@ -97,22 +109,6 @@ impl PpuDma {
 
     fn get_effective_address(&self, addr: u16) -> u16 {
         PPU_DMA_ADDRESS_SPACE.0 + (addr & (PPU_DMA_SIZE as u16 - 1))
-    }
-
-    fn transfer_memory(&mut self, _: u16, value: u8) -> Result<u16, MemoryError> {
-        let source = (value as u16) << 8;
-
-        debug!("transferring 256 bytes of memory from 0x{:04X} to PPU", source);
-
-        let mut index = 0;
-
-        for addr in source..=source & 0xFFF {
-            let data = self.bus.borrow().read_byte(addr)?;
-            self.device.borrow_mut().dma_write(index as u8, data)?;
-            index += 1;
-        }
-
-        Ok(index)
     }
 }
 
