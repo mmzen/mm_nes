@@ -5,8 +5,6 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
-use std::thread::sleep;
-use std::time::Duration;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
 use crate::bus::Bus;
@@ -239,7 +237,6 @@ impl CPU for Cpu6502 {
             }
 
             self.instructions_executed += 1;
-            sleep(Duration::from_millis(1));
         }
     }
 

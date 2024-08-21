@@ -37,6 +37,7 @@ impl PartialEq for PpuType {
 pub trait PPU: BusDevice + DmaDevice {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
+    fn render(&self) -> Result<(), PpuError>;
 }
 
 #[derive(Debug)]

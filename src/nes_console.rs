@@ -291,11 +291,6 @@ impl NESConsoleBuilder {
                 bus.borrow_mut().add_device(dma)?;
             },
 
-            /***BusDeviceType::DMA(DmaType::PpuDma(ppu_dma_type)) => {
-                let ppu_dma = self.build_ppu_dma(ppu_dma_type, bus.clone(), ppu.clone())?;
-                bus.borrow_mut().add_device(ppu_dma)?;
-            }***/
-
             _ => {}
         };
 

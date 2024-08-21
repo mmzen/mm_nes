@@ -38,6 +38,7 @@ mod palette_2c02;
 mod dma_device;
 mod dma;
 mod ppu_dma;
+mod frame;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
