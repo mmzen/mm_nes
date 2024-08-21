@@ -10,6 +10,7 @@ use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::VramIncrement;
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
+use crate::ppu_2c02::StatusFlag::VBlank;
 
 const PPU_NAME: &str = "PPU 2C02";
 const CHR_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
@@ -20,8 +21,8 @@ const NAME_TABLE_HORIZONTAL_SIZE: usize = 1024;
 const NAME_TABLE_VERTICAL_SIZE: usize = 2048;
 const PALETTE_ADDRESS_SPACE: (u16, u16) = (0x3F00, 0x3FFF);
 const PALETTE_SIZE: usize = 32;
-const V_INCR_GOING_ACROSS: u16 = 1;
-const V_INCR_GOING_DOWN: u16 = 32;
+const V_INCR_GOING_ACROSS: u8 = 1;
+const V_INCR_GOING_DOWN: u8 = 32;
 const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 
@@ -81,54 +82,27 @@ enum LatchState {
 }
 
 #[derive(Debug)]
-struct LatchRegister {
-    value: u16,
-    latch: LatchState
+struct Latch {
+    state: LatchState
 }
 
-impl LatchRegister {
+impl Latch {
 
     fn new() -> Self {
-        LatchRegister {
-            value: 0,
-            latch: LatchState::HIGH
+        Latch {
+            state: LatchState::HIGH
         }
     }
 
     fn latch(&mut self) {
-        if self.latch == LatchState::LOW {
-            self.latch = LatchState::HIGH
-        } else {
-            self.latch = LatchState::LOW;
-        }
+        self.state = match self.state {
+            LatchState::HIGH => LatchState::LOW,
+            LatchState::LOW => LatchState::HIGH,
+        };
     }
 
-    fn increment(&mut self, value: u16) -> u16 {
-        self.value = self.value.wrapping_add(value);
-        self.value
-    }
-
-    fn write(&mut self, value: u8) {
-        match self.latch {
-            LatchState::LOW => {
-                self.value = (self.value & 0xFF00) | (value as u16);
-            },
-            LatchState::HIGH => {
-                self.value = (self.value & 0x00FF) | (value as u16) << 8 ;
-            }
-        }
-        self.latch();
-    }
-
-    fn read(&self) -> u8 {
-        match self.latch {
-            LatchState::LOW => {
-                (self.value & 0x00FF) as u8
-            },
-            LatchState::HIGH => {
-                (self.value & 0xFF00) as u8
-            }
-        }
+    fn reset(&mut self) {
+        self.state = LatchState::HIGH;
     }
 }
 
@@ -166,10 +140,6 @@ struct SpriteDisplay {
     pattern_table_index: u8
 }
 
-struct Latch8to16 {
-    value: u16
-}
-
 impl Default for SpriteDisplay {
     fn default() -> Self {
         SpriteDisplay {
@@ -186,7 +156,8 @@ pub struct Ppu2c02 {
     register: RefCell<Register>,
     bus: Box<dyn Bus>,
     oam: Vec<SpriteDisplay>,
-    v: RefCell<LatchRegister>
+    v: RefCell<u16>,
+    latch: RefCell<Latch>
 }
 
 impl PPU for Ppu2c02 {
@@ -196,7 +167,7 @@ impl PPU for Ppu2c02 {
         self.register.borrow_mut().scroll = 0;
         self.register.borrow_mut().data = 0;
 
-        self.v.borrow_mut().write(0);
+        *self.v.borrow_mut() = 0;
         Ok(())
     }
 
@@ -215,36 +186,14 @@ impl Memory for Ppu2c02 {
         let effective_addr = PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1));
 
         let value = match effective_addr {
-            0x2000 => self.register.borrow().control,
-            0x2001 => self.register.borrow().mask,
-            0x2002 => self.register.borrow().status,
-            0x2003 => self.register.borrow().oam_addr,
-            0x2004 => {
-                let sprite_index = (self.register.borrow().oam_addr / 4) as usize;
-                let offset = self.register.borrow().oam_addr % 4;
-
-                match offset {
-                    0 => self.oam[sprite_index].y,
-                    1 => self.oam[sprite_index].tile_number,
-                    2 => self.oam[sprite_index].attributes,
-                    3 => self.oam[sprite_index].x,
-                    _ => unreachable!(),
-                }
-            },
-            0x2005 => self.register.borrow().scroll,
-            0x2006 => {
-                self.v.borrow().read()
-            },
-            0x2007 => {
-                let previous_read = self.register.borrow().data;
-                let video_addr = self.v.borrow().value;
-                let incr = self.get_v_increment_value();
-
-                self.register.borrow_mut().data = self.bus.read_byte(video_addr)?;
-                self.v.borrow_mut().increment(incr);
-
-                previous_read
-            },
+            0x2000 => self.read_control_register(),
+            0x2001 => self.read_mask_register(),
+            0x2002 => self.read_status_register(),
+            0x2003 => self.read_oam_address_register(),
+            0x2004 => self.read_oam_data_register(),
+            0x2005 => self.read_scroll_register(),
+            0x2006 => self.read_addr_register(),
+            0x2007 => self.read_data_register()?,
             _ => unreachable!(),
         };
 
@@ -255,32 +204,14 @@ impl Memory for Ppu2c02 {
         let effective_addr = PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1));
 
         match effective_addr {
-            0x2000 => self.register.borrow_mut().control = value,
-            0x2001 => self.register.borrow_mut().mask = value,
-            0x2002 => self.register.borrow_mut().status = value,
-            0x2003 => self.register.borrow_mut().oam_addr = value,
-            0x2004 => {
-                let sprite_index = (self.register.borrow().oam_addr / 4) as usize;
-                let offset = self.register.borrow().oam_addr % 4;
-
-                match offset {
-                    0 => self.oam[sprite_index].y = value,
-                    1 => self.oam[sprite_index].tile_number = value,
-                    2 => self.oam[sprite_index].attributes = value,
-                    3 => self.oam[sprite_index].x = value,
-                    _ => unreachable!(),
-                }
-            }
-            0x2005 => self.register.borrow_mut().scroll = value,
-            0x2006 => {
-                self.v.borrow_mut().write(value);
-            },
-            0x2007 => {
-                let incr = self.get_v_increment_value();
-
-                self.bus.write_byte(self.v.borrow().value, value)?;
-                self.v.borrow_mut().increment(incr);
-            },
+            0x2000 => self.write_control_register(value),
+            0x2001 => self.write_mask_register(value),
+            0x2002 => self.write_status_register(value),
+            0x2003 => self.write_oam_address_register(value),
+            0x2004 => self.write_oam_data_register(value),
+            0x2005 => self.write_scroll_register(value),
+            0x2006 => self.write_addr_register(value),
+            0x2007 => self.write_data_register(value)?,
             _ => unreachable!(),
         };
 
@@ -329,6 +260,118 @@ impl BusDevice for Ppu2c02 {
 }
 
 impl Ppu2c02 {
+    fn read_control_register(&self) -> u8 {
+        self.register.borrow().control
+    }
+
+    fn write_control_register(&mut self, value: u8) {
+        self.register.borrow_mut().control = value;
+    }
+
+    fn read_mask_register(&self) -> u8 {
+        self.register.borrow().mask
+    }
+
+    fn write_mask_register(&mut self, value: u8) {
+        self.register.borrow_mut().mask = value;
+    }
+
+    fn read_status_register(&self) -> u8 {
+        let result = self.register.borrow().status;
+        self.set_flag(Status(VBlank), false);
+        self.latch.borrow_mut().reset();
+
+        result
+    }
+
+    fn write_status_register(&mut self, value: u8) {
+        self.register.borrow_mut().status = value;
+    }
+
+    fn read_oam_address_register(&self) -> u8 {
+        self.register.borrow().oam_addr
+    }
+
+    fn write_oam_address_register(&mut self, value: u8) {
+        self.register.borrow_mut().oam_addr = value;
+    }
+
+    fn read_oam_data_register(&self) -> u8 {
+        let sprite_index = (self.register.borrow().oam_addr / 4) as usize;
+        let offset = self.register.borrow().oam_addr % 4;
+
+        match offset {
+            0 => self.oam[sprite_index].y,
+            1 => self.oam[sprite_index].tile_number,
+            2 => self.oam[sprite_index].attributes,
+            3 => self.oam[sprite_index].x,
+            _ => unreachable!(),
+        }
+    }
+
+    fn write_oam_data_register(&mut self, value: u8) {
+        let sprite_index = (self.register.borrow().oam_addr / 4) as usize;
+        let offset = self.register.borrow().oam_addr % 4;
+
+        match offset {
+            0 => self.oam[sprite_index].y = value,
+            1 => self.oam[sprite_index].tile_number = value,
+            2 => self.oam[sprite_index].attributes = value,
+            3 => self.oam[sprite_index].x = value,
+            _ => unreachable!(),
+        }
+    }
+
+    fn read_scroll_register(&self) -> u8 {
+        self.register.borrow().scroll
+    }
+
+    fn write_scroll_register(&mut self, value: u8) {
+        self.register.borrow_mut().scroll = value;
+    }
+
+    fn read_addr_register(&self) -> u8 {
+        let mut v = *self.v.borrow();
+
+        match self.latch.borrow().state {
+            LatchState::LOW => v as u8,
+            LatchState::HIGH => (v >> 8) as u8,
+        }
+    }
+
+    fn write_addr_register(&mut self, value: u8) {
+        let mut v = *self.v.borrow();
+
+        v = match self.latch.borrow().state {
+            LatchState::LOW => (v & 0xFF00) | (value as u16),
+            LatchState::HIGH => (v & 0x00FF) | (value as u16) << 8
+        };
+
+        *self.v.borrow_mut() = v;
+        self.latch.borrow_mut().latch();
+    }
+
+    fn read_data_register(&self) -> Result<u8, MemoryError> {
+        let previous_read = self.register.borrow().data;
+        let video_addr = *self.v.borrow();
+        let incr = self.get_v_increment_value() as u16;
+        let incremented_v = self.v.borrow().wrapping_add(incr);
+
+        self.register.borrow_mut().data = self.bus.read_byte(video_addr)?;
+        *self.v.borrow_mut() = incremented_v;
+
+        Ok(previous_read)
+    }
+
+    fn write_data_register(&mut self, value: u8) -> Result<(), MemoryError> {
+        let incr = self.get_v_increment_value() as u16;
+        let incremented_v = self.v.borrow().wrapping_add(incr);
+
+        self.bus.write_byte(*self.v.borrow(), value)?;
+        *self.v.borrow_mut() = incremented_v;
+
+        Ok(())
+    }
 
     fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: PpuNameTableMirroring) -> Result<(), PpuError> {
         debug!("setting name tables to mirroring mode: {:?}", mirroring);
@@ -369,8 +412,9 @@ impl Ppu2c02 {
         let ppu = Ppu2c02 {
             register: RefCell::new(Register::new()),
             bus,
-            v: RefCell::new(LatchRegister::new()),
-            oam: vec![SpriteDisplay::default(); 64]
+            v: RefCell::new(0),
+            oam: vec![SpriteDisplay::default(); 64],
+            latch: RefCell::new(Latch::new()),
         };
 
         Ok(ppu)
@@ -385,7 +429,7 @@ impl Ppu2c02 {
             "oam_addr" => self.register.borrow().oam_addr,
             "oam_data" => self.register.borrow().oam_data,
             "scroll" => self.register.borrow().scroll,
-            "addr" => self.v.borrow().read(),
+            "addr" => *self.v.borrow() as u8,
             "data" => self.register.borrow().data,
             _ => 0,
         }
@@ -393,7 +437,7 @@ impl Ppu2c02 {
 
     #[cfg(test)]
     pub fn get_v_value(&self) -> u16 {
-        self.v.borrow().value
+        *self.v.borrow()
     }
 
     #[cfg(test)]
@@ -402,7 +446,7 @@ impl Ppu2c02 {
     }
 
 
-    fn set_flag(&mut self, flag: PpuFlag, value: bool) {
+    fn set_flag(&self, flag: PpuFlag, value: bool) {
         let p = match flag {
             Control(_) => {
                 &mut self.register.borrow_mut().control
@@ -438,7 +482,7 @@ impl Ppu2c02 {
         }
     }
 
-    fn get_v_increment_value(&self) -> u16 {
+    fn get_v_increment_value(&self) -> u8 {
         match self.get_flag(Control(VramIncrement)) {
             true => V_INCR_GOING_ACROSS,
             false => V_INCR_GOING_DOWN,

@@ -288,3 +288,24 @@ fn test_vertical_nametable_read_write() {
     test_for_values_at_addresses(&mut ppu, value, &nametable_addresses);
 }
 
+#[test]
+fn test_read_to_status_clears_vblank_and_reset_latch() {
+    init();
+
+    let mut ppu = create_ppu();
+    let status = 0x2002;
+    let addr = 0x2006;
+    let status_value = 0x80;
+    let addr_value = 0xAB;
+
+    ppu.write_byte(status, status_value).unwrap();
+    ppu.write_byte(addr, addr_value).unwrap();
+
+    let result0 = ppu.read_byte(status).unwrap();
+    let result1 = ppu.read_byte(status).unwrap();
+    let result2 = ppu.read_byte(addr).unwrap();
+
+    assert_eq!(result0, status_value);
+    assert_eq!(result1, 0x00);
+    assert_eq!(result2, addr_value);
+}
