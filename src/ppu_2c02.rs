@@ -4,6 +4,7 @@ use std::rc::Rc;
 use log::{debug, info};
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::dma_device::DmaDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
@@ -183,14 +184,14 @@ impl Memory for Ppu2c02 {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        let effective_addr = PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1));
+        let effective_addr = self.get_effective_address(addr);
 
         let value = match effective_addr {
             0x2000 => self.read_control_register(),
             0x2001 => self.read_mask_register(),
             0x2002 => self.read_status_register(),
             0x2003 => self.read_oam_address_register(),
-            0x2004 => self.read_oam_data_register(),
+            0x2004 => self.read_oam_data_register(self.register.borrow().oam_addr),
             0x2005 => self.read_scroll_register(),
             0x2006 => self.read_addr_register(),
             0x2007 => self.read_data_register()?,
@@ -201,14 +202,17 @@ impl Memory for Ppu2c02 {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        let effective_addr = PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1));
+        let effective_addr = self.get_effective_address(addr);
 
         match effective_addr {
             0x2000 => self.write_control_register(value),
             0x2001 => self.write_mask_register(value),
             0x2002 => self.write_status_register(value),
             0x2003 => self.write_oam_address_register(value),
-            0x2004 => self.write_oam_data_register(value),
+            0x2004 => {
+                let addr = self.register.borrow().oam_addr;
+                self.write_oam_data_register(addr, value)
+            },
             0x2005 => self.write_scroll_register(value),
             0x2006 => self.write_addr_register(value),
             0x2007 => self.write_data_register(value)?,
@@ -259,7 +263,19 @@ impl BusDevice for Ppu2c02 {
     }
 }
 
+impl DmaDevice for Ppu2c02 {
+    fn dma_write(&mut self, addr: u8, value: u8) -> Result<(), MemoryError> {
+        self.write_oam_data_register(addr, value);
+        Ok(())
+    }
+}
+
 impl Ppu2c02 {
+
+    fn get_effective_address(&self, addr: u16) -> u16 {
+       PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1))
+    }
+
     fn read_control_register(&self) -> u8 {
         self.register.borrow().control
     }
@@ -296,9 +312,9 @@ impl Ppu2c02 {
         self.register.borrow_mut().oam_addr = value;
     }
 
-    fn read_oam_data_register(&self) -> u8 {
-        let sprite_index = (self.register.borrow().oam_addr / 4) as usize;
-        let offset = self.register.borrow().oam_addr % 4;
+    fn read_oam_data_register(&self, addr: u8) -> u8 {
+        let sprite_index = (addr / 4) as usize;
+        let offset = addr % 4;
 
         match offset {
             0 => self.oam[sprite_index].y,
@@ -309,9 +325,9 @@ impl Ppu2c02 {
         }
     }
 
-    fn write_oam_data_register(&mut self, value: u8) {
-        let sprite_index = (self.register.borrow().oam_addr / 4) as usize;
-        let offset = self.register.borrow().oam_addr % 4;
+    fn write_oam_data_register(&mut self, addr: u8, value: u8) {
+        let sprite_index = (addr / 4) as usize;
+        let offset = addr % 4;
 
         match offset {
             0 => self.oam[sprite_index].y = value,
@@ -331,7 +347,7 @@ impl Ppu2c02 {
     }
 
     fn read_addr_register(&self) -> u8 {
-        let mut v = *self.v.borrow();
+        let v = *self.v.borrow();
 
         match self.latch.borrow().state {
             LatchState::LOW => v as u8,

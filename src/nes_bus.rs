@@ -60,7 +60,7 @@ impl Bus for NESBus {
     fn add_device(&mut self, device: Rc<RefCell<dyn BusDevice>>) -> Result<(), BusError> {
         let size = device.borrow().size();
         let address_space = device.borrow().get_address_range();
-        let address_space_size = (address_space.1 - address_space.0 + 1) as usize;
+        //let address_space_size = (address_space.1 - address_space.0 + 1) as usize;
 
         debug!("adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
             device.borrow().get_name(), size, address_space.0, address_space.1);

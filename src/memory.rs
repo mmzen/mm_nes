@@ -42,7 +42,8 @@ pub trait Memory: Debug {
 #[derive(Debug, PartialEq)]
 pub enum MemoryError {
     OutOfRange(u16),
-    BusError(u16)
+    BusError(u16),
+    DmaError(u16)
 }
 
 impl Error for MemoryError {}
@@ -52,6 +53,7 @@ impl Display for MemoryError {
         match self {
             MemoryError::OutOfRange(addr) => write!(f, "memory access out of bounds: 0x{:04X}", addr),
             MemoryError::BusError(addr) => { write!(f, "bus error: 0x{:04X}", addr) }
+            MemoryError::DmaError(addr) => { write!(f, "dma error: 0x{:04X}", addr) }
         }
     }
 }
@@ -64,5 +66,6 @@ impl From<BusError> for MemoryError {
         }
     }
 }
+
 
 

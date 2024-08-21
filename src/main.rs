@@ -4,13 +4,15 @@ use simplelog::{Config, SimpleLogger};
 use clap::Parser;
 use clap_num::maybe_hex;
 use crate::bus::BusType;
-use crate::bus_device::BusDeviceType;
-use crate::cartridge::CartridgeType;
-use crate::cpu::{CpuType};
-use crate::loader::LoaderType;
-use crate::memory::MemoryType;
+use crate::bus_device::BusDeviceType::{CARTRIDGE, DMA, PPU, WRAM};
+use crate::cartridge::CartridgeType::NROM128;
+use crate::cpu::CpuType::NES6502;
+use crate::dma::DmaType::PpuDma;
+use crate::dma::PpuDmaType::NESPPUDMA;
+use crate::loader::LoaderType::INESV1;
+use crate::memory::MemoryType::NESMemory;
 use crate::nes_console::{NESConsoleBuilder, NESConsoleError};
-use crate::ppu::PpuType;
+use crate::ppu::PpuType::NES2C02;
 
 mod cpu;
 mod cpu_6502;
@@ -33,6 +35,9 @@ mod util;
 mod ppu_2c02;
 mod palette;
 mod palette_2c02;
+mod dma_device;
+mod dma;
+mod ppu_dma;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -98,12 +103,13 @@ fn main() -> Result<(), NESConsoleError> {
     info!("emulator bootstrapping...");
 
     let mut console = builder
-        .with_cpu_options(CpuType::NES6502, trace_file)
+        .with_cpu_options(NES6502, trace_file)
         .with_bus_type(BusType::NESBus)
-        .with_bus_device_type(BusDeviceType::WRAM(MemoryType::NESMemory))
-        .with_bus_device_type(BusDeviceType::CARTRIDGE(CartridgeType::NROM128))
-        .with_bus_device_type(BusDeviceType::PPU(PpuType::NES2C02))
-        .with_loader_type(LoaderType::INESV1)
+        .with_bus_device_type(WRAM(NESMemory))
+        .with_bus_device_type(CARTRIDGE(NROM128))
+        .with_bus_device_type(PPU(NES2C02))
+        .with_bus_device_type(DMA(PpuDma(NESPPUDMA)))
+        .with_loader_type(INESV1)
         .with_rom_file(args.rom_file)
         .with_entry_point(args.pc)
         .build()?;

@@ -9,6 +9,8 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
+use crate::dma::{DmaType, PpuDmaType};
+use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
@@ -16,6 +18,7 @@ use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
 use crate::ppu::{PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
+use crate::ppu_dma::PpuDma;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
 const WRAM_START_ADDR: u16 = 0x0000;
@@ -213,6 +216,18 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
+    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, bus: Rc<RefCell<dyn Bus>>, ppu: Rc<RefCell<dyn DmaDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError>{
+        debug!("creating ppu dma {:?}", ppu_dma_type);
+
+        let ppu_dma = match ppu_dma_type {
+            PpuDmaType::NESPPUDMA => {
+                PpuDma::new(ppu, bus)
+            },
+        };
+
+        Ok(Rc::new(RefCell::new(ppu_dma)))
+    }
+
     fn build_ppu_device(&self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
@@ -242,6 +257,7 @@ impl NESConsoleBuilder {
 
     fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType, bus: Rc<RefCell<dyn Bus>>) -> Result<(), NESConsoleError> {
         debug!("creating device: {:?}", device_type);
+        let ppu;
 
         match device_type {
             BusDeviceType::CARTRIDGE(_) => {
@@ -268,9 +284,14 @@ impl NESConsoleBuilder {
                     .map(|cartridge| cartridge.borrow().get_mirroring())
                     .ok_or(NESConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
-                let ppu = self.build_ppu_device(ppu_type, chr_rom, mirroring)?;
+                ppu = self.build_ppu_device(ppu_type, chr_rom, mirroring)?;
                 bus.borrow_mut().add_device(ppu)?;
             },
+
+            BusDeviceType::DMA(DmaType::PpuDma(ppu_dma_type)) => {
+                let ppu_dma = self.build_ppu_dma(ppu_dma_type, bus.clone(), ppu.clone())?;
+                bus.borrow_mut().add_device(ppu_dma)?;
+            }
 
             _ => {}
         };
