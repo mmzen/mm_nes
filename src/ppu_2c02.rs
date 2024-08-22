@@ -4,7 +4,7 @@ use std::process::exit;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
-use log::{debug, info};
+use log::{debug, info, trace};
 use sdl2::pixels::PixelFormatEnum;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
@@ -128,7 +128,7 @@ impl Register {
         Register {
             control: 0,
             mask: 0,
-            status: 0,
+            status: 0x80,
             oam_addr: 0,
             oam_data: 0,
             scroll: 0,
@@ -249,12 +249,14 @@ impl PPU for Ppu2c02 {
 }
 
 impl Memory for Ppu2c02 {
+
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         info!("initializing PPU");
         Ok(PPU_EXTERNAL_MEMORY_SIZE)
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        trace!("reading byte at 0x{:04X}", addr);
 
         let value = match addr {
             0x00 => self.read_control_register(),
@@ -268,6 +270,7 @@ impl Memory for Ppu2c02 {
             _ => unreachable!(),
         };
 
+        trace!("read byte at 0x{:04X}: {:02X}", addr, value);
         Ok(value)
     }
 
@@ -295,6 +298,7 @@ impl Memory for Ppu2c02 {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
+        trace!("writing byte ({:02X}) at 0x{:04X}", value, addr);
 
         match addr {
             0x00 => self.write_control_register(value),
@@ -363,6 +367,19 @@ impl DmaDevice for Ppu2c02 {
 }
 
 impl Ppu2c02 {
+
+    fn v_wrapping_add(&self, n: u16) -> u16 {
+        let mut v = self.v.borrow().wrapping_add(n);
+
+        if v < PPU_EXTERNAL_ADDRESS_SPACE.0 {
+            v = PPU_EXTERNAL_ADDRESS_SPACE.0 + (v % 0x1000);
+        } else if v > PPU_EXTERNAL_ADDRESS_SPACE.1 {
+            v = PPU_EXTERNAL_ADDRESS_SPACE.0 + (v - (PPU_EXTERNAL_ADDRESS_SPACE.1 + 1));
+        }
+
+        v
+    }
+
     fn read_control_register(&self) -> u8 {
         self.register.borrow().control
     }
@@ -458,7 +475,7 @@ impl Ppu2c02 {
         let previous_read = self.register.borrow().data;
         let video_addr = *self.v.borrow();
         let incr = self.get_v_increment_value() as u16;
-        let incremented_v = self.v.borrow().wrapping_add(incr);
+        let incremented_v = self.v_wrapping_add(incr);
 
         self.register.borrow_mut().data = self.bus.read_byte(video_addr)?;
         *self.v.borrow_mut() = incremented_v;
@@ -468,7 +485,7 @@ impl Ppu2c02 {
 
     fn write_data_register(&mut self, value: u8) -> Result<(), MemoryError> {
         let incr = self.get_v_increment_value() as u16;
-        let incremented_v = self.v.borrow().wrapping_add(incr);
+        let incremented_v = self.v_wrapping_add(incr);
 
         self.bus.write_byte(*self.v.borrow(), value)?;
         *self.v.borrow_mut() = incremented_v;

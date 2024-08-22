@@ -2,27 +2,23 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 #[derive(Default, Debug, Clone)]
-pub enum APUType {
+pub enum ApuType {
     #[default]
-    NESAPU,
-    DUMMY
+    RP2A03
 }
 
-impl Display for APUType {
+impl Display for ApuType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            APUType::NESAPU => write!(f, "apu type: NESAPU"),
-            APUType::DUMMY => write!(f, "apu type: DUMMY")
+            ApuType::RP2A03 => write!(f, "apu type: NESAPU"),
         }
     }
 }
 
-impl PartialEq for APUType {
+impl PartialEq for ApuType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (APUType::NESAPU, APUType::NESAPU) => true,
-            (APUType::DUMMY, APUType::DUMMY) => true,
-            _ => false,
+            (ApuType::RP2A03, ApuType::RP2A03) => true
         }
     }
 }

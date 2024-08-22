@@ -4,6 +4,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
 use log::debug;
+use crate::apu::ApuType;
+use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
@@ -244,6 +246,21 @@ impl NESConsoleBuilder {
         Ok((ppu, dma))
     }
 
+    fn build_apu_device(&self, apu_type: &ApuType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+        debug!("creating apu {:?}", apu_type);
+
+        let result = match apu_type {
+            ApuType::RP2A03 => {
+                ApuRp2A03::new()
+            },
+        };
+
+        let apu = Rc::new(RefCell::new(result));
+        apu.borrow_mut().initialize()?;
+
+        Ok(apu)
+    }
+
     fn build_cartridge_device(&self) -> Result<Rc<RefCell<dyn Cartridge>>, NESConsoleError> {
         debug!("creating cartridge");
 
@@ -290,6 +307,11 @@ impl NESConsoleBuilder {
                 bus.borrow_mut().add_device(ppu)?;
                 bus.borrow_mut().add_device(dma)?;
             },
+
+            BusDeviceType::APU(apu_type) => {
+                let apu = self.build_apu_device(apu_type)?;
+                bus.borrow_mut().add_device(apu)?;
+            }
 
             _ => {}
         };

@@ -3,7 +3,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 #[cfg(test)]
 use mockall::mock;
-use crate::apu::APUType;
+use crate::apu::ApuType;
 use crate::cartridge::CartridgeType;
 use crate::dma::DmaType;
 use crate::memory::{Memory, MemoryType};
@@ -15,7 +15,7 @@ use crate::ppu::PpuType;
 pub enum BusDeviceType {
     WRAM(MemoryType),
     PPU(PpuType),
-    APU(APUType),
+    APU(ApuType),
     CARTRIDGE(CartridgeType),
     DMA(DmaType)
 }

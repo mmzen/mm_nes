@@ -1,10 +1,12 @@
 use std::fs::File;
-use log::{debug, info, LevelFilter};
+use std::process::exit;
+use log::{debug, info, LevelFilter, trace};
 use simplelog::{Config, SimpleLogger};
 use clap::Parser;
 use clap_num::maybe_hex;
+use crate::apu::ApuType::RP2A03;
 use crate::bus::BusType;
-use crate::bus_device::BusDeviceType::{CARTRIDGE, DMA, PPU, WRAM};
+use crate::bus_device::BusDeviceType::{APU, CARTRIDGE, DMA, PPU, WRAM};
 use crate::cartridge::CartridgeType::NROM128;
 use crate::cpu::CpuType::NES6502;
 use crate::dma::DmaType::PpuDma;
@@ -39,6 +41,7 @@ mod dma_device;
 mod dma;
 mod ppu_dma;
 mod frame;
+mod apu_rp2a03;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -47,9 +50,9 @@ struct Args {
         short = 'd',
         long = "debug",
         help = "debug mode",
-        default_value_t = false
+        default_value_t = 0
     )]
-    debug: bool,
+    debug: u8,
 
     #[arg(
         short = 'x',
@@ -76,14 +79,15 @@ struct Args {
 }
 
 
-fn logger_init(debug: bool) {
-    let log_level = if debug {
-        LevelFilter::Debug
-    } else {
-        LevelFilter::Info
+fn logger_init(debug: u8) {
+
+    let log_level = match debug {
+        1 => LevelFilter::Debug,
+        2 => LevelFilter::Trace,
+        _ => LevelFilter::Info,
     };
 
-    SimpleLogger::init(log_level,   Config::default()).unwrap();
+    SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
 fn main() -> Result<(), NESConsoleError> {
@@ -110,6 +114,7 @@ fn main() -> Result<(), NESConsoleError> {
         .with_bus_device_type(CARTRIDGE(NROM128))
         .with_bus_device_type(PPU(NES2C02))
         .with_bus_device_type(DMA(PpuDma(NESPPUDMA)))
+        .with_bus_device_type(APU(RP2A03))
         .with_loader_type(INESV1)
         .with_rom_file(args.rom_file)
         .with_entry_point(args.pc)

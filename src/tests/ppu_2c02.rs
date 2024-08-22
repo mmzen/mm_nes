@@ -56,7 +56,7 @@ fn write_address_to_addr_register(ppu: &mut Ppu2c02, value: u16) -> Result<(), M
     Ok(())
 }
 
-fn write_data_to_addr_register(ppu: &mut Ppu2c02, value: u8) -> Result<(), MemoryError> {
+fn write_data_to_data_register(ppu: &mut Ppu2c02, value: u8) -> Result<(), MemoryError> {
     ppu.write_byte(0x07, value)?;
     Ok(())
 }
@@ -239,7 +239,7 @@ fn test_for_values_at_addresses(ppu: &mut Ppu2c02, value: u8, addresses: &[(u16,
                  addr.0, value, addr.0, addr.1);
 
         write_address_to_addr_register(ppu, addr.0).unwrap();
-        write_data_to_addr_register(ppu, value).unwrap();
+        write_data_to_data_register(ppu, value).unwrap();
 
         write_address_to_addr_register(ppu, addr.0).unwrap();
         ppu.read_byte(0x07).unwrap();
@@ -297,4 +297,20 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
     assert_eq!(result0, status_value);
     assert_eq!(result1, 0x00);
     assert_eq!(result2, addr_value);
+}
+
+#[test]
+fn v_wraps_to_0x2000_when_incrementing_from_0x3fff() {
+    init();
+
+    let mut ppu = create_ppu();
+    let data = 0xAB;
+
+    set_v_increment(&mut ppu, 1);
+
+    write_address_to_addr_register(&mut ppu, 0x3FFF).unwrap();
+    write_data_to_data_register(&mut ppu, data).unwrap();;
+    let v = ppu.get_v_value();
+    println!("V: 0x{:04X}", v);
+    assert_eq!(ppu.get_v_value(), 0x2000);
 }
