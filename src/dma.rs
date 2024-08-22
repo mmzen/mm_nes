@@ -1,10 +1,6 @@
-use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
-use log::debug;
-use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
 
 #[derive(Debug, Clone)]

@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
-use std::process::exit;
 use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
@@ -19,7 +18,6 @@ use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
 use crate::ppu_2c02::StatusFlag::VBlank;
 
 const PPU_NAME: &str = "PPU 2C02";
-const CHR_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
 //const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x2FFF)];
 const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x3EFF)];
 const NAME_TABLE_VERTICAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3EFF);
@@ -181,70 +179,21 @@ impl PPU for Ppu2c02 {
         todo!()
     }
 
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, PpuError> {
+        let mut cycles = start_cycle;
+        let cycles_threshold = start_cycle + credits;
 
-    fn render(&self) -> Result<(), PpuError> {
-        let mut frame = Frame::new();
-        let sdl_context = sdl2::init().unwrap();
-        let video_subsystem = sdl_context.video().unwrap();
-        let window = video_subsystem
-            .window("test", 256u32, 240u32)
-            .position_centered()
-            .build()
-            .unwrap();
+        debug!("running PPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
 
-        let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+        loop {
+            cycles = cycles + self.render()?;
 
-        let creator = canvas.texture_creator();
-        let mut texture = creator
-            .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
-            .unwrap();
-
-        for y in 0..30usize {
-            for x in 0..=32usize {
-                let index = x + (y * 32);
-
-                let addr = 0x2000 + index as u16;
-                let tile_index = self.bus.read_byte(addr)?;
-                //debug!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
-
-                let mut combined_pattern_data= vec![0u8; 8];
-
-                for row in 0..=7 {
-                    let pattern_data0 = self.bus.read_byte((0x0000 + tile_index * 16 + row) as u16)?;
-                    let pattern_data1 = self.bus.read_byte((0x0000 + tile_index * 16 + row + 8) as u16)?;
-
-                    for bit in 0..=7 {
-                        let value0 = (pattern_data0 >> 7 - bit) & 0x01;
-                        let value1 = (pattern_data1 >> 7 - bit) & 0x01;
-                        combined_pattern_data[row as usize] |= (value1 << 1 | value0) << (7 - bit);
-                    }
-                };
-
-                for row in 0..=7 {
-                    for col in 0..=7 {
-                        let color = (combined_pattern_data[row] >> (7 - col)) & 0x03;
-                        //debug!("x: {}, y: {}, color: {}", col + x * 8, row + y * 8, color);
-
-                        let rgb: (u8, u8, u8) = match color {
-                            0 => (0, 0, 0),
-                            1 => (85, 85, 85),
-                            2 => (170, 170, 170),
-                            3 => (255, 255, 255),
-                            _ => unreachable!()
-                        };
-                        frame.set_pixel(col + x * 8, row + y * 8, rgb);
-                    }
-                }
+            if cycles >= cycles_threshold {
+                break;
             }
         }
 
-        texture.update(None, &frame.pixels, 256).unwrap();
-        canvas.copy(&texture, None, None).unwrap();
-        canvas.present();
-
-        sleep(Duration::from_secs(60));
-
-        Ok(())
+        Ok(cycles)
     }
 }
 
@@ -488,6 +437,7 @@ impl Ppu2c02 {
         let incremented_v = self.v_wrapping_add(incr);
 
         self.bus.write_byte(*self.v.borrow(), value)?;
+
         *self.v.borrow_mut() = incremented_v;
 
         Ok(())
@@ -607,5 +557,70 @@ impl Ppu2c02 {
             true => V_INCR_GOING_ACROSS,
             false => V_INCR_GOING_DOWN,
         }
+    }
+
+    fn render(&self) -> Result<u32, PpuError> {
+        let mut frame = Frame::new();
+        let sdl_context = sdl2::init().unwrap();
+        let video_subsystem = sdl_context.video().unwrap();
+        let window = video_subsystem
+            .window("test", 256u32, 240u32)
+            .position_centered()
+            .build()
+            .unwrap();
+
+        let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+
+        let creator = canvas.texture_creator();
+        let mut texture = creator
+            .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
+            .unwrap();
+
+        for y in 0..30usize {
+            for x in 0..=32usize {
+                let index = x + (y * 32);
+
+                let addr = 0x2000 + index as u16;
+                let tile_index = self.bus.read_byte(addr)?;
+                //debug!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
+
+                let mut combined_pattern_data= vec![0u8; 8];
+
+                for row in 0..=7 {
+                    let pattern_data0 = self.bus.read_byte((0x0000 + tile_index * 16 + row) as u16)?;
+                    let pattern_data1 = self.bus.read_byte((0x0000 + tile_index * 16 + row + 8) as u16)?;
+
+                    for bit in 0..=7 {
+                        let value0 = (pattern_data0 >> 7 - bit) & 0x01;
+                        let value1 = (pattern_data1 >> 7 - bit) & 0x01;
+                        combined_pattern_data[row as usize] |= (value1 << 1 | value0) << (7 - bit);
+                    }
+                };
+
+                for row in 0..=7 {
+                    for col in 0..=7 {
+                        let color = (combined_pattern_data[row] >> (7 - col)) & 0x03;
+                        //debug!("x: {}, y: {}, color: {}", col + x * 8, row + y * 8, color);
+
+                        let rgb: (u8, u8, u8) = match color {
+                            0 => (0, 0, 0),
+                            1 => (85, 85, 85),
+                            2 => (170, 170, 170),
+                            3 => (255, 255, 255),
+                            _ => unreachable!()
+                        };
+                        frame.set_pixel(col + x * 8, row + y * 8, rgb);
+                    }
+                }
+            }
+        }
+
+        texture.update(None, &frame.pixels, 256).unwrap();
+        canvas.copy(&texture, None, None).unwrap();
+        canvas.present();
+
+        sleep(Duration::from_secs(60));
+
+        Ok(114)
     }
 }

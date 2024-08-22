@@ -3,7 +3,7 @@ use std::rc::Rc;
 use log::{debug, info};
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::dma::{Dma, DmaError, DmaType};
+use crate::dma::{Dma, DmaType};
 use crate::dma::PpuDmaType::NESPPUDMA;
 use crate::dma_device::DmaDevice;
 use crate::memory::{Memory, MemoryError};

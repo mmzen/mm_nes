@@ -37,14 +37,13 @@ impl PartialEq for PpuType {
 pub trait PPU: BusDevice + DmaDevice {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
-    fn render(&self) -> Result<(), PpuError>;
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, PpuError>;
 }
 
 #[derive(Debug)]
 pub enum PpuError {
     BusError(BusError),
-    MemoryError(MemoryError),
-    RegisterError(u16),
+    MemoryError(MemoryError)
 }
 
 impl Error for PpuError {}
@@ -54,7 +53,6 @@ impl Display for PpuError {
         match self {
             PpuError::BusError(e) => { write!(f, "bus error: {}", e) }
             PpuError::MemoryError(e) => { write!(f, "memory error: {}", e) }
-            PpuError::RegisterError(a) => { write!(f, "register access error at address 0x{:04X}", a) }
         }
     }
 }

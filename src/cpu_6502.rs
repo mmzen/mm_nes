@@ -14,7 +14,6 @@ use crate::memory::{MemoryError};
 //const CLOCK_HZ: usize = 1_789_773;
 const STACK_BASE_ADDRESS: u16 = 0x0100;
 const STACK_END_ADDRESS: u16 = 0x01FF;
-const CYCLE_START_SEQUENCE: u32 = 7;
 
 lazy_static! {
     static ref INSTRUCTIONS_TABLE: HashMap<u8, Instruction> = {
@@ -214,13 +213,14 @@ impl CPU for Cpu6502 {
         self.bus.borrow().dump();
     }
 
-    fn run(&mut self) -> Result<(), CpuError> {
-        info!("running CPU ...");
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError> {
+        let mut cycles = start_cycle;
+        let cycles_threshold = start_cycle + credits;
 
-        let mut cycles = CYCLE_START_SEQUENCE;
+        debug!("running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
 
         loop {
-            debug!("pc: 0x{:04X}", self.registers.pc);
+            debug!("program counter: 0x{:04X}", self.registers.pc);
             let original_pc = self.registers.pc;
 
             let byte = self.bus.borrow().read_byte(self.registers.pc)?;
@@ -237,24 +237,28 @@ impl CPU for Cpu6502 {
             }
 
             self.instructions_executed += 1;
+
+            if cycles >= cycles_threshold {
+                break;
+            }
         }
+
+        Ok(cycles)
     }
 
-    fn run_with_pc_immediate(&mut self, address: u16) -> Result<(), CpuError> {
+    fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError> {
         self.registers.pc = address;
-
         debug!("pc set to effective address 0x{:04X}", self.registers.pc);
 
-        self.run()
+        Ok(())
     }
 
-    fn run_with_pc_indirect(&mut self, address: u16) -> Result<(), CpuError> {
+    fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError> {
         self.registers.pc = self.bus.borrow().read_word(address)?;
-
         debug!("pc set to effective address 0x{:04X} (address: 0x{:04X})",
             self.registers.pc, address);
 
-        self.run()
+        Ok(())
     }
 }
 

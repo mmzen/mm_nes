@@ -1,6 +1,5 @@
 use std::fs::File;
-use std::process::exit;
-use log::{debug, info, LevelFilter, trace};
+use log::{debug, info, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use clap::Parser;
 use clap_num::maybe_hex;

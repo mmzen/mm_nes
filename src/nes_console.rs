@@ -11,7 +11,7 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
-use crate::dma::{DmaType, PpuDmaType};
+use crate::dma::{PpuDmaType};
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::loader::{Loader, LoaderError, LoaderType};
@@ -26,25 +26,46 @@ const WRAM_MEMORY_SIZE: usize = 2 * 1024;
 const WRAM_START_ADDR: u16 = 0x0000;
 const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
+const CYCLE_START_SEQUENCE: u32 = 7;
+const CYCLE_CREDITS: u32 = 1000;
+
 
 pub struct NESConsole {
     cpu: Box<dyn CPU>,
+    ppu: Rc<RefCell<dyn PPU>>,
     entry_point: Option<u16>,
 }
 
 impl NESConsole {
+
+    fn run_scheduler(&mut self) -> Result<(), NESConsoleError> {
+        let mut cycles = CYCLE_START_SEQUENCE;
+        let credits = CYCLE_CREDITS;
+
+        loop {
+            cycles = self.cpu.run(cycles, credits)?;
+            //self.ppu.borrow_mut().run(cycles, credits)?;
+        }
+    }
+
     pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
         self.cpu.initialize()?;
 
-        let result = if let Some(pc) = self.entry_point {
-            self.cpu.run_with_pc_immediate(pc)
+        if let Some(pc) = self.entry_point {
+            self.cpu.set_pc_immediate(pc)?
         } else {
-            self.cpu.run_with_pc_indirect(DEFAULT_START_ADDRESS)
+            self.cpu.set_pc_indirect(DEFAULT_START_ADDRESS)?
         };
 
-        if let Err(error) = result {
-            self.cpu.panic(&error);
-            Err(NESConsoleError::CpuError("giving up".to_string()))
+        let status = self.run_scheduler();
+
+        if let Err(error) = status {
+            match error {
+                NESConsoleError::CpuError(ref e) => self.cpu.panic(e),
+                NESConsoleError::PpuError(ref e) => self.ppu.borrow().panic(e),
+                _ => {}
+            };
+            Err(error)
         } else {
             Ok(())
         }
@@ -56,8 +77,8 @@ pub enum NESConsoleError {
     BuilderError(String),
     IOError(String),
     ProgramLoaderError(String),
-    CpuError(String),
-    PpuError(String),
+    CpuError(CpuError),
+    PpuError(PpuError),
 }
 
 impl From<std::io::Error> for NESConsoleError {
@@ -74,7 +95,7 @@ impl From<MemoryError> for NESConsoleError {
 
 impl From<CpuError> for NESConsoleError {
     fn from(error: CpuError) -> Self {
-        NESConsoleError::CpuError(error.to_string())
+        NESConsoleError::CpuError(error)
     }
 }
 
@@ -92,7 +113,7 @@ impl From<LoaderError> for NESConsoleError {
 
 impl From<PpuError> for NESConsoleError {
     fn from(error: PpuError) -> Self {
-        NESConsoleError::PpuError(error.to_string())
+        NESConsoleError::PpuError(error)
     }
 }
 
@@ -114,6 +135,8 @@ pub struct NESConsoleBuilder {
     cpu_trace_file: Option<File>,
     bus: Option<Rc<RefCell<dyn Bus>>>,
     bus_type: Option<BusType>,
+    ppu: Option<Rc<RefCell<dyn PPU>>>,
+    ppu_type: Option<PpuType>,
     device_types: Vec<BusDeviceType>,
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
@@ -129,6 +152,8 @@ impl NESConsoleBuilder {
             cpu_trace_file: None,
             bus: None,
             bus_type: None,
+            ppu: None,
+            ppu_type: None,
             device_types: Vec::new(),
             loader_type: None,
             rom_file: None,
@@ -230,10 +255,10 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(ppu_dma)))
     }
 
-    fn build_ppu_device(&self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
+    fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
-        let mut result = match ppu_type {
+        let result = match ppu_type {
             PpuType::NES2C02 => {
                 Ppu2c02::new(chr_rom, mirroring)?
             },
@@ -243,7 +268,11 @@ impl NESConsoleBuilder {
         let dma = self.build_ppu_dma(&PpuDmaType::NESPPUDMA, bus.clone(), ppu.clone())?;
 
         ppu.borrow_mut().initialize()?;
-        Ok((ppu, dma))
+
+        self.ppu = Some(ppu.clone());
+        self.ppu_type = Some(ppu_type.clone());
+
+        Ok((ppu.clone(), dma))
     }
 
     fn build_apu_device(&self, apu_type: &ApuType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
@@ -348,8 +377,12 @@ impl NESConsoleBuilder {
         let cpu = self.cpu.take()
             .ok_or(NESConsoleError::BuilderError("cpu missing".to_string()))?;
 
+        let ppu = self.ppu.take()
+            .ok_or(NESConsoleError::BuilderError("ppu missing".to_string()))?;
+
         let console = NESConsole {
             cpu,
+            ppu,
             entry_point: self.entry_point.take()
         };
 

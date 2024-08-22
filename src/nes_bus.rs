@@ -88,6 +88,7 @@ impl NESBus {
         }
     }
 
+    #[allow(dead_code)]
     fn is_addr_in_boundary(&self, addr: u16) -> bool {
         addr < BUS_ADDRESSABLE_SIZE as u16
     }

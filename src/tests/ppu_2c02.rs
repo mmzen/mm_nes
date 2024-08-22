@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
 use crate::bus::MockBusStub;
-use crate::bus_device::{BusDevice, MockBusDeviceStub};
-use crate::memory::{Memory, MemoryError};
+use crate::bus_device::{BusDevice, BusDeviceType, MockBusDeviceStub};
+use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::ppu::PpuNameTableMirroring;
 use crate::ppu_2c02::Ppu2c02;
 use crate::tests::init;
@@ -34,6 +34,7 @@ fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2
 
     chr_rom.expect_size().returning(|| CHR_MEMORY_SIZE);
     chr_rom.expect_get_address_range().returning(|| CHR_MEMORY_RANGE);
+    chr_rom.expect_get_device_type().returning(|| BusDeviceType::WRAM(MemoryType::NESMemory));
     chr_rom.expect_get_name().returning(|| CHR_NAME.to_string());
     chr_rom.expect_is_addr_in_address_space().returning(|addr|
         addr == VALID_CH_ROM_ADDRESS || addr == VALID_CH_ROM_ADDRESS + 1);

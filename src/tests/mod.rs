@@ -10,7 +10,7 @@ mod ppu_dma;
 static START: Once = Once::new();
 
 fn init_logger_for_test() {
-    START.call_once(|| TestLogger::init(LevelFilter::Debug, Config::default()).unwrap());
+    START.call_once(|| TestLogger::init(LevelFilter::Trace, Config::default()).unwrap());
 }
 
 pub fn init() {

@@ -12,8 +12,6 @@ use crate::ppu::PpuNameTableMirroring;
 
 const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
 const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
-const PRG_ROM_SIZE: usize = 16 * 1024;
-const CHR_ROM_SIZE: usize = 32;
 const MAPPER_NAME: &str = "NROM-128";
 
 #[derive(Debug)]
@@ -21,8 +19,6 @@ pub struct NROM128Cartridge {
     prg_rom: Rc<RefCell<MemoryBank>>,
     chr_rom: Rc<RefCell<MemoryBank>>,
     device_type: BusDeviceType,
-    prg_rom_size: usize,
-    chr_rom_size: usize,
     mirroring: PpuNameTableMirroring
 }
 
@@ -62,8 +58,6 @@ impl NROM128Cartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
             chr_rom: Rc::new(RefCell::new(chr_rom)),
             device_type: BusDeviceType::CARTRIDGE(NROM128),
-            prg_rom_size,
-            chr_rom_size,
             mirroring,
         };
 

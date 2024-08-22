@@ -44,8 +44,7 @@ mock! {
 
 #[derive(Debug, PartialEq)]
 pub enum BusError {
-    Unmapped(u16),
-    InvalidDeviceMemorySize(usize, usize)
+    Unmapped(u16)
 }
 
 impl Error for BusError {}
@@ -55,11 +54,6 @@ impl Display for BusError {
         match self {
             BusError::Unmapped(addr) => {
                 write!(f, "unmapped memory location: 0x{:04X}", addr)
-            },
-
-            BusError::InvalidDeviceMemorySize(address_space_size, effective_size) => {
-                write!(f, "invalid device memory size: address space size: {}, effective size: {}, %: {}",
-                       address_space_size, effective_size, address_space_size % effective_size)
             }
         }
     }
