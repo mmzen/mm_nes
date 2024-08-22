@@ -9,7 +9,7 @@ pub enum CpuType {
     NES6502
 }
 
-pub trait CPU {
+pub trait CPU: Interruptible {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;
     fn panic(&self, error: &CpuError);
@@ -61,4 +61,9 @@ impl Display for CpuError {
             CpuError::Halted(addr) => { write!(f, "cpu halted 0x{:04X}", addr) }
         }
     }
+}
+
+pub trait Interruptible {
+    fn signal_irq(&mut self) -> Result<(), CpuError>;
+    fn signal_nmi(&mut self) -> Result<(), CpuError>;
 }

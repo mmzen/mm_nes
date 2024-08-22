@@ -4,11 +4,9 @@ use std::rc::Rc;
 use std::thread::sleep;
 use std::time::Duration;
 use log::{debug, info, trace};
-use sdl2::pixels::PixelFormatEnum;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::dma_device::DmaDevice;
-use crate::frame::Frame;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
@@ -16,6 +14,7 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::VramIncrement;
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
 use crate::ppu_2c02::StatusFlag::VBlank;
+use crate::renderer::Renderer;
 
 const PPU_NAME: &str = "PPU 2C02";
 //const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x2FFF)];
@@ -126,7 +125,7 @@ impl Register {
         Register {
             control: 0,
             mask: 0,
-            status: 0x80,
+            status: 0,
             oam_addr: 0,
             oam_data: 0,
             scroll: 0,
@@ -161,7 +160,8 @@ pub struct Ppu2c02 {
     bus: Box<dyn Bus>,
     oam: Vec<SpriteDisplay>,
     v: RefCell<u16>,
-    latch: RefCell<Latch>
+    latch: RefCell<Latch>,
+    renderer: Renderer
 }
 
 impl PPU for Ppu2c02 {
@@ -485,6 +485,7 @@ impl Ppu2c02 {
             v: RefCell::new(0),
             oam: vec![SpriteDisplay::default(); 64],
             latch: RefCell::new(Latch::new()),
+            renderer: Renderer::new(),
         };
 
         Ok(ppu)
@@ -559,36 +560,20 @@ impl Ppu2c02 {
         }
     }
 
-    fn render(&self) -> Result<u32, PpuError> {
-        let mut frame = Frame::new();
-        let sdl_context = sdl2::init().unwrap();
-        let video_subsystem = sdl_context.video().unwrap();
-        let window = video_subsystem
-            .window("test", 256u32, 240u32)
-            .position_centered()
-            .build()
-            .unwrap();
-
-        let mut canvas = window.into_canvas().present_vsync().build().unwrap();
-
-        let creator = canvas.texture_creator();
-        let mut texture = creator
-            .create_texture_target(PixelFormatEnum::RGB24, 256, 240)
-            .unwrap();
-
+    fn render(&mut self) -> Result<u32, PpuError> {
         for y in 0..30usize {
-            for x in 0..=32usize {
+            for x in 0..32usize {
                 let index = x + (y * 32);
 
                 let addr = 0x2000 + index as u16;
-                let tile_index = self.bus.read_byte(addr)?;
-                //debug!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
+                let tile_index = self.bus.read_byte(addr)? as u16;
+                trace!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
 
                 let mut combined_pattern_data= vec![0u8; 8];
 
                 for row in 0..=7 {
-                    let pattern_data0 = self.bus.read_byte((0x0000 + tile_index * 16 + row) as u16)?;
-                    let pattern_data1 = self.bus.read_byte((0x0000 + tile_index * 16 + row + 8) as u16)?;
+                    let pattern_data0 = self.bus.read_byte(0x0000 + tile_index * 16 + row)?;
+                    let pattern_data1 = self.bus.read_byte(0x0000 + tile_index * 16 + row + 8)?;
 
                     for bit in 0..=7 {
                         let value0 = (pattern_data0 >> 7 - bit) & 0x01;
@@ -600,7 +585,7 @@ impl Ppu2c02 {
                 for row in 0..=7 {
                     for col in 0..=7 {
                         let color = (combined_pattern_data[row] >> (7 - col)) & 0x03;
-                        //debug!("x: {}, y: {}, color: {}", col + x * 8, row + y * 8, color);
+                        trace!("x: {}, y: {}, color: {}", col + x * 8, row + y * 8, color);
 
                         let rgb: (u8, u8, u8) = match color {
                             0 => (0, 0, 0),
@@ -609,18 +594,14 @@ impl Ppu2c02 {
                             3 => (255, 255, 255),
                             _ => unreachable!()
                         };
-                        frame.set_pixel(col + x * 8, row + y * 8, rgb);
+                        self.renderer.frame().set_pixel(col + x * 8, row + y * 8, rgb);
                     }
                 }
             }
         }
 
-        texture.update(None, &frame.pixels, 256).unwrap();
-        canvas.copy(&texture, None, None).unwrap();
-        canvas.present();
-
-        sleep(Duration::from_secs(60));
-
+        self.renderer.update();
+        //sleep(Duration::from_secs(60));
         Ok(114)
     }
 }

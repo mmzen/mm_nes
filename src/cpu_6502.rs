@@ -6,14 +6,19 @@ use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
 use lazy_static::lazy_static;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use crate::bus::Bus;
-use crate::cpu::{CPU, CpuError};
+use crate::cpu::{CPU, CpuError, Interruptible};
 use crate::memory::{MemoryError};
 
 //const CLOCK_HZ: usize = 1_789_773;
 const STACK_BASE_ADDRESS: u16 = 0x0100;
 const STACK_END_ADDRESS: u16 = 0x01FF;
+
+const IRQ_VECTOR: u16 = 0xFFFA;
+const NMI_VECTOR: u16 = 0xFFFE;
+const BRK_VECTOR: u16 = 0xFFFE;
+const RESET_VECTOR: u16 = 0xFFFC;
 
 lazy_static! {
     static ref INSTRUCTIONS_TABLE: HashMap<u8, Instruction> = {
@@ -150,11 +155,38 @@ impl Registers {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum Interrupt {
+    IRQ,
+    NMI,
+    NONE
+}
+
 pub struct Cpu6502 {
     registers: Registers,
     bus: Rc<RefCell<dyn Bus>>,
     instructions_executed: u64,
+    tracing: bool,
     tracer: Tracer,
+    interrupt: Interrupt,
+}
+
+impl Interruptible for Cpu6502 {
+    fn signal_irq(&mut self) -> Result<(), CpuError> {
+        if self.registers.get_status(StatusFlag::InterruptDisable) == false{
+            trace!("IRQ interrupt - status register: {:02X} (interrupt disable: {})",
+                self.registers.p, self.registers.get_status(StatusFlag::InterruptDisable));
+            self.interrupt = Interrupt::IRQ;
+        }
+
+        Ok(())
+    }
+
+    fn signal_nmi(&mut self) -> Result<(), CpuError> {
+        trace!("NMI interrupt");
+        self.interrupt = Interrupt::NMI;
+        Ok(())
+    }
 }
 
 impl CPU for Cpu6502 {
@@ -168,7 +200,7 @@ impl CPU for Cpu6502 {
         self.registers.set_status(StatusFlag::InterruptDisable, true);
         self.registers.set_status(StatusFlag::Unused, true);
         self.registers.sp = 0xFD;
-        self.registers.pc = 0xFFFC;
+        self.registers.pc = RESET_VECTOR;
         Ok(())
     }
 
@@ -176,7 +208,6 @@ impl CPU for Cpu6502 {
         info!("initializing CPU");
 
         self.reset()?;
-        //cpu.memory.initialize()?;
         Ok(())
     }
 
@@ -227,7 +258,9 @@ impl CPU for Cpu6502 {
             let instruction = Cpu6502::decode_instruction(byte)?;
             let operand = self.fetch_operand(instruction)?;
 
-            self.tracer.trace(&self, &instruction, &operand, cycles)?;
+            if self.tracing {
+                self.tracer.trace(&self, &instruction, &operand, cycles)?;
+            }
 
             let additional_cycles = self.execute_instruction(instruction, &operand)?;
             cycles = cycles + instruction.cycles + additional_cycles;
@@ -237,6 +270,18 @@ impl CPU for Cpu6502 {
             }
 
             self.instructions_executed += 1;
+
+            match self.interrupt {
+                Interrupt::NMI => {
+                    self.nmi()?;
+                    self.interrupt = Interrupt::NONE;
+                },
+                Interrupt::IRQ => {
+                    self.irq()?;
+                    self.interrupt = Interrupt::NONE;
+                },
+                Interrupt::NONE => {}
+            }
 
             if cycles >= cycles_threshold {
                 break;
@@ -263,7 +308,7 @@ impl CPU for Cpu6502 {
 }
 
 impl Cpu6502 {
-    pub fn new(bus: Rc<RefCell<dyn Bus>>, trace_file: Option<File>) -> Self {
+    pub fn new(bus: Rc<RefCell<dyn Bus>>, tracing: bool, trace_file: Option<File>) -> Self {
         Cpu6502 {
             registers: Registers {
                 a: 0,
@@ -275,7 +320,9 @@ impl Cpu6502 {
             },
             bus,
             instructions_executed: 0,
-            tracer: Tracer::new_with_file(trace_file)
+            tracing,
+            tracer: Tracer::new_with_file(trace_file),
+            interrupt: Interrupt::NONE,
         }
     }
 
@@ -563,6 +610,39 @@ impl Cpu6502 {
 
         (instruction.execute)(instruction, self, operand)
     }
+
+    fn interrupt_preamble(&mut self) -> Result<(), CpuError> {
+        self.registers.p &= !StatusFlag::BreakCommand.bits();
+
+        self.push_stack((self.registers.pc >> 8) as u8)?;
+        self.push_stack((self.registers.pc & 0xFF) as u8)?;
+        self.push_stack(self.registers.p)?;
+
+        self.registers.set_status(StatusFlag::InterruptDisable, true);
+        Ok(())
+    }
+
+    fn nmi(&mut self) -> Result<(), CpuError> {
+        self.interrupt_preamble()?;
+        self.registers.pc = self.bus.borrow().read_word(NMI_VECTOR)?;
+        Ok(())
+    }
+
+    fn irq(&mut self) -> Result<(), CpuError> {
+        self.interrupt_preamble()?;
+        self.registers.pc = self.bus.borrow().read_word(IRQ_VECTOR)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn is_nmi_pending(&self) -> bool {
+        self.interrupt == Interrupt::NMI
+    }
+
+    #[cfg(test)]
+    fn is_irq_pending(&self) -> bool {
+        self.interrupt == Interrupt::IRQ
+    }
 }
 
 pub struct Tracer {
@@ -825,7 +905,7 @@ impl Instruction {
         cpu.push_stack(cpu.registers.p)?;
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
-        cpu.registers.pc = cpu.bus.borrow().read_word(0xFFFE)?;
+        cpu.registers.pc = cpu.bus.borrow().read_word(BRK_VECTOR)?;
 
         Ok(0)
     }
@@ -1077,9 +1157,8 @@ impl Instruction {
     }
 
     fn php_push_processor_status_on_stack(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        let status = cpu.registers.p | 0x30;
-
-        cpu.push_stack(status)?;
+        cpu.registers.p |= StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits();
+        cpu.push_stack(cpu.registers.p)?;
 
         Ok(0)
     }

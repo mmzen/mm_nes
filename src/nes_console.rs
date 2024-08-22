@@ -44,7 +44,7 @@ impl NESConsole {
 
         loop {
             cycles = self.cpu.run(cycles, credits)?;
-            //self.ppu.borrow_mut().run(cycles, credits)?;
+            cycles = self.ppu.borrow_mut().run(cycles, credits)?;
         }
     }
 
@@ -132,6 +132,7 @@ impl Display for NESConsoleError {
 pub struct NESConsoleBuilder {
     cpu: Option<Box<dyn CPU>>,
     cpu_type: Option<CpuType>,
+    cpu_tracing: bool,
     cpu_trace_file: Option<File>,
     bus: Option<Rc<RefCell<dyn Bus>>>,
     bus_type: Option<BusType>,
@@ -149,6 +150,7 @@ impl NESConsoleBuilder {
         NESConsoleBuilder {
             cpu: None,
             cpu_type: None,
+            cpu_tracing: false,
             cpu_trace_file: None,
             bus: None,
             bus_type: None,
@@ -167,8 +169,9 @@ impl NESConsoleBuilder {
         self
     }
 
-    pub fn with_cpu_options(mut self, cpu: CpuType, trace_file: Option<File>) -> Self {
+    pub fn with_cpu_tracing_options(mut self, cpu: CpuType, trace: bool, trace_file: Option<File>) -> Self {
         self.cpu_type = Some(cpu);
+        self.cpu_tracing = trace;
         self.cpu_trace_file = trace_file;
 
         self
@@ -201,7 +204,7 @@ impl NESConsoleBuilder {
 
         let result: Result<Box<dyn CPU>, NESConsoleError> = match &self.cpu_type {
             Some(CpuType::NES6502) => {
-                let cpu = Cpu6502::new(bus, self.cpu_trace_file.take());
+                let cpu = Cpu6502::new(bus, self.cpu_tracing, self.cpu_trace_file.take());
                 Ok(Box::new(cpu))
             },
 

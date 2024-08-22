@@ -41,6 +41,7 @@ mod dma;
 mod ppu_dma;
 mod frame;
 mod apu_rp2a03;
+mod renderer;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -60,6 +61,14 @@ struct Args {
         value_parser=maybe_hex::<u16>
     )]
     pc: Option<u16>,
+
+    #[arg(
+        short = 'g',
+        long = "cpu-tracing",
+        help = "activate cpu tracing",
+        default_value_t = false,
+    )]
+    cpu_tracing: bool,
 
     #[arg(
         short = 't',
@@ -107,7 +116,7 @@ fn main() -> Result<(), NESConsoleError> {
     info!("emulator bootstrapping...");
 
     let mut console = builder
-        .with_cpu_options(NES6502, trace_file)
+        .with_cpu_tracing_options(NES6502, args.cpu_tracing, trace_file)
         .with_bus_type(BusType::NESBus)
         .with_bus_device_type(WRAM(NESMemory))
         .with_bus_device_type(CARTRIDGE(NROM128))
