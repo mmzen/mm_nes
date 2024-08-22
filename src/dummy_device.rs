@@ -48,6 +48,10 @@ impl Memory for DummyDevice {
         Ok(DEFAULT_CONTENT)
     }
 
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        self.read_byte(addr)
+    }
+
     fn write_byte(&mut self, _: u16, _: u8) -> Result<(), MemoryError> {
         Ok(())
     }

@@ -85,6 +85,10 @@ impl Memory for NROM128Cartridge {
         self.prg_rom.borrow().read_byte(addr)
     }
 
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        self.read_byte(addr)
+    }
+
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
         self.prg_rom.borrow_mut().write_byte(addr, value)
     }

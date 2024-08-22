@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
-use log::debug;
+use log::{debug, trace};
 use crate::bus::{Bus, BusError};
 use crate::bus_device::BusDevice;
 use crate::memory::{Memory, MemoryError};
@@ -22,6 +22,13 @@ impl Memory for NESBus {
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         let (memory, effective_addr) = self.lookup_address(addr)?;
         let value = memory.borrow().read_byte(effective_addr)?;
+
+        Ok(value)
+    }
+
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        let (memory, effective_addr) = self.lookup_address(addr)?;
+        let value = memory.borrow().trace_read_byte(effective_addr)?;
 
         Ok(value)
     }
@@ -60,20 +67,15 @@ impl Bus for NESBus {
     fn add_device(&mut self, device: Rc<RefCell<dyn BusDevice>>) -> Result<(), BusError> {
         let size = device.borrow().size();
         let address_space = device.borrow().get_address_range();
-        //let address_space_size = (address_space.1 - address_space.0 + 1) as usize;
 
         debug!("adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
-            device.borrow().get_name(), size, address_space.0, address_space.1);
+        device.borrow().get_name(), size, address_space.0, address_space.1);
 
-        //if address_space_size % size != 0 {
-        //    Err(BusError::InvalidDeviceMemorySize(address_space_size, size))
-        //} else {
-            self.devices.push(device);
-            self.devices.sort();
-            debug!("{} devices attached to the bus", self.devices.len());
+        self.devices.push(device);
+        self.devices.sort();
+        debug!("{} devices attached to the bus", self.devices.len());
 
-            Ok(())
-        //}
+        Ok(())
     }
 }
 
@@ -96,8 +98,8 @@ impl NESBus {
                 let d = device.borrow();
                 let effective_addr = addr & (d.size() - 1) as u16;
 
-                //debug!("translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
-                //    addr, d.get_name(), d.get_device_type(), d.get_address_range().0, d.get_address_range().1, effective_addr);
+                trace!("translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
+                    addr, d.get_name(), d.get_device_type(), d.get_address_range().0, d.get_address_range().1, effective_addr);
 
                 return Ok((Rc::clone(&device), effective_addr));
             }

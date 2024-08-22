@@ -31,6 +31,7 @@ impl PartialEq for MemoryType {
 pub trait Memory: Debug {
     fn initialize(&mut self) -> Result<usize, MemoryError>;
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError>;
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError>;
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError>;
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError>;
     fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError>;

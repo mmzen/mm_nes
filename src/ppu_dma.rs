@@ -63,17 +63,20 @@ impl Memory for PpuDma {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        let effective_addr = self.get_effective_address(addr);
 
-        let value = match effective_addr {
-            0x4014 => self.last_transfer_addr,
+        let value = match addr {
+            0x00 => self.last_transfer_addr,
             _ => unreachable!()
         };
 
         Ok(value)
     }
 
-    fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        self.read_byte(addr)
+    }
+
+    fn write_byte(&mut self, _: u16, value: u8) -> Result<(), MemoryError> {
         self.transfer_memory(value)?;
         self.last_transfer_addr = value;
 
@@ -105,10 +108,6 @@ impl PpuDma {
             last_transfer_addr: 0,
             bus
         }
-    }
-
-    fn get_effective_address(&self, addr: u16) -> u16 {
-        PPU_DMA_ADDRESS_SPACE.0 + (addr & (PPU_DMA_SIZE as u16 - 1))
     }
 }
 

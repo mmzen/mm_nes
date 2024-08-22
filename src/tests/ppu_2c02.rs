@@ -51,20 +51,20 @@ fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2
 fn write_address_to_addr_register(ppu: &mut Ppu2c02, value: u16) -> Result<(), MemoryError> {
     let high_byte = ((value & 0xFF00) >> 8) as u8;
     let low_byte = (value & 0x00FF) as u8;
-    ppu.write_byte(0x2006, high_byte)?;
-    ppu.write_byte(0x2006, low_byte)?;
+    ppu.write_byte(0x06, high_byte)?;
+    ppu.write_byte(0x06, low_byte)?;
     Ok(())
 }
 
 fn write_data_to_addr_register(ppu: &mut Ppu2c02, value: u8) -> Result<(), MemoryError> {
-    ppu.write_byte(0x2007, value)?;
+    ppu.write_byte(0x07, value)?;
     Ok(())
 }
 
 fn set_v_increment(ppu: &mut Ppu2c02, value: u8) {
     match value {
-        1 => ppu.write_byte(0x2000, CONTROL_REGISTER_INCR_1).unwrap(),
-        32 => ppu.write_byte(0x2000, CONTROL_REGISTER_INCR_32).unwrap(),
+        1 => ppu.write_byte(0x00, CONTROL_REGISTER_INCR_1).unwrap(),
+        32 => ppu.write_byte(0x00, CONTROL_REGISTER_INCR_32).unwrap(),
         _ => panic!("invalid v increment value: {}", value)
     }
 }
@@ -93,7 +93,7 @@ fn read_write_byte_works() {
     init();
 
     let mut ppu = create_ppu();
-    let address = 0x2000;
+    let address = 0x00;
     let value = 0xAB;
 
     ppu.write_byte(address, value).unwrap();
@@ -120,8 +120,8 @@ fn read_write_to_registers_works() {
 
     let mut ppu = create_ppu();
     let registers = [
-        (0x2000, "controller"), (0x2001, "mask"), (0x2002, "status"), (0x2003, "oam_addr"),
-        (0x2005, "scroll")
+        (0x00, "controller"), (0x01, "mask"), (0x02, "status"), (0x03, "oam_addr"),
+        (0x05, "scroll")
     ];
     let value = 0xAB;
 
@@ -137,7 +137,7 @@ fn read_write_to_registers_works() {
 #[test]
 fn read_write_to_addr_register_works() {
     let mut ppu = create_ppu();
-    let address = 0x2006;
+    let address = 0x06;
     let value = (0xAB, 0xCD);
     let expected = 0xABCD;
 
@@ -152,7 +152,7 @@ fn write_to_addr_and_read_to_data_registers_to_chr_rom_works() {
     init();
 
     let mut ppu = create_ppu();
-    let data = 0x2007;
+    let data = 0x07;
 
     set_v_increment(&mut ppu, 1);
     write_address_to_addr_register(&mut ppu, VALID_CH_ROM_ADDRESS).unwrap();
@@ -168,7 +168,7 @@ fn write_to_addr_and_data_and_read_to_data_registers_to_palette_works() {
     init();
 
     let mut ppu = create_ppu();
-    let data = 0x2007;
+    let data = 0x07;
 
     write_address_to_addr_register(&mut ppu, VALID_PALETTE_ADDRESS).unwrap();
     ppu.write_byte(data, VALID_DATA_VALUE).unwrap();
@@ -183,7 +183,7 @@ fn write_to_addr_and_data_and_read_to_data_registers_to_palette_works() {
 fn read_to_data_registers_with_increments_to_name_tables_works() {
     init();
 
-    let data = 0x2007;
+    let data = 0x07;
     let iterations: usize = 20;
     let increments: [usize; 2] = [1, 32];
 
@@ -210,7 +210,7 @@ fn read_to_data_registers_with_increments_to_name_tables_works() {
 fn write_to_data_registers_with_increments_to_name_tables_works() {
     init();
 
-    let data = 0x2007;
+    let data = 0x07;
     let iterations: usize = 20;
     let increments: [usize; 2] = [1, 32];
 
@@ -220,7 +220,7 @@ fn write_to_data_registers_with_increments_to_name_tables_works() {
 
         write_address_to_addr_register(&mut ppu, VALID_NAME_TABLE_ADDRESS).unwrap();
 
-        for (index, value) in (VALID_NAME_TABLE_ADDRESS..).step_by(inc).take(iterations).enumerate() {
+        for (index, _) in (VALID_NAME_TABLE_ADDRESS..).step_by(inc).take(iterations).enumerate() {
             ppu.write_byte(data, VALID_DATA_VALUE + index as u8).unwrap();
         }
 
@@ -242,12 +242,12 @@ fn test_for_values_at_addresses(ppu: &mut Ppu2c02, value: u8, addresses: &[(u16,
         write_data_to_addr_register(ppu, value).unwrap();
 
         write_address_to_addr_register(ppu, addr.0).unwrap();
-        ppu.read_byte(0x2007).unwrap();
-        assert_eq!(ppu.read_byte(0x2007).unwrap(), value);
+        ppu.read_byte(0x07).unwrap();
+        assert_eq!(ppu.read_byte(0x07).unwrap(), value);
 
         write_address_to_addr_register(ppu, addr.1).unwrap();
-        ppu.read_byte(0x2007).unwrap();
-        assert_eq!(ppu.read_byte(0x2007).unwrap(), value);
+        ppu.read_byte(0x07).unwrap();
+        assert_eq!(ppu.read_byte(0x07).unwrap(), value);
     }
 }
 
@@ -282,8 +282,8 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
     init();
 
     let mut ppu = create_ppu();
-    let status = 0x2002;
-    let addr = 0x2006;
+    let status = 0x02;
+    let addr = 0x06;
     let status_value = 0x80;
     let addr_value = 0xAB;
 

@@ -255,17 +255,39 @@ impl Memory for Ppu2c02 {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        let effective_addr = self.get_effective_address(addr);
 
-        let value = match effective_addr {
-            0x2000 => self.read_control_register(),
-            0x2001 => self.read_mask_register(),
-            0x2002 => self.read_status_register(),
-            0x2003 => self.read_oam_address_register(),
-            0x2004 => self.read_oam_data_register(self.register.borrow().oam_addr),
-            0x2005 => self.read_scroll_register(),
-            0x2006 => self.read_addr_register(),
-            0x2007 => self.read_data_register()?,
+        let value = match addr {
+            0x00 => self.read_control_register(),
+            0x01 => self.read_mask_register(),
+            0x02 => self.read_status_register(),
+            0x03 => self.read_oam_address_register(),
+            0x04 => self.read_oam_data_register(self.register.borrow().oam_addr),
+            0x05 => self.read_scroll_register(),
+            0x06 => self.read_addr_register(),
+            0x07 => self.read_data_register()?,
+            _ => unreachable!(),
+        };
+
+        Ok(value)
+    }
+
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+
+        let value = match addr {
+            0x00 => self.register.borrow().control,
+            0x01 => self.register.borrow().mask,
+            0x02 => self.register.borrow().status,
+            0x03 => self.register.borrow().oam_addr,
+            0x04 => self.read_oam_data_register(self.register.borrow().oam_addr),
+            0x05 => self.register.borrow().scroll,
+            0x06 => {
+                if self.latch.borrow().state == LatchState::HIGH {
+                    (*self.v.borrow() >> 8) as u8
+                } else {
+                    *self.v.borrow() as u8
+                }
+            },
+            0x07 => self.register.borrow().data,
             _ => unreachable!(),
         };
 
@@ -273,20 +295,19 @@ impl Memory for Ppu2c02 {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        let effective_addr = self.get_effective_address(addr);
 
-        match effective_addr {
-            0x2000 => self.write_control_register(value),
-            0x2001 => self.write_mask_register(value),
-            0x2002 => self.write_status_register(value),
-            0x2003 => self.write_oam_address_register(value),
-            0x2004 => {
+        match addr {
+            0x00 => self.write_control_register(value),
+            0x01 => self.write_mask_register(value),
+            0x02 => self.write_status_register(value),
+            0x03 => self.write_oam_address_register(value),
+            0x04 => {
                 let addr = self.register.borrow().oam_addr;
                 self.write_oam_data_register(addr, value)
             },
-            0x2005 => self.write_scroll_register(value),
-            0x2006 => self.write_addr_register(value),
-            0x2007 => self.write_data_register(value)?,
+            0x05 => self.write_scroll_register(value),
+            0x06 => self.write_addr_register(value),
+            0x07 => self.write_data_register(value)?,
             _ => unreachable!(),
         };
 
@@ -342,11 +363,6 @@ impl DmaDevice for Ppu2c02 {
 }
 
 impl Ppu2c02 {
-
-    fn get_effective_address(&self, addr: u16) -> u16 {
-       PPU_EXTERNAL_ADDRESS_SPACE.0 + (addr & (PPU_EXTERNAL_MEMORY_SIZE as u16 - 1))
-    }
-
     fn read_control_register(&self) -> u8 {
         self.register.borrow().control
     }

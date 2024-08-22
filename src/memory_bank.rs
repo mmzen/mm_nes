@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, trace};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
 use crate::memory::MemoryType::NESMemory;
@@ -24,19 +24,23 @@ impl Memory for MemoryBank {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        //debug!("reading byte at 0x{:04X}", addr);
+        trace!("reading byte at 0x{:04X}", addr);
 
         if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
         } else {
             let value = self.memory[addr as usize];
-            //debug!("read byte at 0x{:04X}: {:02X}", addr, value);
+            trace!("read byte at 0x{:04X}: {:02X}", addr, value);
             Ok(value)
         }
     }
 
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        self.read_byte(addr)
+    }
+
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        //debug!("writing byte ({:02X}) at 0x{:04X}", value, addr);
+        trace!("writing byte ({:02X}) at 0x{:04X}", value, addr);
 
         if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))

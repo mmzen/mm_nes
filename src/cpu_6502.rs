@@ -579,9 +579,9 @@ impl Tracer {
     fn trace(&self, cpu: &Cpu6502, instruction: &Instruction, operand: &Operand, cycle: u32) -> Result<(), CpuError> {
         let a = format!("{:04X}", cpu.registers.pc);
 
-        let mut b = format!("{:02X}", cpu.bus.borrow().read_byte(cpu.registers.pc)?);
+        let mut b = format!("{:02X}", cpu.bus.borrow().trace_read_byte(cpu.registers.pc)?);
         for i in 1..instruction.bytes {
-            let o = format!(" {:02X}", cpu.bus.borrow().read_byte(cpu.registers.safe_pc_add(i as i16)?)?);
+            let o = format!(" {:02X}", cpu.bus.borrow().trace_read_byte(cpu.registers.safe_pc_add(i as i16)?)?);
             b.push_str(&o);
         }
 
@@ -599,34 +599,36 @@ impl Tracer {
                 format!("${:04X}", *addr),
 
             (AddressingMode::Absolute, Operand::Address(addr), _) =>
-                format!("${:04X} = {:02X}", *addr, cpu.bus.borrow().read_byte(*addr)?),
+                format!("${:04X} = {:02X}", *addr, cpu.bus.borrow().trace_read_byte(*addr)?),
 
             (AddressingMode::Relative, Operand::Address(addr), _) =>
                 format!("${:04X}", *addr),
 
             (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
-                format!("${:02X} = {:02X}", *addr as u8, cpu.bus.borrow().read_byte(*addr)?),
+                format!("${:02X} = {:02X}", *addr as u8, cpu.bus.borrow().trace_read_byte(*addr)?),
 
             (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
+                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
 
             (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
+                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
 
             (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
+                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
 
             (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().read_byte(*effective)?),
+                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
 
             (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:04X}) = {:04X}", *addr, effective),
 
             (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x), *effective, cpu.bus.borrow().read_byte(*effective)?),
+                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x),
+                        *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
 
             (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16), *effective, cpu.bus.borrow().read_byte(*effective)?),
+                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16),
+                        *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
 
             (AddressingMode::Immediate, Operand::Byte(byte), _) =>
                 format!("#${:02X}", byte),
