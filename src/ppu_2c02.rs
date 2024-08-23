@@ -1,17 +1,16 @@
 use std::cell::RefCell;
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
-use std::thread::sleep;
-use std::time::Duration;
 use log::{debug, info, trace};
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::cpu::{Interruptible, CPU};
 use crate::dma_device::DmaDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
-use crate::ppu_2c02::ControlFlag::VramIncrement;
+use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, VramIncrement};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
 use crate::ppu_2c02::StatusFlag::VBlank;
 use crate::renderer::Renderer;
@@ -161,17 +160,25 @@ pub struct Ppu2c02 {
     oam: Vec<SpriteDisplay>,
     v: RefCell<u16>,
     latch: RefCell<Latch>,
-    renderer: Renderer
+    renderer: Renderer,
+    cpu: Rc<RefCell<dyn CPU>>,
 }
 
 impl PPU for Ppu2c02 {
     fn reset(&mut self) -> Result<(), PpuError> {
+        info!("resetting PPU");
+
         self.register.borrow_mut().control = 0;
         self.register.borrow_mut().mask = 0;
+        self.register.borrow_mut().status = 0;
         self.register.borrow_mut().scroll = 0;
         self.register.borrow_mut().data = 0;
 
+        self.latch.borrow_mut().reset();
         *self.v.borrow_mut() = 0;
+
+        self.set_flag(Status(VBlank), true);
+
         Ok(())
     }
 
@@ -201,6 +208,7 @@ impl Memory for Ppu2c02 {
 
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         info!("initializing PPU");
+        let _ = self.reset();
         Ok(PPU_EXTERNAL_MEMORY_SIZE)
     }
 
@@ -436,10 +444,11 @@ impl Ppu2c02 {
         let incr = self.get_v_increment_value() as u16;
         let incremented_v = self.v_wrapping_add(incr);
 
+        //debug!("write through PPU data register: 0x{:02X} to 0x{:04X}", value, *self.v.borrow());
         self.bus.write_byte(*self.v.borrow(), value)?;
 
         *self.v.borrow_mut() = incremented_v;
-
+        //debug!("write through PPU data register: v is now 0x{:04X}", *self.v.borrow());
         Ok(())
     }
 
@@ -466,7 +475,7 @@ impl Ppu2c02 {
         Ok(())
     }
 
-    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring) -> Result<Self, PpuError> {
+    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring, cpu: Rc<RefCell<dyn CPU>>) -> Result<Self, PpuError> {
         let mut bus: Box<dyn Bus> = Box::new(NESBus::new());
 
         let palette_table = Rc::new(RefCell::new(
@@ -486,6 +495,7 @@ impl Ppu2c02 {
             oam: vec![SpriteDisplay::default(); 64],
             latch: RefCell::new(Latch::new()),
             renderer: Renderer::new(),
+            cpu,
         };
 
         Ok(ppu)
@@ -555,30 +565,50 @@ impl Ppu2c02 {
 
     fn get_v_increment_value(&self) -> u8 {
         match self.get_flag(Control(VramIncrement)) {
-            true => V_INCR_GOING_ACROSS,
-            false => V_INCR_GOING_DOWN,
+            true => V_INCR_GOING_DOWN,
+            false => V_INCR_GOING_ACROSS,
         }
     }
 
     fn render(&mut self) -> Result<u32, PpuError> {
+        debug!("starting rendering");
+
+        let base_name_table_addr_status = (self.get_flag(Control(BaseNameTableAddr2)) as u8) << 1 | (self.get_flag(Control(BaseNameTableAddr1)) as u8);
+        let base_name_table_addr = match base_name_table_addr_status {
+            0b00 => 0x2000,
+            0b01 => 0x2400,
+            0b10 => 0x2800,
+            0b11 => 0x2C00,
+            _ => unreachable!(),
+        };
+        debug!("base name table address: 0x{:04X}", base_name_table_addr);
+
+        self.set_flag(Status(VBlank), false);
+        debug!("control register: 0x{:02X}", self.register.borrow().control);
+
+        let pattern_table_addr = if self.get_flag(Control(BackgroundPatternTableAddr)) { 0x1000 } else { 0x1000 };
+        debug!("pattern table address: 0x{:04X}", pattern_table_addr);
+
+
         for y in 0..30usize {
             for x in 0..32usize {
                 let index = x + (y * 32);
 
-                let addr = 0x2000 + index as u16;
+                let addr = base_name_table_addr + index as u16;
                 let tile_index = self.bus.read_byte(addr)? as u16;
-                trace!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
+                //debug!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
 
                 let mut combined_pattern_data= vec![0u8; 8];
 
                 for row in 0..=7 {
-                    let pattern_data0 = self.bus.read_byte(0x0000 + tile_index * 16 + row)?;
-                    let pattern_data1 = self.bus.read_byte(0x0000 + tile_index * 16 + row + 8)?;
+                    let pattern_data0 = self.bus.read_byte(pattern_table_addr + tile_index * 16 + row)?;
+                    let pattern_data1 = self.bus.read_byte(pattern_table_addr + tile_index * 16 + row + 8)?;
 
                     for bit in 0..=7 {
                         let value0 = (pattern_data0 >> 7 - bit) & 0x01;
                         let value1 = (pattern_data1 >> 7 - bit) & 0x01;
-                        combined_pattern_data[row as usize] |= (value1 << 1 | value0) << (7 - bit);
+                        let combined = (value1 << 1 | value0) << (7 - bit);
+                        combined_pattern_data[row as usize] |= combined;
                     }
                 };
 
@@ -594,14 +624,21 @@ impl Ppu2c02 {
                             3 => (255, 255, 255),
                             _ => unreachable!()
                         };
-                        self.renderer.frame().set_pixel(col + x * 8, row + y * 8, rgb);
+                        self.renderer.frame().set_pixel(col + (x * 8), row + (y * 8), rgb);
                     }
                 }
             }
         }
 
         self.renderer.update();
-        //sleep(Duration::from_secs(60));
+        debug!("rendering done");
+
+        self.set_flag(Status(VBlank), true);
+
+        if self.get_flag(Control(GenerateNmi)) {
+            self.cpu.borrow_mut().signal_nmi()?;
+        }
+
         Ok(114)
     }
 }

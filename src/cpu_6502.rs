@@ -15,8 +15,8 @@ use crate::memory::{MemoryError};
 const STACK_BASE_ADDRESS: u16 = 0x0100;
 const STACK_END_ADDRESS: u16 = 0x01FF;
 
-const IRQ_VECTOR: u16 = 0xFFFA;
-const NMI_VECTOR: u16 = 0xFFFE;
+const IRQ_VECTOR: u16 = 0xFFFE;
+const NMI_VECTOR: u16 = 0xFFFA;
 const BRK_VECTOR: u16 = 0xFFFE;
 const RESET_VECTOR: u16 = 0xFFFC;
 
@@ -174,7 +174,7 @@ pub struct Cpu6502 {
 impl Interruptible for Cpu6502 {
     fn signal_irq(&mut self) -> Result<(), CpuError> {
         if self.registers.get_status(StatusFlag::InterruptDisable) == false{
-            trace!("IRQ interrupt - status register: {:02X} (interrupt disable: {})",
+            debug!("IRQ interrupt - status register: {:02X} (interrupt disable: {})",
                 self.registers.p, self.registers.get_status(StatusFlag::InterruptDisable));
             self.interrupt = Interrupt::IRQ;
         }
@@ -183,7 +183,7 @@ impl Interruptible for Cpu6502 {
     }
 
     fn signal_nmi(&mut self) -> Result<(), CpuError> {
-        trace!("NMI interrupt");
+        debug!("NMI interrupt");
         self.interrupt = Interrupt::NMI;
         Ok(())
     }
@@ -336,13 +336,18 @@ impl Cpu6502 {
         }
     }
 
+    fn stack_wrapping_add(addr: u16, value: i8) -> u16 {
+        let sp = addr as u8;
+        STACK_BASE_ADDRESS + sp.wrapping_add_signed(value) as u16
+    }
+
     fn push_stack(&mut self, value: u8) -> Result<(), CpuError> {
         let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
 
-        debug!("sp (before push): 0x{:02X}, pushing at 0x{:02X}, value {:02X}", self.registers.sp, addr, value);
+        debug!("sp (before push): 0x{:02X}, pushing at 0x{:04X}, value {:04X}", self.registers.sp, addr, value);
         self.bus.borrow_mut().write_byte(addr, value)?;
 
-        addr = addr - 1;
+        addr = Cpu6502::stack_wrapping_add(addr, -1);
         self.is_valid_stack_addr(addr)?;
 
         self.registers.sp = addr as u8;
@@ -352,9 +357,10 @@ impl Cpu6502 {
     }
 
     fn pop_stack(&mut self) -> Result<u8, CpuError> {
-        let addr = STACK_BASE_ADDRESS + self.registers.sp as u16 + 1;
+        let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+        addr = Cpu6502::stack_wrapping_add(addr, 1);
 
-        debug!("sp (before pop): 0x{:02X}, popping at 0x{:02X}", self.registers.sp, addr);
+        debug!("sp (before pop): 0x{:02X}, popping at 0x{:04X}", self.registers.sp, addr);
         let value = self.bus.borrow().read_byte(addr)?;
         self.is_valid_stack_addr(addr)?;
 
@@ -625,22 +631,26 @@ impl Cpu6502 {
     fn nmi(&mut self) -> Result<(), CpuError> {
         self.interrupt_preamble()?;
         self.registers.pc = self.bus.borrow().read_word(NMI_VECTOR)?;
+        debug!("NMI interrupt: program counter: 0x{:04X}", self.registers.pc);
+
         Ok(())
     }
 
     fn irq(&mut self) -> Result<(), CpuError> {
         self.interrupt_preamble()?;
         self.registers.pc = self.bus.borrow().read_word(IRQ_VECTOR)?;
+        debug!("IRQ interrupt: program counter: 0x{:04X}", self.registers.pc);
+
         Ok(())
     }
 
     #[cfg(test)]
-    fn is_nmi_pending(&self) -> bool {
+    pub fn is_nmi_pending(&self) -> bool {
         self.interrupt == Interrupt::NMI
     }
 
     #[cfg(test)]
-    fn is_irq_pending(&self) -> bool {
+    pub fn is_irq_pending(&self) -> bool {
         self.interrupt == Interrupt::IRQ
     }
 }
@@ -905,7 +915,14 @@ impl Instruction {
         cpu.push_stack(cpu.registers.p)?;
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
-        cpu.registers.pc = cpu.bus.borrow().read_word(BRK_VECTOR)?;
+
+        if cpu.interrupt == Interrupt::NMI {
+            cpu.registers.pc = cpu.bus.borrow().read_word(NMI_VECTOR)?;
+        } else if cpu.interrupt == Interrupt::IRQ {
+            cpu.registers.pc = cpu.bus.borrow().read_word(IRQ_VECTOR)?;
+        } else {
+            cpu.registers.pc = cpu.bus.borrow().read_word(BRK_VECTOR)?;
+        }
 
         Ok(0)
     }

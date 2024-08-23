@@ -6,6 +6,7 @@ mod nes_bus;
 mod memory_bank;
 mod ppu_2c02;
 mod ppu_dma;
+mod cpu_6502;
 
 static START: Once = Once::new();
 

@@ -3,6 +3,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::bus::BusError;
 use crate::bus_device::BusDevice;
+use crate::cpu::CpuError;
 use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
 
@@ -43,7 +44,8 @@ pub trait PPU: BusDevice + DmaDevice {
 #[derive(Debug)]
 pub enum PpuError {
     BusError(BusError),
-    MemoryError(MemoryError)
+    MemoryError(MemoryError),
+    CpuError(CpuError)
 }
 
 impl Error for PpuError {}
@@ -53,6 +55,7 @@ impl Display for PpuError {
         match self {
             PpuError::BusError(e) => { write!(f, "bus error: {}", e) }
             PpuError::MemoryError(e) => { write!(f, "memory error: {}", e) }
+            PpuError::CpuError(e) => { write!(f, "cpu error: {}", e) }
         }
     }
 }
@@ -66,5 +69,11 @@ impl From<MemoryError> for PpuError {
 impl From<BusError> for PpuError {
     fn from(error: BusError) -> Self {
         PpuError::BusError(error)
+    }
+}
+
+impl From<CpuError> for PpuError {
+    fn from(error: CpuError) -> Self {
+        PpuError::CpuError(error)
     }
 }

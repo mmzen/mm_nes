@@ -27,11 +27,11 @@ const WRAM_START_ADDR: u16 = 0x0000;
 const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 const CYCLE_START_SEQUENCE: u32 = 7;
-const CYCLE_CREDITS: u32 = 1000;
+const CYCLE_CREDITS: u32 = 300;
 
 
 pub struct NESConsole {
-    cpu: Box<dyn CPU>,
+    cpu: Rc<RefCell<dyn CPU>>,
     ppu: Rc<RefCell<dyn PPU>>,
     entry_point: Option<u16>,
 }
@@ -43,25 +43,23 @@ impl NESConsole {
         let credits = CYCLE_CREDITS;
 
         loop {
-            cycles = self.cpu.run(cycles, credits)?;
+            cycles = self.cpu.borrow_mut().run(cycles, credits)?;
             cycles = self.ppu.borrow_mut().run(cycles, credits)?;
         }
     }
 
     pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
-        self.cpu.initialize()?;
-
         if let Some(pc) = self.entry_point {
-            self.cpu.set_pc_immediate(pc)?
+            self.cpu.borrow_mut().set_pc_immediate(pc)?
         } else {
-            self.cpu.set_pc_indirect(DEFAULT_START_ADDRESS)?
+            self.cpu.borrow_mut().set_pc_indirect(DEFAULT_START_ADDRESS)?
         };
 
         let status = self.run_scheduler();
 
         if let Err(error) = status {
             match error {
-                NESConsoleError::CpuError(ref e) => self.cpu.panic(e),
+                NESConsoleError::CpuError(ref e) => self.cpu.borrow().panic(e),
                 NESConsoleError::PpuError(ref e) => self.ppu.borrow().panic(e),
                 _ => {}
             };
@@ -130,7 +128,7 @@ impl Display for NESConsoleError {
 }
 
 pub struct NESConsoleBuilder {
-    cpu: Option<Box<dyn CPU>>,
+    cpu: Option<Rc<RefCell<dyn CPU>>>,
     cpu_type: Option<CpuType>,
     cpu_tracing: bool,
     cpu_trace_file: Option<File>,
@@ -199,13 +197,14 @@ impl NESConsoleBuilder {
         self
     }
 
-    fn build_cpu(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Result<Box<dyn CPU>, NESConsoleError> {
+    fn build_cpu(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn CPU>>, NESConsoleError> {
         debug!("creating cpu: {:?}", self.cpu_type.clone().unwrap());
 
-        let result: Result<Box<dyn CPU>, NESConsoleError> = match &self.cpu_type {
+        let mut result: Result<Rc<RefCell<dyn CPU>>, NESConsoleError> = match &self.cpu_type {
             Some(CpuType::NES6502) => {
-                let cpu = Cpu6502::new(bus, self.cpu_tracing, self.cpu_trace_file.take());
-                Ok(Box::new(cpu))
+                let mut cpu = Cpu6502::new(bus, self.cpu_tracing, self.cpu_trace_file.take());
+                cpu.initialize()?;
+                Ok(Rc::new(RefCell::new(cpu)))
             },
 
             None => {
@@ -258,12 +257,14 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(ppu_dma)))
     }
 
-    fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
+    fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
+                        mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>,
+                        cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
         let result = match ppu_type {
             PpuType::NES2C02 => {
-                Ppu2c02::new(chr_rom, mirroring)?
+                Ppu2c02::new(chr_rom, mirroring, cpu)?
             },
         };
 
@@ -307,7 +308,8 @@ impl NESConsoleBuilder {
         }
     }
 
-    fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType, bus: Rc<RefCell<dyn Bus>>) -> Result<(), NESConsoleError> {
+    fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType,
+                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(), NESConsoleError> {
         debug!("creating device: {:?}", device_type);
 
         match device_type {
@@ -335,7 +337,7 @@ impl NESConsoleBuilder {
                     .map(|cartridge| cartridge.borrow().get_mirroring())
                     .ok_or(NESConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
-                let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone())?;
+                let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu)?;
                 bus.borrow_mut().add_device(ppu)?;
                 bus.borrow_mut().add_device(dma)?;
             },
@@ -367,14 +369,15 @@ impl NESConsoleBuilder {
     fn build_nes(mut self) -> Result<NESConsole, NESConsoleError> {
 
         let bus = self.build_bus()?;
+        let cpu = self.build_cpu(bus.clone())?;
 
         self.bus = Some(bus.clone());
-        self.cpu = Some(self.build_cpu(bus.clone())?);
+        self.cpu = Some(cpu.clone());
 
         let device_types = self.device_types.clone();
 
         for device_type in device_types {
-            self.build_device_and_connect_to_bus(&device_type, bus.clone())?;
+            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone())?;
         }
 
         let cpu = self.cpu.take()

@@ -20,14 +20,16 @@ impl Renderer {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
         let window = video_subsystem
-            .window("NES", WIDTH as u32, HEIGHT as u32)
+            .window("NES", (WIDTH * 3) as u32, (HEIGHT *3) as u32)
             .position_centered()
             .build()
             .unwrap();
 
-        let canvas = window.into_canvas().present_vsync().build().unwrap();
+        let mut canvas = window.into_canvas().present_vsync().build().unwrap();
+        canvas.set_scale(3.0, 3.0).unwrap();
+
         let texture_creator = canvas.texture_creator();
-        let mut texture = texture_creator
+        let texture = texture_creator
             .create_texture_target(PixelFormatEnum::RGB24, WIDTH as u32, HEIGHT as u32)
             .unwrap();
 
