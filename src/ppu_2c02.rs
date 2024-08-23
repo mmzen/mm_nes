@@ -4,7 +4,7 @@ use std::rc::Rc;
 use log::{debug, info, trace};
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::cpu::{Interruptible, CPU};
+use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
@@ -631,7 +631,7 @@ impl Ppu2c02 {
         }
 
         self.renderer.update();
-        debug!("rendering done");
+        info!("rendering done");
 
         self.set_flag(Status(VBlank), true);
 

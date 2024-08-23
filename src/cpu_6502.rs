@@ -1,15 +1,17 @@
-use std::collections::HashMap;
 use std::{fmt, io};
 use std::cell::RefCell;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
-use lazy_static::lazy_static;
-use log::{debug, error, info, trace};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
+use log::{debug, error, info};
+use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError, Interruptible};
 use crate::memory::{MemoryError};
+use crate::util::measure_exec_time;
 
 //const CLOCK_HZ: usize = 1_789_773;
 const STACK_BASE_ADDRESS: u16 = 0x0100;
@@ -19,36 +21,32 @@ const IRQ_VECTOR: u16 = 0xFFFE;
 const NMI_VECTOR: u16 = 0xFFFA;
 const BRK_VECTOR: u16 = 0xFFFE;
 const RESET_VECTOR: u16 = 0xFFFC;
+const NUM_OP_CODES: usize = 256;
 
-lazy_static! {
-    static ref INSTRUCTIONS_TABLE: HashMap<u8, Instruction> = {
-        let mut map = HashMap::<u8, Instruction>::new();
+static INSTRUCTION_TABLE: Lazy<Vec<Instruction>> = Lazy::new(|| {
+    Cpu6502::build_instruction_table()
+});
 
-        macro_rules! add_instruction {
-            ($map:ident, $opcode:expr, $op:ident, $addr_mode:ident, $bytes:expr, $cycles:expr, $exec:ident, $category:ident) => {
-                $map.insert($opcode, Instruction {
+macro_rules! add_instruction {
+            ($table:ident, $opcode:expr, $op:ident, $addr_mode:ident, $bytes:expr, $cycles:expr, $exec:ident, $category:ident) => {
+                $table[$opcode] = Instruction {
                     opcode: OpCode::$op,
                     addressing_mode: AddressingMode::$addr_mode,
                     bytes: $bytes,
                     cycles: $cycles,
                     execute: Instruction::$exec,
                     category: InstructionCategory::$category
-                })
+                }
             };
         }
 
-        include!("instructions_macro_all.rs");
-        map
-    };
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum OpCode {
     ADC, ALR, ANC, AND, ANE, ARR, ASL, BCC, BCS, BEQ, BIT, BMI, BNE, BPL, BRK, BVC, BVS, CLC, CLD,
     CLI, CLV, CMP, CPX, CPY, DCP, DEC, DEX, DEY, EOR, INC, INX, INY, ISB, ISC, JAM, JMP, JSR, LAS, 
     LAX, LDA, LDX, LDY, LSR, LXA, NOP, ORA, PHA, PHP, PLA, PLP, RLA, ROL, ROR, RRA, RTI, RTS, SAX, 
     SBC, SBX, SEC, SED, SEI, SHA, SHX, SHY, SLO, SRE, STA, STX, STY, TAX, TAY, TSX, TXA, TXS, TYA, 
-    USBC
+    USBC, XXX
 }
 
 #[derive(Debug)]
@@ -74,7 +72,7 @@ impl Display for Operand {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum AddressingMode {
     Implicit,               // implicit addressing mode
     Accumulator,            // val = A
@@ -91,7 +89,7 @@ enum AddressingMode {
     IndirectIndexedY,       // val = PEEK(PEEK(arg) + PEEK((arg + 1) % 256) * 256 + Y)
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum InstructionCategory {
     Standard,
     Illegal
@@ -168,7 +166,7 @@ pub struct Cpu6502 {
     instructions_executed: u64,
     tracing: bool,
     tracer: Tracer,
-    interrupt: Interrupt,
+    interrupt: Interrupt
 }
 
 impl Interruptible for Cpu6502 {
@@ -206,7 +204,6 @@ impl CPU for Cpu6502 {
 
     fn initialize(&mut self) -> Result<(), CpuError> {
         info!("initializing CPU");
-
         self.reset()?;
         Ok(())
     }
@@ -216,7 +213,7 @@ impl CPU for Cpu6502 {
         self.dump_registers();
         self.dump_flags();
         //self.dump_memory();
-        info!("number of instructions executed: {} ({:.1} %)", self.instructions_executed, (self.instructions_executed as f32 / 8991_f32) * 100_f32);
+        info!("number of instructions executed: {}", self.instructions_executed);
     }
 
     fn dump_registers(&self) {
@@ -244,11 +241,16 @@ impl CPU for Cpu6502 {
         self.bus.borrow().dump();
     }
 
+
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError> {
         let mut cycles = start_cycle;
         let cycles_threshold = start_cycle + credits;
 
         debug!("running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
+
+        let start = Instant::now();
+        let previous_instructions_executed = self.instructions_executed;
+        let previous_cycles = cycles;
 
         loop {
             debug!("program counter: 0x{:04X}", self.registers.pc);
@@ -262,7 +264,7 @@ impl CPU for Cpu6502 {
                 self.tracer.trace(&self, &instruction, &operand, cycles)?;
             }
 
-            let additional_cycles = self.execute_instruction(instruction, &operand)?;
+            let additional_cycles = self.execute_instruction(&instruction, &operand)?;
             cycles = cycles + instruction.cycles + additional_cycles;
 
             if original_pc == self.registers.pc {
@@ -270,23 +272,25 @@ impl CPU for Cpu6502 {
             }
 
             self.instructions_executed += 1;
-
-            match self.interrupt {
-                Interrupt::NMI => {
-                    self.nmi()?;
-                    self.interrupt = Interrupt::NONE;
-                },
-                Interrupt::IRQ => {
-                    self.irq()?;
-                    self.interrupt = Interrupt::NONE;
-                },
-                Interrupt::NONE => {}
-            }
+            self.interrupt()?;
 
             if cycles >= cycles_threshold {
                 break;
             }
         }
+
+        let duration = Instant::now() - start;
+        let duration_micro_sec = duration.as_micros();
+        let instruction_executed = self.instructions_executed - previous_instructions_executed;
+        let instructions_per_sec = instruction_executed as f64 / duration.as_secs_f64();
+        let cycles_consumed = cycles - previous_cycles;
+        let cycle_per_sec = cycles_consumed as f64 / duration.as_secs_f64();
+
+        info!("executed {} instructions in {} μs ({:.0} / sec)",
+            instruction_executed, duration_micro_sec, instructions_per_sec);
+
+        info!("{} cycles in {} μs ({:.0} / sec)",
+            cycles_consumed, duration_micro_sec, cycle_per_sec);
 
         Ok(cycles)
     }
@@ -322,8 +326,45 @@ impl Cpu6502 {
             instructions_executed: 0,
             tracing,
             tracer: Tracer::new_with_file(trace_file),
-            interrupt: Interrupt::NONE,
+            interrupt: Interrupt::NONE
         }
+    }
+
+    fn interrupt(&mut self) -> Result<(), CpuError> {
+        match self.interrupt {
+            Interrupt::NMI => {
+                self.nmi()?;
+                self.interrupt = Interrupt::NONE;
+            },
+            Interrupt::IRQ => {
+                self.irq()?;
+                self.interrupt = Interrupt::NONE;
+            },
+            Interrupt::NONE => {}
+        };
+
+        Ok(())
+    }
+
+    fn build_instruction_table() -> Vec<Instruction> {
+        let illegal_instruction = Instruction {
+            opcode: OpCode::XXX,
+            addressing_mode: AddressingMode::Implicit,
+            bytes: 1,
+            cycles: 1,
+            execute: Instruction::illegal,
+            category: InstructionCategory::Standard
+        };
+
+        let mut table = [illegal_instruction; NUM_OP_CODES].to_vec();
+        include!("instructions_macro_all.rs");
+
+        debug!("dumping instruction table:");
+        for (index, p) in table.iter().enumerate() {
+            debug!("   0x{:02X}: {:?}, {} bytes, {} cycles", index, p.opcode, p.bytes, p.cycles);
+        }
+
+        table
     }
 
     fn is_valid_stack_addr(&self, addr: u16) -> Result<(), CpuError> {
@@ -493,11 +534,8 @@ impl Cpu6502 {
 
         debug!("decoded instruction: 0x{:02X}: opcode: 0x{:02X}", byte, opcode);
 
-        if let Some(instruction) = INSTRUCTIONS_TABLE.get(&byte) {
-            Ok(instruction)
-        } else {
-            Err(CpuError::IllegalInstruction(byte))
-        }
+        let instruction = &INSTRUCTION_TABLE[byte as usize];
+        Ok(instruction)
     }
 
     fn fetch_operand(&self, instruction: &Instruction) -> Result<Operand, CpuError> {
@@ -757,6 +795,7 @@ impl Tracer {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Instruction {
     opcode: OpCode,
     addressing_mode: AddressingMode,
@@ -1474,6 +1513,11 @@ impl Instruction {
     fn usbc_sbc_oper_plus_nop(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         self.sbc_subtract_memory_from_accumulator_with_borrow(cpu, operand)?;
         self.nop_no_operation(cpu, operand)?;
+        Ok(0)
+    }
+
+    fn illegal(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
+        debug!("illegal instruction at {:04X}", cpu.registers.pc);
         Ok(0)
     }
 }

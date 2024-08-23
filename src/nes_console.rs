@@ -27,7 +27,7 @@ const WRAM_START_ADDR: u16 = 0x0000;
 const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 const CYCLE_START_SEQUENCE: u32 = 7;
-const CYCLE_CREDITS: u32 = 300;
+const CYCLE_CREDITS: u32 = 3000;
 
 
 pub struct NESConsole {
@@ -200,7 +200,7 @@ impl NESConsoleBuilder {
     fn build_cpu(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn CPU>>, NESConsoleError> {
         debug!("creating cpu: {:?}", self.cpu_type.clone().unwrap());
 
-        let mut result: Result<Rc<RefCell<dyn CPU>>, NESConsoleError> = match &self.cpu_type {
+        let result: Result<Rc<RefCell<dyn CPU>>, NESConsoleError> = match &self.cpu_type {
             Some(CpuType::NES6502) => {
                 let mut cpu = Cpu6502::new(bus, self.cpu_tracing, self.cpu_trace_file.take());
                 cpu.initialize()?;
