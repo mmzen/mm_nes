@@ -9,6 +9,8 @@ use crate::dma_device::DmaDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
+use crate::palette::Palette;
+use crate::palette_2c02::Palette2C02;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, VramIncrement};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
@@ -21,12 +23,19 @@ const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), 
 const NAME_TABLE_VERTICAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3EFF);
 const NAME_TABLE_HORIZONTAL_SIZE: usize = 1024;
 const NAME_TABLE_VERTICAL_SIZE: usize = 2048;
+const NAME_TABLE_SIZE: u16 = 960;
 const PALETTE_ADDRESS_SPACE: (u16, u16) = (0x3F00, 0x3FFF);
 const PALETTE_SIZE: usize = 32;
 const V_INCR_GOING_ACROSS: u8 = 1;
 const V_INCR_GOING_DOWN: u8 = 32;
 const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
+const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
+const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
+const TILE_X_MAX: usize = 32;
+const TILE_Y_MAX: usize = 30;
+const PATTERN_DATA_SIZE: usize = 16;
+
 
 #[derive(Debug)]
 enum PpuFlag {
@@ -570,62 +579,137 @@ impl Ppu2c02 {
         }
     }
 
-    fn render(&mut self) -> Result<u32, PpuError> {
-        debug!("starting rendering");
+    fn fetch_palette(&self, tile_x: usize, tile_y: usize, attribute_table_addr: u16) -> Result<u8, PpuError> {
+        let block_x = tile_x / 4;
+        let block_y = tile_y / 4;
+        let attribute_table_address = attribute_table_addr + (block_y as u16 * 8) + block_x as u16;
+        let attribute_data = self.bus.read_byte(attribute_table_address)?;
 
+        let quadrant_x = (tile_x % 4) / 2;
+        let quadrant_y = (tile_y % 4) / 2;
+        let shift = 2 * (quadrant_y * 2 + quadrant_x);
+        let palette = (attribute_data >> shift ) & 0x03;
+
+        trace!("attribute_table_address: 0x{:04X}, palette: 0x{:02X}", attribute_table_address, palette);
+        Ok(palette)
+    }
+
+    fn fetch_line_pattern_data(&self, pattern_table_addr: u16, tile_index: u8, line: usize) -> Result<Vec<u8>, PpuError> {
+        let mut line_pattern_data= vec![0u8; 8];
+        let line = line as u16;
+        let tile_index = tile_index as u16;
+
+        let pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line)?;
+        let pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line + (PATTERN_DATA_SIZE as u16 / 2))?;
+
+        for bit in 0..=7 {
+            let value0 = (pattern_data0 >> 7 - bit) & 0x01;
+            let value1 = (pattern_data1 >> 7 - bit) & 0x01;
+            let combined = (value1 << 1) | value0;
+            line_pattern_data[bit] = combined;
+        }
+
+        trace!("line_pattern_data: {:?}", line_pattern_data);
+        Ok(line_pattern_data)
+    }
+
+    fn fetch_tile_index(&self, tile_x: usize, tile_y: usize, base_name_table_addr: u16) -> Result<u8, PpuError> {
+        let name_table_index = (tile_x + (tile_y * 32)) as u16;
+        let addr = base_name_table_addr + name_table_index;
+        let tile_index = self.bus.read_byte(addr)?;
+
+        trace!("tile_index at 0x{:04X} in name table: 0x{:02X}", addr, tile_index);
+        Ok(tile_index)
+    }
+
+    fn get_palette_address(&self, palette: u8) -> u16 {
+        let palette_address = PALETTE_ADDRESS_SPACE.0 + (palette as u16 * 4);
+
+        trace!("palette address: 0x{:04X}", palette_address);
+        palette_address
+    }
+
+    fn get_palette_color(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
+        let mut colors = [0u8; 4];
+
+        let palette_address = self.get_palette_address(palette);
+        for i in 0..=3 {
+            colors[i] = self.bus.read_byte(palette_address + i as u16)?;
+        }
+
+        trace!("palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors[0], colors[1], colors[2], colors[3]);
+        Ok((colors[0], colors[1], colors[2], colors[3]))
+    }
+
+    fn set_pixels(&mut self, tile_x: usize, tile_y: usize, line: usize, line_pattern_data: Vec<u8>, colors: (u8, u8, u8, u8)) {
+        for pixel in 0..=7 {
+            let color = line_pattern_data[pixel];
+            trace!("x: {}, y: {}, color: {}, palette: {:?}", pixel + (tile_x * 8), line + (tile_y * 8), color, colors);
+
+            let rgb: (u8, u8, u8) = match color {
+                0 => Palette2C02::rgb(colors.0),
+                1 => Palette2C02::rgb(colors.1),
+                2 => Palette2C02::rgb(colors.2),
+                3 => Palette2C02::rgb(colors.3),
+                _ => unreachable!()
+            };
+            self.renderer
+                .frame()
+                .set_pixel(pixel + (tile_x * 8), line + (tile_y * 8), rgb);
+        }
+    }
+
+    fn get_pattern_table_addr(&self) -> u16 {
+        let pattern_table_addr = if self.get_flag(Control(BackgroundPatternTableAddr)) {
+            PATTERN_TABLE_RIGHT_ADDR
+        } else {
+            PATTERN_TABLE_LEFT_ADDR
+        };
+
+        trace!("pattern table address: 0x{:04X}", pattern_table_addr);
+        pattern_table_addr
+    }
+
+    fn get_attribute_table_addr(&self, base_name_table_addr: u16) -> u16 {
+        let attribute_table_addr= base_name_table_addr + NAME_TABLE_SIZE;
+
+        trace!("attribute table: 0x{:04X}", attribute_table_addr);
+        attribute_table_addr
+    }
+
+    fn get_name_table_addr(&self) -> u16 {
         let base_name_table_addr_status = (self.get_flag(Control(BaseNameTableAddr2)) as u8) << 1 | (self.get_flag(Control(BaseNameTableAddr1)) as u8);
         let base_name_table_addr = match base_name_table_addr_status {
-            0b00 => 0x2000,
-            0b01 => 0x2400,
-            0b10 => 0x2800,
-            0b11 => 0x2C00,
+            0x00 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0,
+            0x01 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
+            0x02 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[1].0,
+            0x03 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
             _ => unreachable!(),
         };
-        debug!("base name table address: 0x{:04X}", base_name_table_addr);
+
+        trace!("base name table: 0x{:04X}", base_name_table_addr);
+        base_name_table_addr
+    }
+
+    fn render(&mut self) -> Result<u32, PpuError> {
+        debug!("starting rendering");
 
         self.set_flag(Status(VBlank), false);
         debug!("control register: 0x{:02X}", self.register.borrow().control);
 
-        let pattern_table_addr = if self.get_flag(Control(BackgroundPatternTableAddr)) { 0x1000 } else { 0x1000 };
-        debug!("pattern table address: 0x{:04X}", pattern_table_addr);
+        let base_name_table_addr = self.get_name_table_addr();
+        let attribute_table_addr = self.get_attribute_table_addr(base_name_table_addr);
+        let pattern_table_addr = self.get_pattern_table_addr();
 
+        for tile_y in 0..TILE_Y_MAX {
+            for tile_x in 0..TILE_X_MAX {
+                let tile_index = self.fetch_tile_index(tile_x, tile_y, base_name_table_addr)?;
+                let palette = self.fetch_palette(tile_x, tile_y, attribute_table_addr)?;
+                let colors = self.get_palette_color(palette)?;
 
-        for y in 0..30usize {
-            for x in 0..32usize {
-                let index = x + (y * 32);
-
-                let addr = base_name_table_addr + index as u16;
-                let tile_index = self.bus.read_byte(addr)? as u16;
-                //debug!("tile_index at 0x{:04X}: 0x{:02X}", addr, tile_index);
-
-                let mut combined_pattern_data= vec![0u8; 8];
-
-                for row in 0..=7 {
-                    let pattern_data0 = self.bus.read_byte(pattern_table_addr + tile_index * 16 + row)?;
-                    let pattern_data1 = self.bus.read_byte(pattern_table_addr + tile_index * 16 + row + 8)?;
-
-                    for bit in 0..=7 {
-                        let value0 = (pattern_data0 >> 7 - bit) & 0x01;
-                        let value1 = (pattern_data1 >> 7 - bit) & 0x01;
-                        let combined = (value1 << 1 | value0) << (7 - bit);
-                        combined_pattern_data[row as usize] |= combined;
-                    }
-                };
-
-                for row in 0..=7 {
-                    for col in 0..=7 {
-                        let color = (combined_pattern_data[row] >> (7 - col)) & 0x03;
-                        trace!("x: {}, y: {}, color: {}", col + x * 8, row + y * 8, color);
-
-                        let rgb: (u8, u8, u8) = match color {
-                            0 => (0, 0, 0),
-                            1 => (85, 85, 85),
-                            2 => (170, 170, 170),
-                            3 => (255, 255, 255),
-                            _ => unreachable!()
-                        };
-                        self.renderer.frame().set_pixel(col + (x * 8), row + (y * 8), rgb);
-                    }
+                for line in 0..=7usize {
+                    let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile_index, line)?;
+                    self.set_pixels(tile_x, tile_y, line, line_pattern_data, colors);
                 }
             }
         }
@@ -639,6 +723,6 @@ impl Ppu2c02 {
             self.cpu.borrow_mut().signal_nmi()?;
         }
 
-        Ok(114)
+        Ok(300)
     }
 }

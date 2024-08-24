@@ -4,14 +4,12 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use log::{debug, error, info};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError, Interruptible};
 use crate::memory::{MemoryError};
-use crate::util::measure_exec_time;
 
 //const CLOCK_HZ: usize = 1_789_773;
 const STACK_BASE_ADDRESS: u16 = 0x0100;

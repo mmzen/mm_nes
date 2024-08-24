@@ -52,7 +52,7 @@ impl Renderer {
     }
 
     pub fn update(&mut self) {
-        self.texture.update(None, &self.frame.pixels, WIDTH * 3).unwrap();
+        self.texture.update(None, &self.frame.pixels(), WIDTH * 3).unwrap();
         self.canvas.copy(&self.texture, None, None).unwrap();
         self.canvas.present();
     }

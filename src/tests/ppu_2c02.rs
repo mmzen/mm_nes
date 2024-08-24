@@ -3,6 +3,7 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus::MockBusStub;
 use crate::bus_device::{BusDevice, BusDeviceType, MockBusDeviceStub};
+use crate::cpu::MockCpuStub;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::ppu::PpuNameTableMirroring;
 use crate::ppu_2c02::Ppu2c02;
@@ -17,8 +18,13 @@ const VALID_CH_ROM_ADDRESS: u16 = 0x1000;
 const VALID_PALETTE_ADDRESS: u16 = 0x3FAB;
 const VALID_NAME_TABLE_ADDRESS: u16 = 0x2100;
 const VALID_DATA_VALUE: u8 = 0x14;
-const CONTROL_REGISTER_INCR_1: u8 = 0x04;
-const CONTROL_REGISTER_INCR_32: u8 = 0x00;
+const CONTROL_REGISTER_INCR_1: u8 = 0x00;
+const CONTROL_REGISTER_INCR_32: u8 = 0x04;
+
+fn create_cpu() -> MockCpuStub {
+    let cpu = MockCpuStub::new();
+    cpu
+}
 
 fn create_bus() -> MockBusStub {
     let bus = MockBusStub::new();
@@ -31,6 +37,7 @@ fn create_ppu() -> Ppu2c02 {
 
 fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2c02 {
     let mut chr_rom = MockBusDeviceStub::new();
+    let cpu = create_cpu();
 
     chr_rom.expect_size().returning(|| CHR_MEMORY_SIZE);
     chr_rom.expect_get_address_range().returning(|| CHR_MEMORY_RANGE);
@@ -46,7 +53,11 @@ fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2
         }
     });
 
-    Ppu2c02::new(Rc::new(RefCell::new(chr_rom)), mirroring).unwrap()
+    Ppu2c02::new(
+        Rc::new(RefCell::new(chr_rom)),
+        mirroring,
+        Rc::new(RefCell::new(cpu))
+    ).unwrap()
 }
 
 fn write_address_to_addr_register(ppu: &mut Ppu2c02, value: u16) -> Result<(), MemoryError> {
@@ -174,6 +185,7 @@ fn write_to_addr_and_data_and_read_to_data_registers_to_palette_works() {
     write_address_to_addr_register(&mut ppu, VALID_PALETTE_ADDRESS).unwrap();
     ppu.write_byte(data, VALID_DATA_VALUE).unwrap();
 
+    write_address_to_addr_register(&mut ppu, VALID_PALETTE_ADDRESS).unwrap();
     let _ = ppu.read_byte(data).unwrap();
     let result = ppu.read_byte(data).unwrap();
 

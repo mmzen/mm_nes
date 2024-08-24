@@ -1,11 +1,9 @@
 
-const WIDTH: usize = 256;
-const HEIGHT: usize = 240;
 
 pub struct Frame {
-    pub pixels: Vec<u8>,
-    pub width: usize,
-    pub height: usize,
+    pixels: Vec<u8>,
+    width: usize,
+    height: usize,
 }
 
 impl Frame {
@@ -18,6 +16,9 @@ impl Frame {
         }
     }
 
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, color: (u8, u8, u8)) {
         let index = (y * 3 * self.width) + (x * 3);
