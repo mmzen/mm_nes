@@ -17,7 +17,8 @@ pub enum BusDeviceType {
     PPU(PpuType),
     APU(ApuType),
     CARTRIDGE(CartridgeType),
-    DMA(DmaType)
+    DMA(DmaType),
+    OPENBUS
 }
 
 impl Display for BusDeviceType {
@@ -28,6 +29,7 @@ impl Display for BusDeviceType {
             BusDeviceType::APU(apu) => write!(f, "device type: APU - {}", apu),
             BusDeviceType::CARTRIDGE(cartridge) => write!(f, "device type: CARTRIDGE - {}", cartridge),
             BusDeviceType::DMA(dma) => { write!(f, "device type: DMA - {}", dma) }
+            BusDeviceType::OPENBUS => { write!(f, "device type: OPEN BUS") }
         }
     }
 }
@@ -39,6 +41,7 @@ impl PartialEq for BusDeviceType {
             (BusDeviceType::PPU(a), BusDeviceType::PPU(b)) => a == b,
             (BusDeviceType::APU(a), BusDeviceType::APU(b)) => a == b,
             (BusDeviceType::CARTRIDGE(a), BusDeviceType::CARTRIDGE(b)) => a == b,
+            (BusDeviceType::OPENBUS, BusDeviceType::OPENBUS) => true,
             _ => false,
         }
     }

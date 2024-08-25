@@ -208,7 +208,7 @@ fn returns_size() {
 fn returns_bus_error_on_unmapped_access() {
     init();
 
-    let expected_addr = 0x0000;
+    let expected_addr = 0x2000;
     let expected_value = 0xAB;
 
     let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::Unmapped, RequestData::None);
@@ -216,8 +216,8 @@ fn returns_bus_error_on_unmapped_access() {
     let result0 = nes_bus.write_byte(expected_addr, expected_value);
     let result1 = nes_bus.read_byte(expected_addr);
 
-    assert_eq!(result0, Err(MemoryError::BusError(expected_addr)));
-    assert_eq!(result1, Err(MemoryError::BusError(expected_addr)));
+    assert_eq!(result0, Ok(()));
+    assert_eq!(result1, Ok(0x00));
 }
 
 #[test]
