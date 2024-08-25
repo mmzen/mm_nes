@@ -28,7 +28,7 @@ const WRAM_START_ADDR: u16 = 0x0000;
 const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 const CYCLE_START_SEQUENCE: u32 = 7;
-const CYCLE_CREDITS: u32 = 500;
+const CYCLE_CREDITS: u32 = 300;
 
 
 pub struct NESConsole {

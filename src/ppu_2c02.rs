@@ -12,10 +12,10 @@ use crate::nes_bus::NESBus;
 use crate::palette::Palette;
 use crate::palette_2c02::Palette2C02;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
-use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternAddr, VramIncrement};
+use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternAddr, SpriteSize, VramIncrement};
 use crate::ppu_2c02::MaskFlag::{ShowBackground, ShowSprites};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
-use crate::ppu_2c02::StatusFlag::VBlank;
+use crate::ppu_2c02::StatusFlag::{Sprite0Hit, VBlank};
 use crate::renderer::Renderer;
 
 const PPU_NAME: &str = "PPU 2C02";
@@ -33,8 +33,6 @@ const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
 const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
-const SPRITE_PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
-const SPRITE_PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
 const TILE_X_MAX: usize = 32;
 const TILE_Y_MAX: usize = 30;
 const PATTERN_DATA_SIZE: usize = 16;
@@ -155,7 +153,7 @@ impl Register {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct SpriteDisplay {
     x: usize,
     y: usize,
@@ -177,7 +175,16 @@ impl Default for SpriteDisplay {
 }
 
 impl SpriteDisplay {
-    fn get_attribute(&self, attr: SpriteAttribute) -> bool {
+    fn get_attribute_value(&self, attr: SpriteAttribute) -> u8 {
+        match attr {
+            SpriteAttribute::Palette => {
+                self.attributes & attr as u8
+            },
+            _ => self.is_attribute_set(attr) as u8
+        }
+    }
+
+    fn is_attribute_set(&self, attr: SpriteAttribute) -> bool {
         let attr = attr as u8;
         self.attributes & attr != 0
     }
@@ -186,7 +193,7 @@ impl SpriteDisplay {
 pub struct Ppu2c02 {
     register: RefCell<Register>,
     bus: Box<dyn Bus>,
-    oam: Vec<SpriteDisplay>,
+    oam: [SpriteDisplay; 64],
     v: RefCell<u16>,
     latch: RefCell<Latch>,
     renderer: Renderer,
@@ -347,6 +354,7 @@ impl BusDevice for Ppu2c02 {
 
 impl DmaDevice for Ppu2c02 {
     fn dma_write(&mut self, addr: u8, value: u8) -> Result<(), MemoryError> {
+        debug!("PPU: DMA write to OAM with value 0x{:02X} at OAM addr 0x{:02X}", value, addr);
         self.write_oam_data_register(addr, value);
         Ok(())
     }
@@ -420,7 +428,7 @@ impl Ppu2c02 {
     }
 
     fn write_oam_data_register(&mut self, addr: u8, value: u8) {
-        trace!("PPU: writing to oam data register: 0x{:02X}", value);
+        debug!("PPU: writing to oam data register: 0x{:02X}", value);
 
         let sprite_index = (addr / 4) as usize;
         let offset = addr % 4;
@@ -528,7 +536,7 @@ impl Ppu2c02 {
             register: RefCell::new(Register::new()),
             bus,
             v: RefCell::new(0),
-            oam: vec![SpriteDisplay::default(); 64],
+            oam: [SpriteDisplay::default(); 64],
             latch: RefCell::new(Latch::new()),
             renderer: Renderer::new(),
             cpu,
@@ -737,7 +745,7 @@ impl Ppu2c02 {
         base_name_table_addr
     }
 
-    fn prepare_background(&mut self) -> Result<(), PpuError> {
+    fn render_background(&mut self) -> Result<(), PpuError> {
         let base_name_table_addr = self.get_name_table_addr();
         let attribute_table_addr = self.get_attribute_table_addr(base_name_table_addr);
         let pattern_table_addr = self.get_pattern_table_addr();
@@ -758,27 +766,27 @@ impl Ppu2c02 {
         Ok(())
     }
 
-    fn get_sprite_pattern_table_addr(&self) -> u16 {
-        let pattern_table_addr = if self.get_flag(Control(SpritePatternAddr)) {
-            SPRITE_PATTERN_TABLE_RIGHT_ADDR
-        } else {
-            SPRITE_PATTERN_TABLE_LEFT_ADDR
-        };
+    fn render_sprites(&mut self) -> Result<(), PpuError> {
 
-        trace!("PPU: sprite pattern table address: 0x{:04X}", pattern_table_addr);
-        pattern_table_addr
-    }
-
-    fn prepare_sprites(&mut self) -> Result<(), PpuError> {
+        let sprite_pattern_table_addr = self.get_pattern_table_addr();
+        let sprite_size = if self.get_flag(Control(SpriteSize)) { 16 } else { 8 };
 
         for i in 0..=63 {
-            let sprite_pattern_table_addr = self.get_sprite_pattern_table_addr();
-            let palette = self.oam[i].get_attribute(SpriteAttribute::Palette) as u8; // pas bon il faut lire les 2 bits en tant qu'index
+            let palette = self.oam[i].get_attribute_value(SpriteAttribute::Palette);
             let colors = self.get_sprite_palette_color(palette)?;
 
-            for line in 0..=7usize {
-                let line_pattern_data = self.fetch_line_pattern_data(sprite_pattern_table_addr, self.oam[i].tile_index, line)?;
-                self.set_pixels(self.oam[i].x, self.oam[i].y, line, line_pattern_data, colors);
+            let mut tile_index = self.oam[i].tile_index as u16;
+
+            for line in 0..sprite_size {
+                let line_pattern_data = self.fetch_line_pattern_data(sprite_pattern_table_addr, tile_index as u8, line)?;
+
+                let render_line = if self.oam[i].is_attribute_set(SpriteAttribute::FlipVertical) {
+                    sprite_size - 1 - line
+                } else {
+                    line
+                };
+
+                self.set_pixels(self.oam[i].x, self.oam[i].y + render_line, render_line, line_pattern_data, colors);
             }
         }
 
@@ -792,17 +800,18 @@ impl Ppu2c02 {
         debug!("PPU: control register: 0x{:02X}", self.register.borrow().control);
 
         if self.get_flag(Mask(ShowBackground)) {
-            self.prepare_background()?;
+            self.render_background()?;
         }
 
         if self.get_flag(Mask(ShowSprites)) {
-            self.prepare_sprites()?;
+            self.render_sprites()?;
         }
 
         self.renderer.update();
         debug!("PPU: rendering done");
 
         self.set_flag(Status(VBlank), true);
+        self.set_flag(Status(Sprite0Hit), true);
 
         if self.get_flag(Control(GenerateNmi)) {
             self.cpu.borrow_mut().signal_nmi()?;

@@ -121,7 +121,6 @@ fn main() -> Result<(), NESConsoleError> {
         .with_bus_device_type(WRAM(NESMemory))
         .with_bus_device_type(CARTRIDGE(NROM128))
         .with_bus_device_type(PPU(NES2C02))
-        .with_bus_device_type(DMA(PpuDma(NESPPUDMA)))
         .with_bus_device_type(APU(RP2A03))
         .with_loader_type(INESV1)
         .with_rom_file(args.rom_file)

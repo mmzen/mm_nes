@@ -1,11 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::rc::Rc;
 use log::{debug, trace};
 use crate::bus::{Bus, BusError};
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::memory::{Memory, MemoryError, MemoryType};
+use crate::memory::{Memory, MemoryError};
 
 pub const BUS_ADDRESSABLE_SIZE: usize = 64 * 1024;
 
@@ -74,7 +73,7 @@ impl Bus for NESBus {
         debug!("BUS: adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
         device.borrow().get_name(), size, address_space.0, address_space.1);
 
-        for addr in (address_space.0..=address_space.1) {
+        for addr in address_space.0..=address_space.1 {
            self.devices[addr as usize] = device.clone();
         }
 
