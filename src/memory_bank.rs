@@ -24,13 +24,13 @@ impl Memory for MemoryBank {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        trace!("reading byte at 0x{:04X}", addr);
+        //trace!("reading byte at 0x{:04X}", addr);
 
         if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
         } else {
             let value = self.memory[addr as usize];
-            trace!("read byte at 0x{:04X}: {:02X}", addr, value);
+            //trace!("read byte at 0x{:04X}: {:02X}", addr, value);
             Ok(value)
         }
     }
@@ -40,7 +40,7 @@ impl Memory for MemoryBank {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        trace!("writing byte ({:02X}) at 0x{:04X}", value, addr);
+        //trace!("writing byte ({:02X}) at 0x{:04X}", value, addr);
 
         if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))

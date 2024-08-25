@@ -24,7 +24,7 @@ impl Dma for PpuDma {
         let source = (value as u16) << 8;
         let last_value = source | 0x00FF;
 
-        debug!("transferring 256 bytes of memory from 0x{:04X} to PPU", source);
+        debug!("DMA: transferring 256 bytes of memory from 0x{:04X} to PPU", source);
 
         let mut index = 0;
 

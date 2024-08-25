@@ -68,12 +68,12 @@ impl Bus for NESBus {
         let size = device.borrow().size();
         let address_space = device.borrow().get_address_range();
 
-        debug!("adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
+        debug!("BUS: adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
         device.borrow().get_name(), size, address_space.0, address_space.1);
 
         self.devices.push(device);
         self.devices.sort();
-        debug!("{} devices attached to the bus", self.devices.len());
+        debug!("BUS: {} devices attached to the bus", self.devices.len());
 
         Ok(())
     }
@@ -99,17 +99,17 @@ impl NESBus {
                 let d = device.borrow();
                 let effective_addr = addr & (d.size() - 1) as u16;
 
-                trace!("translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
+                trace!("BUS: translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
                     addr, d.get_name(), d.get_device_type(), d.get_address_range().0, d.get_address_range().1, effective_addr);
 
                 return Ok((Rc::clone(&device), effective_addr));
             }
         }
 
-        debug!("open bus error: address 0x{:04X} is out of range", addr);
+        debug!("BUS: open bus error: address 0x{:04X} is out of range", addr);
 
         if let Some((ref device, effective_address)) = self.last_effective_addr {
-            debug!("open bus error: returning last effective address: 0x{:04X}", effective_address);
+            debug!("BUS: open bus error: returning last effective address: 0x{:04X}", effective_address);
             Ok((Rc::clone(device), effective_address))
         } else {
             Err(BusError::Unmapped(addr))

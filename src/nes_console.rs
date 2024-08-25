@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::debug;
+use log::{debug, info};
 use crate::apu::ApuType;
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
@@ -21,6 +21,7 @@ use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
+use crate::util::measure_exec_time;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
 const WRAM_START_ADDR: u16 = 0x0000;
@@ -55,7 +56,11 @@ impl NESConsole {
             self.cpu.borrow_mut().set_pc_indirect(DEFAULT_START_ADDRESS)?
         };
 
-        let status = self.run_scheduler();
+        let (status, duration) = measure_exec_time(|| {
+            self.run_scheduler()
+        });
+
+        info!("ended, execution time: {:.2?} ms", duration.as_millis());
 
         if let Err(error) = status {
             match error {

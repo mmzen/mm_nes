@@ -125,16 +125,16 @@ impl Registers {
 
     fn set_status(&mut self, flag: StatusFlag, value: bool) {
         if value {
-            debug!("setting status flag: {:?}, {:04X}", flag, flag.bits());
+            debug!("CPU: setting status flag: {:?}, {:04X}", flag, flag.bits());
             self.p |= flag.bits();
         } else {
-            debug!("clearing status flag: {:?}, {:04X}", flag, flag.bits());
+            debug!("CPU: clearing status flag: {:?}, {:04X}", flag, flag.bits());
             self.p &= !flag.bits();
         }
     }
 
     fn get_status(&self, flag: StatusFlag) -> bool {
-        debug!("status flag: {:?}, {:04X}", flag, flag.bits());
+        debug!("CPU: status flag: {:?}, {:04X}", flag, flag.bits());
         (self.p & flag.bits()) != 0
     }
 
@@ -170,7 +170,7 @@ pub struct Cpu6502 {
 impl Interruptible for Cpu6502 {
     fn signal_irq(&mut self) -> Result<(), CpuError> {
         if self.registers.get_status(StatusFlag::InterruptDisable) == false{
-            debug!("IRQ interrupt - status register: {:02X} (interrupt disable: {})",
+            debug!("CPU: IRQ interrupt - status register: {:02X} (interrupt disable: {})",
                 self.registers.p, self.registers.get_status(StatusFlag::InterruptDisable));
             self.interrupt = Interrupt::IRQ;
         }
@@ -179,7 +179,7 @@ impl Interruptible for Cpu6502 {
     }
 
     fn signal_nmi(&mut self) -> Result<(), CpuError> {
-        debug!("NMI interrupt");
+        debug!("CPU: NMI interrupt");
         self.interrupt = Interrupt::NMI;
         Ok(())
     }
@@ -244,14 +244,14 @@ impl CPU for Cpu6502 {
         let mut cycles = start_cycle;
         let cycles_threshold = start_cycle + credits;
 
-        debug!("running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
+        debug!("CPU: running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
 
         let start = Instant::now();
         let previous_instructions_executed = self.instructions_executed;
         let previous_cycles = cycles;
 
         loop {
-            debug!("program counter: 0x{:04X}", self.registers.pc);
+            debug!("CPU: program counter: 0x{:04X}", self.registers.pc);
             let original_pc = self.registers.pc;
 
             let byte = self.bus.borrow().read_byte(self.registers.pc)?;
@@ -284,10 +284,10 @@ impl CPU for Cpu6502 {
         let cycles_consumed = cycles - previous_cycles;
         let cycle_per_sec = cycles_consumed as f64 / duration.as_secs_f64();
 
-        info!("executed {} instructions in {} μs ({:.0} / sec)",
+        debug!("CPU: executed {} instructions in {} μs ({:.0} / sec)",
             instruction_executed, duration_micro_sec, instructions_per_sec);
 
-        info!("{} cycles in {} μs ({:.0} / sec)",
+        debug!("CPU: {} cycles in {} μs ({:.0} / sec)",
             cycles_consumed, duration_micro_sec, cycle_per_sec);
 
         Ok(cycles)
@@ -295,14 +295,14 @@ impl CPU for Cpu6502 {
 
     fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError> {
         self.registers.pc = address;
-        debug!("pc set to effective address 0x{:04X}", self.registers.pc);
+        debug!("CPU: pc set to effective address 0x{:04X}", self.registers.pc);
 
         Ok(())
     }
 
     fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError> {
         self.registers.pc = self.bus.borrow().read_word(address)?;
-        debug!("pc set to effective address 0x{:04X} (address: 0x{:04X})",
+        debug!("CPU: pc set to effective address 0x{:04X} (address: 0x{:04X})",
             self.registers.pc, address);
 
         Ok(())
@@ -357,9 +357,9 @@ impl Cpu6502 {
         let mut table = [illegal_instruction; NUM_OP_CODES].to_vec();
         include!("instructions_macro_all.rs");
 
-        debug!("dumping instruction table:");
+        debug!("CPU: dumping instruction table:");
         for (index, p) in table.iter().enumerate() {
-            debug!("   0x{:02X}: {:?}, {} bytes, {} cycles", index, p.opcode, p.bytes, p.cycles);
+            debug!("CPU:    0x{:02X}: {:?}, {} bytes, {} cycles", index, p.opcode, p.bytes, p.cycles);
         }
 
         table
@@ -383,14 +383,14 @@ impl Cpu6502 {
     fn push_stack(&mut self, value: u8) -> Result<(), CpuError> {
         let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
 
-        debug!("sp (before push): 0x{:02X}, pushing at 0x{:04X}, value {:04X}", self.registers.sp, addr, value);
+        debug!("CPU: sp (before push): 0x{:02X}, pushing at 0x{:04X}, value {:04X}", self.registers.sp, addr, value);
         self.bus.borrow_mut().write_byte(addr, value)?;
 
         addr = Cpu6502::stack_wrapping_add(addr, -1);
         self.is_valid_stack_addr(addr)?;
 
         self.registers.sp = addr as u8;
-        debug!("sp (after push): 0x{:02X}", self.registers.sp);
+        debug!("CPU: sp (after push): 0x{:02X}", self.registers.sp);
 
         Ok(())
     }
@@ -399,12 +399,12 @@ impl Cpu6502 {
         let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
         addr = Cpu6502::stack_wrapping_add(addr, 1);
 
-        debug!("sp (before pop): 0x{:02X}, popping at 0x{:04X}", self.registers.sp, addr);
+        debug!("CPU: sp (before pop): 0x{:02X}, popping at 0x{:04X}", self.registers.sp, addr);
         let value = self.bus.borrow().read_byte(addr)?;
         self.is_valid_stack_addr(addr)?;
 
         self.registers.sp = addr as u8;
-        debug!("sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
+        debug!("CPU: sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
 
         Ok(value)
     }
@@ -530,7 +530,7 @@ impl Cpu6502 {
         let cc = byte & 0b0000_0011;
         let opcode = aaa | cc;
 
-        debug!("decoded instruction: 0x{:02X}: opcode: 0x{:02X}", byte, opcode);
+        debug!("CPU: decoded instruction: 0x{:02X}: opcode: 0x{:02X}", byte, opcode);
 
         let instruction = &INSTRUCTION_TABLE[byte as usize];
         Ok(instruction)
@@ -538,7 +538,7 @@ impl Cpu6502 {
 
     fn fetch_operand(&self, instruction: &Instruction) -> Result<Operand, CpuError> {
 
-        debug!("fetching operand for instruction: {:?}, {:?}", instruction.opcode, instruction.addressing_mode);
+        debug!("CPU: fetching operand for instruction: {:?}, {:?}", instruction.opcode, instruction.addressing_mode);
 
         let operand = match instruction.addressing_mode {
             AddressingMode::Implicit => {
@@ -641,13 +641,13 @@ impl Cpu6502 {
             },
         };
 
-        debug!("fetched operand: {}", operand);
+        debug!("CPU: fetched operand: {}", operand);
         Ok(operand)
     }
 
     fn execute_instruction(&mut self, instruction: &Instruction, operand: &Operand) -> Result<u32, CpuError> {
         
-        debug!("executing instruction: opcode: {:?}, addressing mode: {:?}, operand: {}",
+        debug!("CPU: executing instruction: opcode: {:?}, addressing mode: {:?}, operand: {}",
             instruction.opcode, instruction.addressing_mode, operand);
 
         (instruction.execute)(instruction, self, operand)
@@ -667,7 +667,7 @@ impl Cpu6502 {
     fn nmi(&mut self) -> Result<(), CpuError> {
         self.interrupt_preamble()?;
         self.registers.pc = self.bus.borrow().read_word(NMI_VECTOR)?;
-        debug!("NMI interrupt: program counter: 0x{:04X}", self.registers.pc);
+        debug!("CPU: NMI interrupt: program counter: 0x{:04X}", self.registers.pc);
 
         Ok(())
     }
@@ -675,7 +675,7 @@ impl Cpu6502 {
     fn irq(&mut self) -> Result<(), CpuError> {
         self.interrupt_preamble()?;
         self.registers.pc = self.bus.borrow().read_word(IRQ_VECTOR)?;
-        debug!("IRQ interrupt: program counter: 0x{:04X}", self.registers.pc);
+        debug!("CPU: IRQ interrupt: program counter: 0x{:04X}", self.registers.pc);
 
         Ok(())
     }
@@ -851,7 +851,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -865,7 +865,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -879,7 +879,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -905,7 +905,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -919,7 +919,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -933,7 +933,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -969,7 +969,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -983,7 +983,7 @@ impl Instruction {
             let addr = cpu.get_operand_word_value(operand)?;
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
-            debug!("branching to address {:04X}", addr);
+            debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.pc = addr;
 
             Ok(cycles)
@@ -1120,7 +1120,7 @@ impl Instruction {
     fn jmp_jump_to_new_location(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
 
-        debug!("preparing to jump to absolute address {:04X}", addr);
+        debug!("CPU: preparing to jump to absolute address {:04X}", addr);
         cpu.registers.pc = addr;
 
         Ok(0)
@@ -1515,7 +1515,7 @@ impl Instruction {
     }
 
     fn illegal(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        debug!("illegal instruction at {:04X}", cpu.registers.pc);
+        debug!("CPU: illegal instruction at {:04X}", cpu.registers.pc);
         Ok(0)
     }
 }

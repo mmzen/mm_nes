@@ -36,7 +36,7 @@ impl NROM128Cartridge {
             }
             total += 1;
         }
-        debug!("total bytes read: {}", total);
+        debug!("CARTRIDGE: total bytes read: {}", total);
 
         Ok(())
     }
@@ -48,10 +48,10 @@ impl NROM128Cartridge {
         let mut prg_rom = MemoryBank::new(prg_rom_size, CPU_ADDRESS_SPACE);
         let mut chr_rom = MemoryBank::new(chr_rom_size, PPU_ADDRESS_SPACE);
 
-        debug!("loading prg_rom data ({} KB)...", prg_rom_size / 1024);
+        debug!("CARTRIDGE: loading prg_rom data ({} KB)...", prg_rom_size / 1024);
         NROM128Cartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
 
-        debug!("loading chr_rom data ({} KB)...", chr_rom_size / 1024);
+        debug!("CARTRIDGE: loading chr_rom data ({} KB)...", chr_rom_size / 1024);
         NROM128Cartridge::write_rom_data(&mut chr_rom, chr_rom_size, &mut data)?;
 
         let cartridge = NROM128Cartridge {
