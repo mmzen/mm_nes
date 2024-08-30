@@ -1,6 +1,7 @@
 use std::cell::RefCell;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
+use std::time::Duration;
 use log::{debug, info, trace};
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
@@ -15,8 +16,9 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternAddr, SpriteSize, VramIncrement};
 use crate::ppu_2c02::MaskFlag::{ShowBackground, ShowSprites};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
-use crate::ppu_2c02::StatusFlag::{Sprite0Hit, VBlank};
+use crate::ppu_2c02::StatusFlag::{Sprite0Hit, SpriteOverflow, VBlank};
 use crate::renderer::Renderer;
+use crate::util::measure_exec_time;
 
 const PPU_NAME: &str = "PPU 2C02";
 //const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x2FFF)];
@@ -37,6 +39,7 @@ const TILE_X_MAX: usize = 32;
 const TILE_Y_MAX: usize = 30;
 const PATTERN_DATA_SIZE: usize = 16;
 const SPRITE_PALETTE_ADDR: u16 = 0x3F10;
+const CLOCK_CYCLES_PER_SCANLINE: u16 = 114;
 
 
 #[derive(Debug)]
@@ -103,7 +106,7 @@ enum LatchState {
     LOW
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Latch {
     state: LatchState
 }
@@ -190,14 +193,54 @@ impl SpriteDisplay {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum PpuState {
+    Rendering(u16),
+    VBlank(u16),
+}
+
+impl Display for PpuState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PpuState::Rendering(scanline) => write!(f, "rendering (scanline: {})", scanline),
+            PpuState::VBlank(scanline) => write!(f, "vblank (scanline: {})", scanline),
+        }
+    }
+}
+
 pub struct Ppu2c02 {
     register: RefCell<Register>,
     bus: Box<dyn Bus>,
     oam: [SpriteDisplay; 64],
     v: RefCell<u16>,
+    t: u16,
+    x: u16,
     latch: RefCell<Latch>,
     renderer: Renderer,
     cpu: Rc<RefCell<dyn CPU>>,
+    state: PpuState,
+    tile_cache: [Tile; TILE_X_MAX]
+}
+
+#[derive(Debug, Copy, Clone)]
+struct Tile {
+    index: u8,
+    colors: (u8, u8, u8, u8)
+}
+
+impl Tile {
+    fn new(index: u8, colors: (u8, u8, u8, u8)) -> Self {
+        Tile {
+            index,
+            colors
+        }
+    }
+}
+
+impl Default for Tile {
+    fn default() -> Self {
+        Tile::new(0, (0, 0, 0, 0))
+    }
 }
 
 impl PPU for Ppu2c02 {
@@ -229,7 +272,7 @@ impl PPU for Ppu2c02 {
         debug!("PPU: running PPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
 
         loop {
-            cycles = cycles + self.render()?;
+            cycles = cycles + self.render()? as u32;
 
             if cycles >= cycles_threshold {
                 break;
@@ -380,7 +423,16 @@ impl Ppu2c02 {
 
     fn write_control_register(&mut self, value: u8) {
         trace!("PPU: writing to control register: 0x{:02X}", value);
+
+        if let PpuState::VBlank(_) = self.state {
+            if value & 0x80 != 0 && self.get_flag(Status(VBlank)) && self.get_flag(Control(GenerateNmi)) == false {
+                debug!("PPU: forcing NMI as status changed: 0x{:02X}", value);
+                //let _ = self.cpu.borrow_mut().signal_nmi();
+            }
+        }
+
         self.register.borrow_mut().control = value;
+        self.t = (&self.t & !0x0C00) | ((value as u16 & 0x03) << 10);
     }
 
     fn read_mask_register(&self) -> u8 {
@@ -430,15 +482,19 @@ impl Ppu2c02 {
     fn write_oam_data_register(&mut self, addr: u8, value: u8) {
         debug!("PPU: writing to oam data register: 0x{:02X}", value);
 
-        let sprite_index = (addr / 4) as usize;
-        let offset = addr % 4;
+        if let PpuState::Rendering(_) = self.state  {
+            debug!("PPU: ignoring write to OAM address 0x{:02X} as PPU is in state {}", addr, self.state)
+        } else {
+            let sprite_index = (addr / 4) as usize;
+            let offset = addr % 4;
 
-        match offset {
-            0 => self.oam[sprite_index].y = value as usize,
-            1 => self.oam[sprite_index].tile_index = value,
-            2 => self.oam[sprite_index].attributes = value,
-            3 => self.oam[sprite_index].x = value as usize,
-            _ => unreachable!(),
+            match offset {
+                0 => self.oam[sprite_index].y = value as usize,
+                1 => self.oam[sprite_index].tile_index = value,
+                2 => self.oam[sprite_index].attributes = value,
+                3 => self.oam[sprite_index].x = value as usize,
+                _ => unreachable!(),
+            }
         }
     }
 
@@ -448,6 +504,15 @@ impl Ppu2c02 {
 
     fn write_scroll_register(&mut self, value: u8) {
         trace!("PPU: writing to scroll register: 0x{:02X}", value);
+
+        if self.latch.borrow().state == LatchState::LOW {
+            self.t = (self.t & !0x001F) | ((value as u16) >> 3);
+            self.x = (value & 0x07) as u16;
+        } else {
+            self.t = (self.t & !0x73E0) | (((value as u16) & 0x07) << 12) | (((value as u16) & 0xF8) << 2);
+        }
+
+        self.latch.borrow_mut().latch();
         self.register.borrow_mut().scroll = value;
     }
 
@@ -461,15 +526,15 @@ impl Ppu2c02 {
     }
 
     fn write_addr_register(&mut self, value: u8) {
-        let mut v = *self.v.borrow();
+        trace!("PPU: writing to PPU addr register: 0x{:02X}", value);
 
-        v = match self.latch.borrow().state {
-            LatchState::LOW => (v & 0xFF00) | (value as u16),
-            LatchState::HIGH => (v & 0x00FF) | (value as u16) << 8
-        };
-        trace!("PPU: writing to PPU addr register: 0x{:04X}", v);
+        if self.latch.borrow().state == LatchState::HIGH {
+            self.t = (self.t & 0x00FF) | ((value as u16 & 0x3F) << 8);
+        } else {
+            self.t = (self.t & 0xFF00) | (value as u16);
+            *self.v.borrow_mut() = self.t;
+        }
 
-        *self.v.borrow_mut() = v;
         self.latch.borrow_mut().latch();
     }
 
@@ -536,13 +601,26 @@ impl Ppu2c02 {
             register: RefCell::new(Register::new()),
             bus,
             v: RefCell::new(0),
+            t: 0,
+            x: 0,
             oam: [SpriteDisplay::default(); 64],
             latch: RefCell::new(Latch::new()),
             renderer: Renderer::new(),
             cpu,
+            state: PpuState::VBlank(261),
+            tile_cache: [Tile::default(); TILE_X_MAX],
         };
 
         Ok(ppu)
+    }
+
+    fn get_cached_tile(&self, tile_x: usize) -> &Tile {
+        &self.tile_cache[tile_x]
+    }
+
+    fn set_cached_tile(&mut self, tile_x: usize, tile: Tile) -> &Tile {
+        self.tile_cache[tile_x] = tile;
+        &self.tile_cache[tile_x]
     }
 
     #[cfg(test)]
@@ -671,7 +749,7 @@ impl Ppu2c02 {
         palette_address
     }
 
-    fn get_palette_color(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
+    fn get_palette_colors(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
         let mut colors = [0u8; 4];
 
         let palette_address = self.get_palette_address(palette);
@@ -698,7 +776,7 @@ impl Ppu2c02 {
     fn set_pixels(&mut self, tile_x: usize, tile_y: usize, line: usize, line_pattern_data: Vec<u8>, colors: (u8, u8, u8, u8)) {
         for pixel in 0..=7 {
             let color = line_pattern_data[pixel];
-            //trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel + (tile_x * 8), line + (tile_y * 8), color, colors);
+            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel + (tile_x * 8), line + (tile_y * 8), color, colors);
 
             let rgb: (u8, u8, u8) = match color {
                 0 => Palette2C02::rgb(colors.0),
@@ -745,28 +823,40 @@ impl Ppu2c02 {
         base_name_table_addr
     }
 
-    fn render_background(&mut self) -> Result<(), PpuError> {
+    fn render_background(&mut self, scanline: u16) -> Result<(), PpuError> {
         let base_name_table_addr = self.get_name_table_addr();
         let attribute_table_addr = self.get_attribute_table_addr(base_name_table_addr);
         let pattern_table_addr = self.get_pattern_table_addr();
 
-        for tile_y in 0..TILE_Y_MAX {
+        let tile_y = scanline as usize / 8;
+        let pixel_y = scanline as usize % 8;
+
+        if pixel_y == 0 {
             for tile_x in 0..TILE_X_MAX {
                 let tile_index = self.fetch_tile_index(tile_x, tile_y, base_name_table_addr)?;
                 let palette = self.fetch_palette(tile_x, tile_y, attribute_table_addr)?;
-                let colors = self.get_palette_color(palette)?;
+                let colors = self.get_palette_colors(palette)?;
 
-                for line in 0..=7usize {
-                    let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile_index, line)?;
-                    self.set_pixels(tile_x, tile_y, line, line_pattern_data, colors);
-                }
+                let tile = Tile::new(tile_index, colors);
+                self.set_cached_tile(tile_x, Tile::new(tile_index, colors));
+
+                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y)?;
+                self.set_pixels(tile_x, tile_y, pixel_y, line_pattern_data, tile.colors);
+            }
+        } else {
+            for tile_x in 0..TILE_X_MAX {
+                let tile = self.get_cached_tile(tile_x);
+
+                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y)?;
+                self.set_pixels(tile_x, tile_y, pixel_y, line_pattern_data, tile.colors);
             }
         }
+        trace!("PPU: rendered background for scanline: {}", scanline);
 
         Ok(())
     }
 
-    fn render_sprites(&mut self) -> Result<(), PpuError> {
+    fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
 
         let sprite_pattern_table_addr = self.get_pattern_table_addr();
         let sprite_size = if self.get_flag(Control(SpriteSize)) { 16 } else { 8 };
@@ -793,30 +883,63 @@ impl Ppu2c02 {
         Ok(())
     }
 
-    fn render(&mut self) -> Result<u32, PpuError> {
-        debug!("PPU: starting rendering");
+    fn render_scanline(&mut self) -> Result<(), PpuError> {
+        trace!("PPU: scanline starting: {}", self.state);
 
-        self.set_flag(Status(VBlank), false);
-        debug!("PPU: control register: 0x{:02X}", self.register.borrow().control);
+        match self.state {
+            PpuState::VBlank(261) => {
+                self.set_flag(Status(VBlank), false);
+                self.set_flag(Status(Sprite0Hit), false);
+                self.set_flag(Status(SpriteOverflow), false);
 
-        if self.get_flag(Mask(ShowBackground)) {
-            self.render_background()?;
+                self.state = PpuState::Rendering(0);
+            },
+
+            PpuState::Rendering(scanline) if scanline >= 0 && scanline <= 239 => {
+                if self.get_flag(Mask(ShowBackground)) {
+                    self.render_background(scanline)?;
+                }
+
+                //if self.get_flag(Mask(ShowSprites)) {
+                //    self.render_sprites(scanline)?;
+                //}
+
+                self.state = PpuState::Rendering(scanline + 1);
+            },
+
+            PpuState::Rendering(240) => {
+                self.state = PpuState::Rendering(241);
+            },
+
+            PpuState::Rendering(241) => {
+                self.set_flag(Status(VBlank), true);
+                self.state = PpuState::VBlank(242);
+
+                if self.get_flag(Control(GenerateNmi)) {
+                    self.cpu.borrow_mut().signal_nmi()?;
+                }
+            },
+
+            PpuState::VBlank(scanline) if scanline >= 242 && scanline <= 260 => {
+                self.state = PpuState::VBlank(scanline + 1);
+            },
+
+            _ => unreachable!("render_scanline()")
         }
 
-        if self.get_flag(Mask(ShowSprites)) {
-            self.render_sprites()?;
-        }
+        debug!("PPU: scanline ending: {}", self.state);
+        Ok(())
+    }
 
-        self.renderer.update();
-        debug!("PPU: rendering done");
+    fn render(&mut self) -> Result<u16, PpuError> {
 
-        self.set_flag(Status(VBlank), true);
-        self.set_flag(Status(Sprite0Hit), true);
+        let (_, duration): (Result<(), PpuError>, Duration) = measure_exec_time(|| {
+            self.render_scanline()?;
+            self.renderer.update();
+            Ok(())
+        });
 
-        if self.get_flag(Control(GenerateNmi)) {
-            self.cpu.borrow_mut().signal_nmi()?;
-        }
-
-        Ok(300)
+        debug!("PPU: rendered line in: {} ms", duration.as_millis());
+        Ok(CLOCK_CYCLES_PER_SCANLINE)
     }
 }
