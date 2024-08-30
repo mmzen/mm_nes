@@ -908,6 +908,7 @@ impl Ppu2c02 {
             },
 
             PpuState::Rendering(240) => {
+                self.renderer.update();
                 self.state = PpuState::Rendering(241);
             },
 
@@ -935,7 +936,6 @@ impl Ppu2c02 {
 
         let (_, duration): (Result<(), PpuError>, Duration) = measure_exec_time(|| {
             self.render_scanline()?;
-            self.renderer.update();
             Ok(())
         });
 
