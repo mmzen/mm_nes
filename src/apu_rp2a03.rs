@@ -4,7 +4,7 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
 
 const APU_NAME: &str = "APU RP2A03";
-const APU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x4000, 0x401F);
+const APU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x4000, 0x4013);
 const APU_EXTERNAL_MEMORY_SIZE: usize = 32;
 
 #[derive(Debug)]

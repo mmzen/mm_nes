@@ -27,9 +27,14 @@ impl Dma for PpuDma {
         debug!("DMA: transferring 256 bytes of memory from 0x{:04X} to PPU", source);
 
         let mut index = 0;
+        let bus = self.bus.as_ptr();
 
+        /***
+         * the unsafe call is necessary because in the current design, this
+         * code is called as the CPU already holds a mutable reference to the bus.
+         */
         for addr in source..=last_value {
-            let data = self.bus.borrow().read_byte(addr)?;
+            let data = unsafe { &*bus }.read_byte(addr)?;
             self.device.borrow_mut().dma_write(index as u8, data)?;
             index += 1;
         }
@@ -63,7 +68,6 @@ impl Memory for PpuDma {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-
         let value = match addr {
             0x00 => self.last_transfer_addr,
             _ => unreachable!()

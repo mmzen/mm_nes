@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::{debug, info};
+use log::{debug, info, trace};
 use crate::apu::ApuType;
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
@@ -43,9 +43,17 @@ impl NESConsole {
         let mut cycles = CYCLE_START_SEQUENCE;
         let credits = CYCLE_CREDITS;
 
+        let mut debt = 0;
+        let mut previous_cycles = 0;
         loop {
-            cycles = self.cpu.borrow_mut().run(cycles, credits)?;
-            cycles = self.ppu.borrow_mut().run(cycles, credits)?;
+            previous_cycles = cycles;
+
+            cycles = self.cpu.borrow_mut().run(cycles, CYCLE_CREDITS - debt)?;
+
+            trace!("cycle: {}, previous: {}, used: {}, credits: {}, debt: {}", cycles, previous_cycles, cycles - previous_cycles, CYCLE_CREDITS - debt, debt);
+            debt = (cycles - previous_cycles) - (CYCLE_CREDITS - debt);
+
+            self.ppu.borrow_mut().run(cycles, credits)?;
         }
     }
 
