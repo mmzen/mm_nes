@@ -16,6 +16,7 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternTableAddr, SpriteSize, VramIncrement};
 use crate::ppu_2c02::MaskFlag::{ShowBackground, ShowSprites};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
+use crate::ppu_2c02::SpriteAttribute::{FlipHorizontal, FlipVertical};
 use crate::ppu_2c02::StatusFlag::{Sprite0Hit, SpriteOverflow, VBlank};
 use crate::renderer::Renderer;
 use crate::util::measure_exec_time;
@@ -707,13 +708,18 @@ impl Ppu2c02 {
         Ok(palette)
     }
 
-    fn fetch_line_pattern_data(&self, pattern_table_addr: u16, tile_index: u8, line: usize) -> Result<Vec<u8>, PpuError> {
+    fn fetch_line_pattern_data(&self, pattern_table_addr: u16, tile_index: u8, line: usize, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
         let mut line_pattern_data= vec![0u8; 8];
         let line = line as u16;
         let tile_index = tile_index as u16;
 
-        let pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line)?;
-        let pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line + (PATTERN_DATA_SIZE as u16 / 2))?;
+        let mut pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line)?;
+        let mut pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line + (PATTERN_DATA_SIZE as u16 / 2))?;
+
+        if flip_horizontal {
+            pattern_data0 = pattern_data0.reverse_bits();
+            pattern_data1 = pattern_data1.reverse_bits();
+        }
 
         for bit in 0..=7 {
             let value0 = (pattern_data0 >> 7 - bit) & 0x01;
@@ -802,7 +808,7 @@ impl Ppu2c02 {
                 1 => Palette2C02::rgb(colors.1),
                 2 => Palette2C02::rgb(colors.2),
                 3 => Palette2C02::rgb(colors.3),
-                _ => unreachable!()
+                _ => unreachable!("unknown color: {}", color)
             };
 
             self.renderer
@@ -872,14 +878,14 @@ impl Ppu2c02 {
                 let tile = Tile::new(tile_index, colors);
                 self.set_cached_tile(tile_x, Tile::new(tile_index, colors));
 
-                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y)?;
+                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y, false)?;
                 self.set_background_pixels(tile_x, tile_y, pixel_y, line_pattern_data, tile.colors);
             }
         } else {
             for tile_x in 0..TILE_X_MAX {
                 let tile = self.get_cached_tile(tile_x);
 
-                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y)?;
+                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y, false)?;
                 self.set_background_pixels(tile_x, tile_y, pixel_y, line_pattern_data, tile.colors);
             }
         }
@@ -906,7 +912,9 @@ impl Ppu2c02 {
             let tile_index = self.oam[i].tile_index;
 
             let pixel_y = scanline as usize - self.oam[i].y;
-            let line_pattern_data = self.fetch_line_pattern_data(sprite_pattern_table_addr, tile_index, pixel_y)?;
+
+            let flip_horizontal = self.oam[i].get_attribute_value(FlipHorizontal) != 0;
+            let line_pattern_data = self.fetch_line_pattern_data(sprite_pattern_table_addr, tile_index, pixel_y, flip_horizontal)?;
 
             self.set_sprites_pixels(self.oam[i].x, self.oam[i].y, pixel_y, line_pattern_data, colors);
         }
