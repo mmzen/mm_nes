@@ -789,7 +789,7 @@ impl Ppu2c02 {
                 1 => Palette2C02::rgb(colors.1),
                 2 => Palette2C02::rgb(colors.2),
                 3 => Palette2C02::rgb(colors.3),
-                _ => unreachable!()
+                _ => unreachable!("unknown color: {}", color)
             };
 
             self.renderer
@@ -804,7 +804,7 @@ impl Ppu2c02 {
             trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel + x, line + y, color, colors);
 
             let rgb: (u8, u8, u8) = match color {
-                0 => Palette2C02::rgb(colors.0),
+                0 => continue,
                 1 => Palette2C02::rgb(colors.1),
                 2 => Palette2C02::rgb(colors.2),
                 3 => Palette2C02::rgb(colors.3),
@@ -913,7 +913,7 @@ impl Ppu2c02 {
 
             let pixel_y = scanline as usize - self.oam[i].y;
 
-            let flip_horizontal = self.oam[i].get_attribute_value(FlipHorizontal) != 0;
+            let flip_horizontal = if self.oam[i].get_attribute_value(FlipHorizontal) != 0 { true } else { false } ;
             let line_pattern_data = self.fetch_line_pattern_data(sprite_pattern_table_addr, tile_index, pixel_y, flip_horizontal)?;
 
             self.set_sprites_pixels(self.oam[i].x, self.oam[i].y, pixel_y, line_pattern_data, colors);
