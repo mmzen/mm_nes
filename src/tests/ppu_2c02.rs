@@ -151,7 +151,7 @@ fn read_write_to_addr_register_works() {
     let mut ppu = create_ppu();
     let address = 0x06;
     let value = (0xAB, 0xCD);
-    let expected = 0xABCD;
+    let expected = 0xABCD & 0x3FFF;
 
     ppu.write_byte(address, value.0).unwrap();
     ppu.write_byte(address, value.1).unwrap();
@@ -297,7 +297,7 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
     let mut ppu = create_ppu();
     let status = 0x02;
     let addr = 0x06;
-    let status_value = 0x80;
+    let status_value = 0xFF;
     let addr_value = 0xAB;
 
     ppu.write_byte(status, status_value).unwrap();
@@ -305,11 +305,13 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
 
     let result0 = ppu.read_byte(status).unwrap();
     let result1 = ppu.read_byte(status).unwrap();
-    let result2 = ppu.read_byte(addr).unwrap();
 
     assert_eq!(result0, status_value);
-    assert_eq!(result1, 0x00);
-    assert_eq!(result2, addr_value);
+    assert_eq!(result1, status_value & 0x7F );
+
+    ppu.write_byte(addr, addr_value).unwrap();
+    let result2 = ppu.read_byte(addr).unwrap();
+    assert_eq!(result2, 0x00);
 }
 
 #[test]
