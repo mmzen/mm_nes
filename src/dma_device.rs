@@ -4,6 +4,7 @@ use std::fmt::{Debug, Display, Formatter};
 use mockall::mock;
 use crate::memory::MemoryError;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum DmaDeviceType {
     PpuDmaDevice

@@ -23,4 +23,5 @@ impl PartialEq for ApuType {
     }
 }
 
+#[allow(dead_code)]
 pub trait APU {}

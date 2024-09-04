@@ -27,7 +27,6 @@ mod tests;
 mod bus;
 mod apu;
 mod bus_device;
-mod dummy_device;
 mod cartridge;
 mod nrom128_cartridge;
 mod util;

@@ -10,7 +10,6 @@ const DEVICE_NAME: &str = "Memory Bank";
 pub struct MemoryBank {
     memory: Vec<u8>,
     address_space: (u16, u16),
-    address_space_size: usize,
     device_type: BusDeviceType,
 }
 
@@ -107,12 +106,9 @@ impl BusDevice for MemoryBank {
 
 impl MemoryBank {
     pub(crate) fn new(size: usize, address_range: (u16, u16)) -> Self {
-        let address_space_size = (address_range.1 - address_range.0 + 1) as usize;
-
         MemoryBank {
             memory: vec![0x00; size],
             address_space: address_range,
-            address_space_size,
             device_type: BusDeviceType::WRAM(NESMemory),
         }
     }

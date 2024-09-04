@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
+use std::thread::sleep;
 use std::time::Duration;
 use log::{debug, info, trace};
 use crate::bus::Bus;
@@ -13,10 +14,10 @@ use crate::nes_bus::NESBus;
 use crate::palette::Palette;
 use crate::palette_2c02::Palette2C02;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
-use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternTableAddr, SpriteSize, VramIncrement};
+use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternTableAddr, VramIncrement};
 use crate::ppu_2c02::MaskFlag::{ShowBackground, ShowSprites};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
-use crate::ppu_2c02::SpriteAttribute::{FlipHorizontal, FlipVertical};
+use crate::ppu_2c02::SpriteAttribute::{FlipHorizontal};
 use crate::ppu_2c02::StatusFlag::{Sprite0Hit, SpriteOverflow, VBlank};
 use crate::renderer::Renderer;
 use crate::util::measure_exec_time;
@@ -27,7 +28,7 @@ const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), 
 const NAME_TABLE_VERTICAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3EFF);
 const NAME_TABLE_HORIZONTAL_SIZE: usize = 1024;
 const NAME_TABLE_VERTICAL_SIZE: usize = 2048;
-const NAME_TABLE_SIZE: u16 = 960;
+const NAME_TABLE_SIZE: usize = 960;
 const PALETTE_ADDRESS_SPACE: (u16, u16) = (0x3F00, 0x3FFF);
 const PALETTE_SIZE: usize = 32;
 const V_INCR_GOING_ACROSS: u8 = 1;
@@ -36,9 +37,11 @@ const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
 const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
-const TILE_X_MAX: usize = 32;
-const TILE_Y_MAX: usize = 30;
+const TILE_X_MAX: u8 = 32;
+const TILE_CACHE_SIZE: usize = TILE_X_MAX as usize;
+const PIXEL_X_MAX: u8 = 255;
 const PATTERN_DATA_SIZE: usize = 16;
+const MERGED_PATTERN_DATA_SIZE: usize = 64;
 const SPRITE_PALETTE_ADDR: u16 = 0x3F10;
 const CLOCK_CYCLES_PER_SCANLINE: u16 = 114;
 
@@ -60,6 +63,7 @@ impl PpuFlag {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 enum ControlFlag {
     BaseNameTableAddr1 = 0x01,
@@ -72,6 +76,7 @@ enum ControlFlag {
     GenerateNmi = 0x80
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 enum MaskFlag {
     GreyScale = 0x01,
@@ -84,15 +89,16 @@ enum MaskFlag {
     EmphasizeBlue = 0x80,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 enum SpriteAttribute {
     Palette = 0x03,
-    Unimplemented = 0x1C,
     Priority = 0x20,
     FlipHorizontal = 0x40,
     FlipVertical = 0x80
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Copy, Clone)]
 enum StatusFlag {
     StaleOpenBus = 0x1F,
@@ -138,7 +144,6 @@ struct Register {
     mask: u8,
     status: u8,
     oam_addr: u8,
-    oam_data: u8,
     scroll: u8,
     data: u8
 }
@@ -150,7 +155,6 @@ impl Register {
             mask: 0,
             status: 0,
             oam_addr: 0,
-            oam_data: 0,
             scroll: 0,
             data: 0
         }
@@ -158,27 +162,25 @@ impl Register {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SpriteDisplay {
-    x: usize,
-    y: usize,
+struct Sprite {
+    x: u8,
+    y: u8,
     tile_index: u8,
-    attributes: u8,
-    pattern_table_index: u8
+    attributes: u8
 }
 
-impl Default for SpriteDisplay {
+impl Default for Sprite {
     fn default() -> Self {
-        SpriteDisplay {
+        Sprite {
             x: 0,
             y: 0,
             tile_index: 0,
             attributes: 0,
-            pattern_table_index: 0
         }
     }
 }
 
-impl SpriteDisplay {
+impl Sprite {
     fn get_attribute_value(&self, attr: SpriteAttribute) -> u8 {
         match attr {
             SpriteAttribute::Palette => {
@@ -212,35 +214,54 @@ impl Display for PpuState {
 pub struct Ppu2c02 {
     register: RefCell<Register>,
     bus: Box<dyn Bus>,
-    oam: [SpriteDisplay; 64],
+    oam: [Sprite; 64],
     v: RefCell<u16>,
     t: u16,
     x: u16,
     latch: RefCell<Latch>,
-    renderer: Renderer,
+    renderer: RefCell<Renderer>,
     cpu: Rc<RefCell<dyn CPU>>,
     state: PpuState,
-    tile_cache: [Tile; TILE_X_MAX]
+    #[allow(dead_code)]
+    tile_cache: [Tile; TILE_CACHE_SIZE],
+    name_table_mirroring: PpuNameTableMirroring
 }
 
 #[derive(Debug, Copy, Clone)]
 struct Tile {
+    #[allow(dead_code)]
     index: u8,
-    colors: (u8, u8, u8, u8)
+    colors: (u8, u8, u8, u8),
+    pattern_table: [u8; MERGED_PATTERN_DATA_SIZE]
 }
 
 impl Tile {
-    fn new(index: u8, colors: (u8, u8, u8, u8)) -> Self {
+    fn new(index: u8, colors: (u8, u8, u8, u8), pattern_table: [u8; MERGED_PATTERN_DATA_SIZE]) -> Self {
         Tile {
             index,
-            colors
+            colors,
+            pattern_table
         }
     }
 }
 
 impl Default for Tile {
     fn default() -> Self {
-        Tile::new(0, (0, 0, 0, 0))
+        Tile::new(0xFF, (0, 0, 0, 0), [0; MERGED_PATTERN_DATA_SIZE])
+    }
+}
+
+impl Display for Tile {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "tile - index: 0x{:02X}, colors: 0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X}\n", self.index, self.colors.0, self.colors.1, self.colors.2, self.colors.3)?;
+        write!(f, "tile - index: 0x{:02X}, pattern_table:", self.index)?;
+        for (index, byte) in self.pattern_table.iter().enumerate() {
+            if index % 8 == 0 {
+                write!(f, "\n")?;
+            }
+            write!(f, "{:02X} ", byte)?;
+        }
+        Ok(())
     }
 }
 
@@ -472,10 +493,10 @@ impl Ppu2c02 {
         let offset = addr % 4;
 
         match offset {
-            0 => self.oam[sprite_index].y as u8,
+            0 => self.oam[sprite_index].y,
             1 => self.oam[sprite_index].tile_index,
             2 => self.oam[sprite_index].attributes,
-            3 => self.oam[sprite_index].x as u8,
+            3 => self.oam[sprite_index].x,
             _ => unreachable!(),
         }
     }
@@ -490,10 +511,10 @@ impl Ppu2c02 {
             let offset = addr % 4;
 
             match offset {
-                0 => self.oam[sprite_index].y = value as usize,
+                0 => self.oam[sprite_index].y = value,
                 1 => self.oam[sprite_index].tile_index = value,
                 2 => self.oam[sprite_index].attributes = value,
-                3 => self.oam[sprite_index].x = value as usize,
+                3 => self.oam[sprite_index].x = value,
                 _ => unreachable!(),
             }
         }
@@ -506,11 +527,11 @@ impl Ppu2c02 {
     fn write_scroll_register(&mut self, value: u8) {
         trace!("PPU: writing to scroll register: 0x{:02X}", value);
 
-        if self.latch.borrow().state == LatchState::LOW {
+        if self.latch.borrow().state == LatchState::HIGH {
             self.t = (self.t & !0x001F) | ((value as u16) >> 3);
             self.x = (value & 0x07) as u16;
         } else {
-            self.t = (self.t & !0x73E0) | (((value as u16) & 0x07) << 12) | (((value as u16) & 0xF8) << 2);
+            self.t = (self.t & !0x73E0) | (((value as u16) << 12) | (((value as u16) & 0xF8) << 2));
         }
 
         self.latch.borrow_mut().latch();
@@ -582,6 +603,7 @@ impl Ppu2c02 {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -596,7 +618,7 @@ impl Ppu2c02 {
         bus.add_device(palette_table)?;
         bus.add_device(chr_rom)?;
 
-        Ppu2c02::create_mirrored_name_tables_and_connect_to_bus(&mut bus, mirroring)?;
+        Ppu2c02::create_mirrored_name_tables_and_connect_to_bus(&mut bus, mirroring.clone())?;
 
         let ppu = Ppu2c02 {
             register: RefCell::new(Register::new()),
@@ -604,24 +626,24 @@ impl Ppu2c02 {
             v: RefCell::new(0),
             t: 0,
             x: 0,
-            oam: [SpriteDisplay::default(); 64],
+            oam: [Sprite::default(); 64],
             latch: RefCell::new(Latch::new()),
-            renderer: Renderer::new(),
+            renderer: RefCell::new(Renderer::new()),
             cpu,
             state: PpuState::VBlank(261),
-            tile_cache: [Tile::default(); TILE_X_MAX],
+            tile_cache: [Tile::default(); TILE_X_MAX as usize],
+            name_table_mirroring: mirroring,
         };
 
         Ok(ppu)
     }
 
-    fn get_cached_tile(&self, tile_x: usize) -> &Tile {
-        &self.tile_cache[tile_x]
+    fn get_cached_tile(&self, tile_x: u8, _: u8) -> &Tile {
+        &self.tile_cache[tile_x as usize]
     }
 
-    fn set_cached_tile(&mut self, tile_x: usize, tile: Tile) -> &Tile {
-        self.tile_cache[tile_x] = tile;
-        &self.tile_cache[tile_x]
+    fn set_cached_tile(&mut self, tile: Tile, tile_x: u8, _: u8) {
+        self.tile_cache[tile_x as usize] = tile;
     }
 
     #[cfg(test)]
@@ -631,7 +653,6 @@ impl Ppu2c02 {
             "mask" => self.register.borrow().mask,
             "status" => self.register.borrow().status,
             "oam_addr" => self.register.borrow().oam_addr,
-            "oam_data" => self.register.borrow().oam_data,
             "scroll" => self.register.borrow().scroll,
             "addr" => *self.v.borrow() as u8,
             "data" => self.register.borrow().data,
@@ -693,7 +714,7 @@ impl Ppu2c02 {
         }
     }
 
-    fn fetch_palette(&self, tile_x: usize, tile_y: usize, attribute_table_addr: u16) -> Result<u8, PpuError> {
+    fn fetch_palette(&self, tile_x: u8, tile_y: u8, attribute_table_addr: u16) -> Result<u8, PpuError> {
         let block_x = tile_x / 4;
         let block_y = tile_y / 4;
         let attribute_table_address = attribute_table_addr + (block_y as u16 * 8) + block_x as u16;
@@ -708,36 +729,56 @@ impl Ppu2c02 {
         Ok(palette)
     }
 
-    fn fetch_line_pattern_data(&self, pattern_table_addr: u16, tile_index: u8, line: usize, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
-        let mut line_pattern_data= vec![0u8; 8];
-        let line = line as u16;
-        let tile_index = tile_index as u16;
+    fn flip_horizontal(&self, data_plane0: &mut u8, data_plane1: &mut u8)  {
+        *data_plane0 = data_plane0.reverse_bits();
+        *data_plane1 = data_plane1.reverse_bits();
+    }
 
-        let mut pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line)?;
-        let mut pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index * PATTERN_DATA_SIZE as u16) + line + (PATTERN_DATA_SIZE as u16 / 2))?;
-
-        if flip_horizontal {
-            pattern_data0 = pattern_data0.reverse_bits();
-            pattern_data1 = pattern_data1.reverse_bits();
-        }
+    fn merge_bit_planes(&self, data_plane0: &mut u8, data_plane1: &mut u8) -> Vec<u8> {
+        let mut line_pattern_data = vec![0u8; 8];
 
         for bit in 0..=7 {
-            let value0 = (pattern_data0 >> 7 - bit) & 0x01;
-            let value1 = (pattern_data1 >> 7 - bit) & 0x01;
+            let value0 = (*data_plane0 >> 7 - bit) & 0x01;
+            let value1 = (*data_plane1 >> 7 - bit) & 0x01;
             let combined = (value1 << 1) | value0;
             line_pattern_data[bit] = combined;
         }
 
-        trace!("PPU: line_pattern_data: {:?}", line_pattern_data);
-        Ok(line_pattern_data)
+        line_pattern_data
     }
 
-    fn fetch_tile_index(&self, tile_x: usize, tile_y: usize, base_name_table_addr: u16) -> Result<u8, PpuError> {
-        let name_table_index = (tile_x + (tile_y * 32)) as u16;
+    fn fetch_pattern_data(&self, tile_index: u8, pattern_table_addr: u16, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
+        let mut pattern_data= vec![];
+
+        for line in 0..=7 {
+            let mut pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16)?;
+            let mut pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16 + (PATTERN_DATA_SIZE as u16 / 2))?;
+
+            if flip_horizontal {
+                self.flip_horizontal(&mut pattern_data0, &mut pattern_data1);
+            }
+
+            let mut line_pattern_data = self.merge_bit_planes(&mut pattern_data0, &mut pattern_data1);
+            pattern_data.append(&mut line_pattern_data);
+        }
+
+        trace!("PPU: pattern_data: {:?}", pattern_data);
+        Ok(pattern_data)
+    }
+
+    fn fetch_line_pattern_data<'a>(&self, tile: &'a Tile, line: u8) -> &'a [u8] {
+        let a = (line * 8) as usize;
+        let b = ((line * 8) + 8) as usize;
+
+        &tile.pattern_table[a..b]
+    }
+
+    fn fetch_tile_index(&self, tile_x: u8, tile_y: u8, base_name_table_addr: u16) -> Result<u8, PpuError> {
+        let name_table_index = tile_x as u16 + (tile_y as u16 * 32);
         let addr = base_name_table_addr + name_table_index;
         let tile_index = self.bus.read_byte(addr)?;
 
-        trace!("PPU: tile_index at 0x{:04X} in name table: 0x{:02X}", addr, tile_index);
+        trace!("PPU: tile_index at 0x{:04X} in name table: 0x{:02X}",addr, tile_index);
         Ok(tile_index)
     }
 
@@ -755,50 +796,50 @@ impl Ppu2c02 {
         palette_address
     }
 
-    fn get_palette_colors(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
+    fn get_palette_colors(&self, palette_addr: u16) -> Result<(u8, u8, u8, u8), PpuError> {
         let mut colors = [0u8; 4];
 
+        for i in 0..=3 {
+            colors[i] = self.bus.read_byte(palette_addr + i as u16)?;
+        }
+
+        Ok((colors[0], colors[1], colors[2], colors[3]))
+    }
+
+    fn get_background_palette_colors(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
         let palette_address = self.get_palette_address(palette);
-        for i in 0..=3 {
-            colors[i] = self.bus.read_byte(palette_address + i as u16)?;
-        }
+        let colors = self.get_palette_colors(palette_address)?;
 
-        trace!("PPU: palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors[0], colors[1], colors[2], colors[3]);
-        Ok((colors[0], colors[1], colors[2], colors[3]))
+        trace!("PPU: background palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
+        Ok(colors)
     }
 
-    fn get_sprite_palette_color(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
-        let mut colors = [0u8; 4];
-
+    fn get_sprite_palette_colors(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
         let palette_address = self.get_sprite_palette_address(palette);
-        for i in 0..=3 {
-            colors[i] = self.bus.read_byte(palette_address + i as u16)?;
-        }
+        let colors = self.get_palette_colors(palette_address)?;
 
-        trace!("PPU: sprite palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors[0], colors[1], colors[2], colors[3]);
-        Ok((colors[0], colors[1], colors[2], colors[3]))
+        trace!("PPU: sprite palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
+        Ok(colors)
     }
 
-    fn set_background_pixels(&mut self, tile_x: usize, tile_y: usize, line: usize, line_pattern_data: Vec<u8>, colors: (u8, u8, u8, u8)) {
-        for pixel in 0..=7 {
-            let color = line_pattern_data[pixel];
-            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel + (tile_x * 8), line + (tile_y * 8), color, colors);
+    fn set_background_pixels(&self, pixel_pos_x: u8, pixel_pos_y: u8, tile: &Tile, line_pattern_data: &[u8]) {
+
+        line_pattern_data.iter().enumerate().for_each(|(pixel, color)| {
+            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, tile.colors);
 
             let rgb: (u8, u8, u8) = match color {
-                0 => Palette2C02::rgb(colors.0),
-                1 => Palette2C02::rgb(colors.1),
-                2 => Palette2C02::rgb(colors.2),
-                3 => Palette2C02::rgb(colors.3),
+                0 => Palette2C02::rgb(tile.colors.0),
+                1 => Palette2C02::rgb(tile.colors.1),
+                2 => Palette2C02::rgb(tile.colors.2),
+                3 => Palette2C02::rgb(tile.colors.3),
                 _ => unreachable!("unknown color: {}", color)
             };
 
-            self.renderer
-                .frame()
-                .set_pixel(pixel + (tile_x * 8), line + (tile_y * 8), rgb);
-        }
+            self.renderer.borrow_mut().frame().set_pixel(pixel_pos_x + pixel as u8, pixel_pos_y, rgb);
+        });
     }
 
-    fn set_sprites_pixels(&mut self, x: usize, y: usize, line: usize, line_pattern_data: Vec<u8>, colors: (u8, u8, u8, u8)) {
+    /***fn set_sprites_pixels(&mut self, x: usize, y: usize, line: usize, line_pattern_data: Vec<u8>, colors: (u8, u8, u8, u8)) {
         for pixel in 0..=7 {
             let color = line_pattern_data[pixel];
             trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel + x, line + y, color, colors);
@@ -815,7 +856,7 @@ impl Ppu2c02 {
                 .frame()
                 .set_pixel(pixel + x, line + y, rgb);
         }
-    }
+    }***/
 
 
     fn get_background_pattern_table_addr(&self) -> u16 {
@@ -841,7 +882,7 @@ impl Ppu2c02 {
     }
 
     fn get_attribute_table_addr(&self, base_name_table_addr: u16) -> u16 {
-        let attribute_table_addr= base_name_table_addr + NAME_TABLE_SIZE;
+        let attribute_table_addr= base_name_table_addr + NAME_TABLE_SIZE as u16;
 
         trace!("PPU: attribute table: 0x{:04X}", attribute_table_addr);
         attribute_table_addr
@@ -861,62 +902,214 @@ impl Ppu2c02 {
         base_name_table_addr
     }
 
-    fn render_background(&mut self, scanline: u16) -> Result<(), PpuError> {
-        let base_name_table_addr = self.get_name_table_addr();
-        let attribute_table_addr = self.get_attribute_table_addr(base_name_table_addr);
-        let pattern_table_addr = self.get_background_pattern_table_addr();
+    fn vec_to_array(vec: Vec<u8>) -> [u8; 64] {
+        let boxed_slice = vec.into_boxed_slice();
+        let boxed_array: Box<[u8; 64]> = match boxed_slice.try_into() {
+            Ok(array) => array,
+            Err(_) => panic!("vector has an incorrect length"),
+        };
+        *boxed_array
+    }
 
-        let tile_y = scanline as usize / 8;
-        let pixel_y = scanline as usize % 8;
+    fn get_tile(&self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Tile, PpuError> {
+        let tile_index = self.fetch_tile_index(coarse_x, coarse_y, name_table_addr)?;
+        let palette = self.fetch_palette(coarse_x, coarse_y, attribute_table_addr)?;
+        let colors = self.get_background_palette_colors(palette)?;
+        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, false)?;
 
-        if pixel_y == 0 {
-            for tile_x in 0..TILE_X_MAX {
-                let tile_index = self.fetch_tile_index(tile_x, tile_y, base_name_table_addr)?;
-                let palette = self.fetch_palette(tile_x, tile_y, attribute_table_addr)?;
-                let colors = self.get_palette_colors(palette)?;
+        let tile = Tile::new(tile_index, colors, Ppu2c02::vec_to_array(pattern_data));
 
-                let tile = Tile::new(tile_index, colors);
-                self.set_cached_tile(tile_x, Tile::new(tile_index, colors));
+        trace!("{}", tile);
+        Ok(tile)
+    }
 
-                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y, false)?;
-                self.set_background_pixels(tile_x, tile_y, pixel_y, line_pattern_data, tile.colors);
-            }
+    /***
+     * coase_x: ...ABCDE <- v: ........ ...ABCDE
+     ***/
+    fn get_coarse_x(&self) -> u8 {
+        (*self.v.borrow() & 0x1F) as u8
+    }
+
+    /***
+     * coarse_y: ...ABCDE <- v: .....AB CDE.....
+     ***/
+    fn get_coarse_y(&self) -> u8 {
+        ((*self.v.borrow() & 0x3E0) >> 5) as u8
+    }
+
+    /***
+     * fine_y: .....ABC <- v: ABC.... ........
+     ***/
+    fn get_fine_y(&self) -> u8 {
+        ((*self.v.borrow() & 0x7000) >> 12) as u8
+    }
+
+    /***
+     * v: ....... ...BCDEF <- x: .BCDEF
+     * v: ....A.. ...BCDEF <- nametable: .....A.. ........
+     */
+    fn update_v_coarse_x(&mut self, nametable: u16, coarse_x: u8) {
+        let mut v = *self.v.borrow_mut();
+
+        v = (v & 0xFFE0) | (coarse_x as u16 & 0x1F);
+        v = (v & 0xFBFF) | (nametable & 0x400);
+
+        *self.v.borrow_mut() = v;
+    }
+
+
+    /***
+     * v: .....BC DEF..... <- y: .BCDEF
+     * v: ...A... ........ <- nametable: ....A... ........
+     */
+    fn update_v_fine_and_coarse_y(&mut self, nametable: u16, fine_y: u8, coarse_y: u8) {
+        let mut v = *self.v.borrow_mut();
+
+        v = (v & 0xFC1F) | (((coarse_y & 0x1F) as u16) << 5);
+        v = (v & 0xF7FF) | (nametable & 0x0800);
+
+        v = (v & !0x7000) | ((fine_y as u16) << 12);
+
+        *self.v.borrow_mut() = v;
+    }
+
+    /***
+     * v: ....A.. ...BCDEF <- t: ....A.. ...BCDEF
+     */
+    fn put_horizontal_t_into_v(&mut self) {
+        let mut v = *self.v.borrow_mut();
+
+        v = (v & !0x041F) | (self.t & 0x041F);
+        *self.v.borrow_mut() = v;
+    }
+
+    /***
+     * v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
+     */
+    fn put_vertical_t_into_v(&mut self) {
+        let mut v = *self.v.borrow_mut();
+
+        v = (v & !0x7BE0) | (self.t & 0x7BE0);
+        *self.v.borrow_mut() = v;
+    }
+
+    fn coarse_x_increment(&self, name_table_addr: u16, coarse_x: u8) -> (u16, u8) {
+        if coarse_x == 31 {
+            let addr = name_table_addr ^ 0x0400;
+            (addr, 0)
         } else {
-            for tile_x in 0..TILE_X_MAX {
-                let tile = self.get_cached_tile(tile_x);
+            (name_table_addr, coarse_x + 1)
+        }
+    }
 
-                let line_pattern_data = self.fetch_line_pattern_data(pattern_table_addr, tile.index, pixel_y, false)?;
-                self.set_background_pixels(tile_x, tile_y, pixel_y, line_pattern_data, tile.colors);
+    fn fine_and_coarse_y_increment(&self, name_table_addr: u16, fine_y: u8, coarse_y: u8) -> (u16, u8, u8) {
+        if fine_y < 7 {
+            (name_table_addr, fine_y + 1, coarse_y)
+        } else {
+            if coarse_y == 29 {
+                let addr = name_table_addr ^ 0x0800;
+                (addr, 0, 0)
+            } else if coarse_y == 31 {
+                (name_table_addr, 0, 0)
+            } else {
+                (name_table_addr, 0, coarse_y + 1)
             }
         }
-        trace!("PPU: rendered background for scanline: {}", scanline);
+    }
 
+    /***
+     *
+     * v is:
+     * yyyNNYYYYYXXXXX
+     *
+     * y, the fine Y position, holding the Y position within a 8x8-pixel tile.
+     * N, the index for choosing the name table.
+     * Y, the 5-bit coarse Y position, which can reference one of the 30 8x8 tiles on the screen in the vertical direction.
+     * X, the 5-bit coarse X position, which can reference one of the 32 8x8 tiles on the screen in the horizontal direction.
+     *
+     ***/
+    fn render_background(&mut self, scanline: u16) -> Result<(), PpuError> {
+        let mut name_table_addr = self.get_name_table_addr();
+        let pattern_table_addr = self.get_background_pattern_table_addr();
+        let attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
+
+        let mut fine_y = self.get_fine_y();
+        let mut coarse_y = self.get_coarse_y();
+
+        let mut coarse_x = self.get_coarse_x();
+        let pixel_pos_y = scanline as u8;
+        let tile_pixel_pos_y = pixel_pos_y % 8;
+
+        debug!("PPU: rendering background, scanline: {}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
+            scanline, fine_y, coarse_y, coarse_x, pixel_pos_y);
+
+        for pixel_pos_x in (0..=PIXEL_X_MAX).step_by(8) {
+
+            if tile_pixel_pos_y == 0 {
+                let fetched_tile = self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
+                self.set_cached_tile(fetched_tile, coarse_x, coarse_y);
+            }
+
+            let tile =  self.get_cached_tile(coarse_x, coarse_y);
+            let line_pattern_data = self.fetch_line_pattern_data(tile, tile_pixel_pos_y);
+
+            self.set_background_pixels(pixel_pos_x, pixel_pos_y, &tile, &line_pattern_data);
+            (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
+        }
+
+        self.put_horizontal_t_into_v();
+
+        (name_table_addr, fine_y, coarse_y) = self.fine_and_coarse_y_increment(name_table_addr, fine_y, coarse_y);
+
+        self.update_v_coarse_x(name_table_addr, coarse_x);
+        self.update_v_fine_and_coarse_y(name_table_addr, fine_y, coarse_y);
+
+        trace!("PPU: rendered background for scanline: {}", scanline);
         Ok(())
+    }
+
+    fn is_scanline_in_sprite_range(&self, scanline: u16, sprite: &Sprite) -> bool {
+        let sprite_size = 8u16;
+
+        if scanline < sprite.y as u16 || scanline >= sprite.y as u16 + sprite_size {
+            false
+        } else {
+            true
+        }
+    }
+
+    fn get_tile_by_sprite_definition(&self, sprite: &Sprite, pattern_table_addr: u16) -> Result<Tile, PpuError> {
+        let tile_index = sprite.tile_index;
+        let palette = sprite.get_attribute_value(SpriteAttribute::Palette);
+        let colors = self.get_sprite_palette_colors(palette)?;
+
+        let flip_horizontal = if sprite.get_attribute_value(FlipHorizontal) != 0 {
+            true
+        } else {
+            false
+        } ;
+
+        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, flip_horizontal)?;
+
+        let tile = Tile::new(tile_index, colors, Ppu2c02::vec_to_array(pattern_data));
+        Ok(tile)
     }
 
     fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
         let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
-        let sprite_size = 8u16;
 
         for i in 0..self.oam.len() {
+            let sprite = &self.oam[i];
 
-            if (scanline as usize) < self.oam[i].y || (scanline as usize) >= self.oam[i].y + (sprite_size as usize) {
-                continue;
+            if self.is_scanline_in_sprite_range(scanline, sprite) {
+                trace!("sprite: {:?}", sprite);
+
+                let pixel_pos_y = (scanline - sprite.y as u16) as u8;
+                let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
+
+                let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y);
+                self.set_background_pixels(sprite.x, sprite.y, &tile, line_pattern_data);
             }
-
-            trace!("sprite: {:?}", self.oam[i]);
-
-            let palette = self.oam[i].get_attribute_value(SpriteAttribute::Palette);
-            let colors = self.get_sprite_palette_color(palette)?;
-
-            let tile_index = self.oam[i].tile_index;
-
-            let pixel_y = scanline as usize - self.oam[i].y;
-
-            let flip_horizontal = if self.oam[i].get_attribute_value(FlipHorizontal) != 0 { true } else { false } ;
-            let line_pattern_data = self.fetch_line_pattern_data(sprite_pattern_table_addr, tile_index, pixel_y, flip_horizontal)?;
-
-            self.set_sprites_pixels(self.oam[i].x, self.oam[i].y, pixel_y, line_pattern_data, colors);
         }
 
         Ok(())
@@ -925,6 +1118,21 @@ impl Ppu2c02 {
     fn render_scanline(&mut self) -> Result<(), PpuError> {
         trace!("PPU: scanline starting: {}", self.state);
 
+        /***
+         *  At dot 257 of each scanline:
+         *  If rendering is enabled, the PPU copies all bits related to horizontal position from t to v:
+         *
+         *  v: ....A.. ...BCDEF <- t: ....A.. ...BCDEF
+         *
+         *  During dots 280 to 304 of the pre-render scanline (end of vblank)
+         *  If rendering is enabled, at the end of vblank,
+         *  shortly after the horizontal bits are copied from t to v at dot 257,
+         *  the PPU will repeatedly copy the vertical bits from t to v from dots 280 to 304,
+         *  completing the full initialization of v from t:
+         *
+         *  v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
+         *
+         ***/
         match self.state {
             PpuState::VBlank(261) => {
                 self.set_flag(Status(VBlank), false);
@@ -933,15 +1141,20 @@ impl Ppu2c02 {
 
                 self.register.borrow_mut().oam_addr = 0;
                 self.state = PpuState::Rendering(0);
+
+                if self.get_flag(Mask(ShowBackground)) || self.get_flag(Mask(ShowSprites)) {
+                    self.put_horizontal_t_into_v();
+                    self.put_vertical_t_into_v();
+                }
             },
 
-            PpuState::Rendering(scanline) if scanline >= 0 && scanline <= 239 => {
+            PpuState::Rendering(scanline) if scanline <= 239 => {
                 if self.get_flag(Mask(ShowBackground)) {
                     self.render_background(scanline)?;
                 }
 
                 if self.get_flag(Mask(ShowSprites)) {
-                    self.render_sprites(scanline)?;
+                    //self.render_sprites(scanline)?;
                 }
 
                 self.register.borrow_mut().oam_addr = 0;
@@ -949,7 +1162,7 @@ impl Ppu2c02 {
             },
 
             PpuState::Rendering(240) => {
-                self.renderer.update();
+                self.renderer.borrow_mut().update();
                 self.state = PpuState::Rendering(241);
             },
 

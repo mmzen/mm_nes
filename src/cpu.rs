@@ -63,6 +63,7 @@ impl Display for CpuError {
 }
 
 pub trait Interruptible {
+    #[allow(dead_code)]
     fn signal_irq(&mut self) -> Result<(), CpuError>;
     fn signal_nmi(&mut self) -> Result<(), CpuError>;
 }

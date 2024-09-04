@@ -1,6 +1,6 @@
 use sdl2::pixels::PixelFormatEnum;
-use sdl2::render::{Canvas, Texture, TextureCreator};
-use sdl2::video::{Window, WindowContext};
+use sdl2::render::{Canvas, Texture};
+use sdl2::video::Window;
 use crate::frame::Frame;
 
 const WIDTH: usize = 256;
@@ -9,7 +9,6 @@ const HEIGHT: usize = 240;
 #[cfg(not(test))]
 pub struct Renderer {
     canvas: Canvas<Window>,
-    texture_creator: TextureCreator<WindowContext>,
     texture: Texture,
     frame: Frame
 }
@@ -35,16 +34,9 @@ impl Renderer {
 
         Renderer {
             canvas,
-            texture_creator,
             texture,
             frame: Frame::new(WIDTH, HEIGHT)
         }
-    }
-
-    fn create_texture(&self) -> Texture {
-        self.texture_creator
-            .create_texture_target(PixelFormatEnum::RGB24, WIDTH as u32, HEIGHT as u32)
-            .unwrap()
     }
 
     pub fn frame(&mut self) -> &mut Frame {

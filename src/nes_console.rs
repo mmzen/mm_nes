@@ -44,9 +44,8 @@ impl NESConsole {
         let credits = CYCLE_CREDITS;
 
         let mut debt = 0;
-        let mut previous_cycles = 0;
         loop {
-            previous_cycles = cycles;
+            let previous_cycles = cycles;
 
             cycles = self.cpu.borrow_mut().run(cycles, CYCLE_CREDITS - debt)?;
 

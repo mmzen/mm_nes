@@ -3,6 +3,7 @@
 pub struct Frame {
     pixels: Vec<u8>,
     width: usize,
+    #[allow(dead_code)]
     height: usize,
 }
 
@@ -20,8 +21,8 @@ impl Frame {
         &self.pixels
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, color: (u8, u8, u8)) {
-        let index = (y * 3 * self.width) + (x * 3);
+    pub fn set_pixel(&mut self, x: u8, y: u8, color: (u8, u8, u8)) {
+        let index = (y as usize * 3 * self.width) + (x as usize * 3);
 
         self.pixels[index] = color.0;
         self.pixels[index + 1] = color.1;
