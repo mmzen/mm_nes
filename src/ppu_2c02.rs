@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use std::thread::sleep;
 use std::time::Duration;
 use log::{debug, info, trace};
 use crate::bus::Bus;
@@ -194,6 +193,12 @@ impl Sprite {
         let attr = attr as u8;
         self.attributes & attr != 0
     }
+}
+
+#[derive(Debug, Copy, Clone)]
+enum PixelMode {
+    Background,
+    Sprite
 }
 
 #[derive(Debug, PartialEq)]
@@ -449,7 +454,9 @@ impl Ppu2c02 {
         if let PpuState::VBlank(_) = self.state {
             if value & 0x80 != 0 && self.get_flag(Status(VBlank)) && self.get_flag(Control(GenerateNmi)) == false {
                 debug!("PPU: forcing NMI as status changed: 0x{:02X}", value);
-                let _ = self.cpu.borrow_mut().signal_nmi();
+                let mut cpu = self.cpu.as_ptr();
+                let _ = unsafe { &mut *cpu }.signal_nmi();
+                //let _ = self.cpu.borrow_mut().signal_nmi();
             }
         }
 
@@ -822,42 +829,23 @@ impl Ppu2c02 {
         Ok(colors)
     }
 
-    fn set_background_pixels(&self, pixel_pos_x: u8, pixel_pos_y: u8, tile: &Tile, line_pattern_data: &[u8]) {
+    fn set_pixel(&self, pixel_pos_x: u8, pixel_pos_y: u8, tile: &Tile, line_pattern_data: &[u8], mode: PixelMode) {
 
         line_pattern_data.iter().enumerate().for_each(|(pixel, color)| {
             trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, tile.colors);
 
-            let rgb: (u8, u8, u8) = match color {
-                0 => Palette2C02::rgb(tile.colors.0),
-                1 => Palette2C02::rgb(tile.colors.1),
-                2 => Palette2C02::rgb(tile.colors.2),
-                3 => Palette2C02::rgb(tile.colors.3),
+            let rgb: (u8, u8, u8) = match (color, mode) {
+                (0, PixelMode::Background) => Palette2C02::rgb(tile.colors.0),
+                (0, PixelMode::Sprite) => return,
+                (1, _) => Palette2C02::rgb(tile.colors.1),
+                (2, _) => Palette2C02::rgb(tile.colors.2),
+                (3, _) => Palette2C02::rgb(tile.colors.3),
                 _ => unreachable!("unknown color: {}", color)
             };
 
-            self.renderer.borrow_mut().frame().set_pixel(pixel_pos_x + pixel as u8, pixel_pos_y, rgb);
+            self.renderer.borrow_mut().frame().set_pixel(pixel_pos_x.wrapping_add(pixel as u8), pixel_pos_y, rgb);
         });
     }
-
-    /***fn set_sprites_pixels(&mut self, x: usize, y: usize, line: usize, line_pattern_data: Vec<u8>, colors: (u8, u8, u8, u8)) {
-        for pixel in 0..=7 {
-            let color = line_pattern_data[pixel];
-            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel + x, line + y, color, colors);
-
-            let rgb: (u8, u8, u8) = match color {
-                0 => continue,
-                1 => Palette2C02::rgb(colors.1),
-                2 => Palette2C02::rgb(colors.2),
-                3 => Palette2C02::rgb(colors.3),
-                _ => unreachable!("unknown color: {}", color)
-            };
-
-            self.renderer
-                .frame()
-                .set_pixel(pixel + x, line + y, rgb);
-        }
-    }***/
-
 
     fn get_background_pattern_table_addr(&self) -> u16 {
         let pattern_table_addr = if self.get_flag(Control(BackgroundPatternTableAddr)) {
@@ -1029,6 +1017,7 @@ impl Ppu2c02 {
      *
      ***/
     fn render_background(&mut self, scanline: u16) -> Result<(), PpuError> {
+        // TODO: fine x
         let mut name_table_addr = self.get_name_table_addr();
         let pattern_table_addr = self.get_background_pattern_table_addr();
         let attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
@@ -1038,25 +1027,28 @@ impl Ppu2c02 {
 
         let mut coarse_x = self.get_coarse_x();
         let pixel_pos_y = scanline as u8;
-        let tile_pixel_pos_y = pixel_pos_y % 8;
 
         debug!("PPU: rendering background, scanline: {}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
             scanline, fine_y, coarse_y, coarse_x, pixel_pos_y);
 
         for pixel_pos_x in (0..=PIXEL_X_MAX).step_by(8) {
 
-            if tile_pixel_pos_y == 0 {
+            if fine_y == 0 {
                 let fetched_tile = self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
                 self.set_cached_tile(fetched_tile, coarse_x, coarse_y);
             }
 
-            let tile =  self.get_cached_tile(coarse_x, coarse_y);
-            let line_pattern_data = self.fetch_line_pattern_data(tile, tile_pixel_pos_y);
+            let tile =  self.get_cached_tile(coarse_x, coarse_y + fine_y);
+            let line_pattern_data = self.fetch_line_pattern_data(tile, fine_y);
 
-            self.set_background_pixels(pixel_pos_x, pixel_pos_y, &tile, &line_pattern_data);
+            self.set_pixel(pixel_pos_x, pixel_pos_y, &tile, &line_pattern_data, PixelMode::Background);
             (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
         }
 
+        /***
+         * TODO should be probably be moved in the render_scanline() method, as it must be
+         * TODO increment after sprite are rendered.
+         */
         self.put_horizontal_t_into_v();
 
         (name_table_addr, fine_y, coarse_y) = self.fine_and_coarse_y_increment(name_table_addr, fine_y, coarse_y);
@@ -1079,7 +1071,7 @@ impl Ppu2c02 {
     }
 
     fn get_tile_by_sprite_definition(&self, sprite: &Sprite, pattern_table_addr: u16) -> Result<Tile, PpuError> {
-        let tile_index = sprite.tile_index;
+        //let tile_index = sprite.tile_index;
         let palette = sprite.get_attribute_value(SpriteAttribute::Palette);
         let colors = self.get_sprite_palette_colors(palette)?;
 
@@ -1089,9 +1081,9 @@ impl Ppu2c02 {
             false
         } ;
 
-        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, flip_horizontal)?;
+        let pattern_data = self.fetch_pattern_data(sprite.tile_index, pattern_table_addr, flip_horizontal)?;
+        let tile = Tile::new(sprite.tile_index, colors, Ppu2c02::vec_to_array(pattern_data));
 
-        let tile = Tile::new(tile_index, colors, Ppu2c02::vec_to_array(pattern_data));
         Ok(tile)
     }
 
@@ -1106,9 +1098,10 @@ impl Ppu2c02 {
 
                 let pixel_pos_y = (scanline - sprite.y as u16) as u8;
                 let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
+                trace!("tile: {}", tile);
 
                 let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y);
-                self.set_background_pixels(sprite.x, sprite.y, &tile, line_pattern_data);
+                self.set_pixel(sprite.x, scanline as u8, &tile, &line_pattern_data, PixelMode::Sprite);
             }
         }
 
@@ -1154,7 +1147,7 @@ impl Ppu2c02 {
                 }
 
                 if self.get_flag(Mask(ShowSprites)) {
-                    //self.render_sprites(scanline)?;
+                    self.render_sprites(scanline)?;
                 }
 
                 self.register.borrow_mut().oam_addr = 0;
