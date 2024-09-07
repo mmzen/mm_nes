@@ -8,6 +8,7 @@ pub fn measure_exec_time<T, F: FnOnce() -> T>(f: F) -> (T, Duration) {
     (result, duration)
 }
 
+#[allow(dead_code)]
 pub fn pause() {
     sleep(Duration::from_secs(10));
 }

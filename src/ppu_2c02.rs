@@ -16,7 +16,7 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, BaseNameTableAddr1, BaseNameTableAddr2, GenerateNmi, SpritePatternTableAddr, VramIncrement};
 use crate::ppu_2c02::MaskFlag::{ShowBackground, ShowSprites};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
-use crate::ppu_2c02::SpriteAttribute::{FlipHorizontal};
+use crate::ppu_2c02::SpriteAttribute::{FlipHorizontal, FlipVertical};
 use crate::ppu_2c02::StatusFlag::{Sprite0Hit, SpriteOverflow, VBlank};
 use crate::renderer::Renderer;
 use crate::util::measure_exec_time;
@@ -195,7 +195,7 @@ impl Sprite {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum PixelMode {
     Background,
     Sprite
@@ -222,13 +222,14 @@ pub struct Ppu2c02 {
     oam: [Sprite; 64],
     v: RefCell<u16>,
     t: u16,
-    x: u16,
+    x: u8,
     latch: RefCell<Latch>,
     renderer: RefCell<Renderer>,
     cpu: Rc<RefCell<dyn CPU>>,
     state: PpuState,
     #[allow(dead_code)]
     tile_cache: [Tile; TILE_CACHE_SIZE],
+    #[allow(dead_code)]
     name_table_mirroring: PpuNameTableMirroring
 }
 
@@ -319,7 +320,7 @@ impl Memory for Ppu2c02 {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        debug!("PPU: registers access: reading byte at 0x{:04X}", addr);
+        debug!("PPU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x2000);
 
         let value = match addr {
             0x00 => self.read_control_register(),
@@ -451,17 +452,16 @@ impl Ppu2c02 {
     fn write_control_register(&mut self, value: u8) {
         trace!("PPU: writing to control register: 0x{:02X}", value);
 
+        self.register.borrow_mut().control = value;
+        self.t = (self.t & 0xF3FF) | (((value & 0x03) as u16) << 10);
+
         if let PpuState::VBlank(_) = self.state {
             if value & 0x80 != 0 && self.get_flag(Status(VBlank)) && self.get_flag(Control(GenerateNmi)) == false {
                 debug!("PPU: forcing NMI as status changed: 0x{:02X}", value);
-                let mut cpu = self.cpu.as_ptr();
+                let cpu = self.cpu.as_ptr();
                 let _ = unsafe { &mut *cpu }.signal_nmi();
-                //let _ = self.cpu.borrow_mut().signal_nmi();
             }
         }
-
-        self.register.borrow_mut().control = value;
-        self.t = (&self.t & !0x0C00) | ((value as u16 & 0x03) << 10);
     }
 
     fn read_mask_register(&self) -> u8 {
@@ -536,7 +536,7 @@ impl Ppu2c02 {
 
         if self.latch.borrow().state == LatchState::HIGH {
             self.t = (self.t & !0x001F) | ((value as u16) >> 3);
-            self.x = (value & 0x07) as u16;
+            self.x = value & 0x07;
         } else {
             self.t = (self.t & !0x73E0) | (((value as u16) << 12) | (((value as u16) & 0xF8) << 2));
         }
@@ -754,10 +754,16 @@ impl Ppu2c02 {
         line_pattern_data
     }
 
-    fn fetch_pattern_data(&self, tile_index: u8, pattern_table_addr: u16, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
+    fn fetch_pattern_data(&self, tile_index: u8, pattern_table_addr: u16, flip_horizontal: bool, flip_vertical: bool) -> Result<Vec<u8>, PpuError> {
         let mut pattern_data= vec![];
 
-        for line in 0..=7 {
+        let line_range: Box<dyn Iterator<Item = u8>> = if flip_vertical {
+            Box::new((0..=7).rev())
+        } else {
+            Box::new(0..=7)
+        };
+
+        for line in line_range {
             let mut pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16)?;
             let mut pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16 + (PATTERN_DATA_SIZE as u16 / 2))?;
 
@@ -829,22 +835,33 @@ impl Ppu2c02 {
         Ok(colors)
     }
 
-    fn set_pixel(&self, pixel_pos_x: u8, pixel_pos_y: u8, tile: &Tile, line_pattern_data: &[u8], mode: PixelMode) {
+    fn set_pixel(&self, pixel_pos_x: u8, offset_x: u8, pixel_pos_y: u8, tile: &Tile, line_pattern_data: &[u8], mode: PixelMode, sprite0_hit_detect: bool) -> u8 {
 
-        line_pattern_data.iter().enumerate().for_each(|(pixel, color)| {
-            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, tile.colors);
+        line_pattern_data.iter().enumerate().skip(offset_x as usize).for_each(|(pixel, color)| {
+                trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, tile.colors);
 
-            let rgb: (u8, u8, u8) = match (color, mode) {
-                (0, PixelMode::Background) => Palette2C02::rgb(tile.colors.0),
-                (0, PixelMode::Sprite) => return,
-                (1, _) => Palette2C02::rgb(tile.colors.1),
-                (2, _) => Palette2C02::rgb(tile.colors.2),
-                (3, _) => Palette2C02::rgb(tile.colors.3),
-                _ => unreachable!("unknown color: {}", color)
-            };
+                let rgb: (u8, u8, u8) = match (color, mode) {
+                    (0, PixelMode::Background) => Palette2C02::rgb(tile.colors.0),
+                    (0, PixelMode::Sprite) => return,
+                    (1, _) => Palette2C02::rgb(tile.colors.1),
+                    (2, _) => Palette2C02::rgb(tile.colors.2),
+                    (3, _) => Palette2C02::rgb(tile.colors.3),
+                    _ => unreachable!("unknown color: {}", color)
+                };
 
-            self.renderer.borrow_mut().frame().set_pixel(pixel_pos_x.wrapping_add(pixel as u8), pixel_pos_y, rgb);
+                let pixel_pos_x_plus_pixel = pixel_pos_x.wrapping_add(pixel as u8);
+
+                if mode == PixelMode::Sprite && sprite0_hit_detect {
+                    let pixel = self.renderer.borrow().frame().get_pixel(pixel_pos_x_plus_pixel, pixel_pos_y);
+                    if pixel != Palette2C02::rgb(0) {
+                        self.set_flag(Status(Sprite0Hit), true);
+                    }
+                }
+
+                self.renderer.borrow_mut().frame_as_mut().set_pixel(pixel_pos_x_plus_pixel, pixel_pos_y, rgb);
         });
+
+        8 - offset_x
     }
 
     fn get_background_pattern_table_addr(&self) -> u16 {
@@ -876,9 +893,9 @@ impl Ppu2c02 {
         attribute_table_addr
     }
 
-    fn get_name_table_addr(&self) -> u16 {
-        let base_name_table_addr_status = (self.get_flag(Control(BaseNameTableAddr2)) as u8) << 1 | (self.get_flag(Control(BaseNameTableAddr1)) as u8);
-        let base_name_table_addr = match base_name_table_addr_status {
+    fn get_name_table_addr(&self, select: u8) -> u16 {
+
+        let base_name_table_addr = match select {
             0x00 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0,
             0x01 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
             0x02 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[1].0,
@@ -886,7 +903,25 @@ impl Ppu2c02 {
             _ => unreachable!(),
         };
 
-        trace!("PPU: base name table: 0x{:04X}", base_name_table_addr);
+        trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
+        base_name_table_addr
+    }
+
+    fn get_name_table_addr_from_ctrl_register(&self) -> u16 {
+        let select = (self.get_flag(Control(BaseNameTableAddr2)) as u8) << 1 | (self.get_flag(Control(BaseNameTableAddr1)) as u8);
+
+        let base_name_table_addr = self.get_name_table_addr(select);
+
+        trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
+        base_name_table_addr
+    }
+
+    fn get_name_table_addr_from_v(&self) -> u16 {
+        let select = ((*self.v.borrow() >> 10) & 0x03) as u8;
+
+        let base_name_table_addr = self.get_name_table_addr(select);
+
+        trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
         base_name_table_addr
     }
 
@@ -903,7 +938,7 @@ impl Ppu2c02 {
         let tile_index = self.fetch_tile_index(coarse_x, coarse_y, name_table_addr)?;
         let palette = self.fetch_palette(coarse_x, coarse_y, attribute_table_addr)?;
         let colors = self.get_background_palette_colors(palette)?;
-        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, false)?;
+        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, false, false)?;
 
         let tile = Tile::new(tile_index, colors, Ppu2c02::vec_to_array(pattern_data));
 
@@ -930,6 +965,10 @@ impl Ppu2c02 {
      ***/
     fn get_fine_y(&self) -> u8 {
         ((*self.v.borrow() & 0x7000) >> 12) as u8
+    }
+
+    fn get_fine_x(&self) -> u8 {
+        self.x
     }
 
     /***
@@ -1017,8 +1056,7 @@ impl Ppu2c02 {
      *
      ***/
     fn render_background(&mut self, scanline: u16) -> Result<(), PpuError> {
-        // TODO: fine x
-        let mut name_table_addr = self.get_name_table_addr();
+        let mut name_table_addr = self.get_name_table_addr_from_v();
         let pattern_table_addr = self.get_background_pattern_table_addr();
         let attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
 
@@ -1026,28 +1064,55 @@ impl Ppu2c02 {
         let mut coarse_y = self.get_coarse_y();
 
         let mut coarse_x = self.get_coarse_x();
-        let pixel_pos_y = scanline as u8;
+        let pixel_pos_y = scanline;
 
-        debug!("PPU: rendering background, scanline: {}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
-            scanline, fine_y, coarse_y, coarse_x, pixel_pos_y);
+        let mut fine_x = self.get_fine_x();
 
-        for pixel_pos_x in (0..=PIXEL_X_MAX).step_by(8) {
+        trace!("PPU: rendering background, scanline: {}, nametable: 0x{:04X}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
+            scanline, name_table_addr, fine_y, coarse_y, coarse_x, pixel_pos_y);
 
+        let mut pixel_pos_x= 0u16;
+        while pixel_pos_x <= PIXEL_X_MAX as u16 {
+            /***if pixel_pos_x == 0 {
+                info!("scanline {}, nametable: 0x{:04X}, fine_x: {}", scanline, name_table_addr, fine_x);
+
+                let pseudo_v = ((fine_y as u16) << 12) | (name_table_addr & 0x0C00) | ((coarse_y as u16) << 5) | coarse_x as u16;
+                info!("scanline {}, artificial v: 0x{:04X}, real v: 0x{:04X}, nametable from control register: 0x{:04X}", scanline, pseudo_v, *self.v.borrow(), name_table_addr);
+            }***/
+
+            /***
+             * TODO wrong, fine_y can be something else than 0.
+             * TODO replace by a get_file() function that set and get cached tiles.
+             ***/
             if fine_y == 0 {
                 let fetched_tile = self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
                 self.set_cached_tile(fetched_tile, coarse_x, coarse_y);
             }
 
-            let tile =  self.get_cached_tile(coarse_x, coarse_y + fine_y);
+            let tile =  self.get_cached_tile(coarse_x, coarse_y);
+            trace!("{}", tile);
             let line_pattern_data = self.fetch_line_pattern_data(tile, fine_y);
 
-            self.set_pixel(pixel_pos_x, pixel_pos_y, &tile, &line_pattern_data, PixelMode::Background);
+            pixel_pos_x += self.set_pixel(pixel_pos_x as u8, fine_x, pixel_pos_y as u8, &tile, &line_pattern_data, PixelMode::Background, false) as u16;
+
+            fine_x = 0;
+
+            let old_one = name_table_addr;
             (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
+            if old_one != name_table_addr {
+                //info!("scanline {}, nametable changed from: 0x{:04X}, to: 0x{:04X}, fine_x: {}", scanline, old_one, name_table_addr, fine_x);
+                break;
+            }
         }
 
         /***
+         * TODO test - reset nametable
+         */
+        name_table_addr = self.get_name_table_addr_from_v();
+
+        /***
          * TODO should be probably be moved in the render_scanline() method, as it must be
-         * TODO increment after sprite are rendered.
+         * incremented after sprite are rendered.
          */
         self.put_horizontal_t_into_v();
 
@@ -1070,23 +1135,28 @@ impl Ppu2c02 {
         }
     }
 
+    fn get_flip_values(&self, sprite: &Sprite) -> (bool, bool) {
+        (sprite.get_attribute_value(FlipHorizontal) != 0,
+         sprite.get_attribute_value(FlipVertical) != 0)
+    }
+
     fn get_tile_by_sprite_definition(&self, sprite: &Sprite, pattern_table_addr: u16) -> Result<Tile, PpuError> {
-        //let tile_index = sprite.tile_index;
         let palette = sprite.get_attribute_value(SpriteAttribute::Palette);
         let colors = self.get_sprite_palette_colors(palette)?;
 
-        let flip_horizontal = if sprite.get_attribute_value(FlipHorizontal) != 0 {
-            true
-        } else {
-            false
-        } ;
+        let (flip_horizontal, flip_vertical) = self.get_flip_values(&sprite);
 
-        let pattern_data = self.fetch_pattern_data(sprite.tile_index, pattern_table_addr, flip_horizontal)?;
+        let pattern_data = self.fetch_pattern_data(sprite.tile_index, pattern_table_addr, flip_horizontal, flip_vertical)?;
         let tile = Tile::new(sprite.tile_index, colors, Ppu2c02::vec_to_array(pattern_data));
 
         Ok(tile)
     }
 
+    /***
+     * TODO
+     * [...] all sprites are displayed one pixel lower than their Y coordinate says [...]
+     * https://www.reddit.com/r/EmuDev/comments/x1ol0k/nes_emulator_working_perfectly_except_one/
+     */
     fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
         let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
 
@@ -1100,8 +1170,16 @@ impl Ppu2c02 {
                 let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
                 trace!("tile: {}", tile);
 
+                let sprite0_hit_detect = if self.get_flag(Mask(ShowBackground)) == true
+                    && self.get_flag(Status(Sprite0Hit)) == false
+                    && i == 0 {
+                    true
+                } else {
+                    false
+                };
+
                 let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y);
-                self.set_pixel(sprite.x, scanline as u8, &tile, &line_pattern_data, PixelMode::Sprite);
+                self.set_pixel(sprite.x, 0, scanline as u8, &tile, &line_pattern_data, PixelMode::Sprite, sprite0_hit_detect);
             }
         }
 

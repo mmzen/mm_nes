@@ -1209,9 +1209,20 @@ impl Instruction {
         Ok(0)
     }
 
+    /***
+     * MN-23 status flags is wrong
+     *
+     *   https://www.masswerk.at/6502/6502_instruction_set.html#PHP
+     *
+     *   SR: N V - B D I Z C
+     *       0 0 - - 0 0 1 1
+     *
+     *     PHP  ->  0 0 1 1 0 0 1 1  =  $33
+     *     PLP  <-  0 0 - - 0 0 1 1  =  $03
+     ***/
     fn php_push_processor_status_on_stack(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        cpu.registers.p |= StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits();
-        cpu.push_stack(cpu.registers.p)?;
+        let value = cpu.registers.p | StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits();
+        cpu.push_stack(value)?;
 
         Ok(0)
     }
@@ -1227,10 +1238,21 @@ impl Instruction {
         Ok(0)
     }
 
+    /***
+     * MN-23 status flags is wrong:
+     *
+     *   https://www.masswerk.at/6502/6502_instruction_set.html#PLP
+     *
+     *   SR: N V - B D I Z C
+     *       0 0 - - 0 0 1 1
+     *
+     *     PHP  ->  0 0 1 1 0 0 1 1  =  $33
+     *     PLP  <-  0 0 - - 0 0 1 1  =  $03
+     ***/
     fn plp_pull_processor_status_from_stack(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
         let status = cpu.pop_stack()?;
 
-        cpu.registers.p = (status & 0xCF) | 0x20;
+        cpu.registers.p = (cpu.registers.p & 0x30) | status & !0x30;
 
         Ok(0)
     }

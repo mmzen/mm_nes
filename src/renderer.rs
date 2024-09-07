@@ -39,8 +39,12 @@ impl Renderer {
         }
     }
 
-    pub fn frame(&mut self) -> &mut Frame {
+    pub fn frame_as_mut(&mut self) -> &mut Frame {
         &mut self.frame
+    }
+
+    pub fn frame(&self) -> &Frame {
+        &self.frame
     }
 
     pub fn update(&mut self) {
@@ -63,8 +67,12 @@ impl Renderer {
         }
     }
 
-    pub fn frame(&mut self) -> &mut Frame {
+    pub fn frame_as_mut(&mut self) -> &mut Frame {
         &mut self.frame
+    }
+
+    pub fn frame(&self) -> &Frame {
+        &self.frame
     }
 
     pub fn update(&mut self) {

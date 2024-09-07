@@ -28,4 +28,10 @@ impl Frame {
         self.pixels[index + 1] = color.1;
         self.pixels[index + 2] = color.2;
     }
+
+    pub fn get_pixel(&self, x: u8, y: u8) -> (u8, u8, u8) {
+        let index = (y as usize * 3 * self.width) + (x as usize * 3);
+
+        (self.pixels[index], self.pixels[index + 1], self.pixels[index + 2])
+    }
 }

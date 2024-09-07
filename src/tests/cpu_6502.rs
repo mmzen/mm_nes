@@ -13,7 +13,7 @@ fn create_bus() -> MockBusStub {
 
 fn create_cpu() -> Cpu6502 {
     let bus = create_bus();
-    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)), false, None);
+    let cpu = Cpu6502::new(Rc::new(RefCell::new(bus)), false, None);
     cpu
 }
 

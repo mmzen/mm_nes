@@ -104,8 +104,6 @@ impl NESBus {
 
     fn lookup_address(&self, addr: u16) -> Result<(Rc<RefCell<dyn BusDevice>>, u16), BusError> {
         let device = self.devices[addr as usize].clone();
-        // TODO it crashes here with scroll.nes rom, reading at 0x0000, and get a NESMemory device with size 0
-        //println!("BUS: looking up address 0x{:04X}, size: {} - {}", addr, device.borrow().size(), device.borrow().get_device_type());
         let effective_addr = addr & (device.borrow().size() - 1) as u16;
 
         trace!("BUS: translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",

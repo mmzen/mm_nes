@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::debug;
+use log::{debug, warn};
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::nrom128_cartridge::NROM128Cartridge;
@@ -29,7 +29,13 @@ impl Loader for INesLoader {
         };
 
         let prg_rom_size = header.prg_rom as usize * PRG_ROM_BLOCK_UNIT;
-        let chr_rom_size = header.chr_rom as usize * CHR_ROM_BLOCK_UNIT;
+        let chr_rom_size = if header.chr_rom == 0 {
+            warn!("ROM has no 0 bytes chr rom: forcing to 8 KB");
+            8192
+        } else {
+            header.chr_rom as usize * CHR_ROM_BLOCK_UNIT
+        };
+
         let mirroring = if header.flags_6 & 0x01 == 0 { PpuNameTableMirroring::Horizontal } else { PpuNameTableMirroring::Vertical };
 
         let chr_addr = prg_addr + prg_rom_size;
