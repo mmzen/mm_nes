@@ -538,7 +538,9 @@ impl Ppu2c02 {
             self.t = (self.t & !0x001F) | ((value as u16) >> 3);
             self.x = value & 0x07;
         } else {
-            self.t = (self.t & !0x73E0) | (((value as u16) << 12) | (((value as u16) & 0xF8) << 2));
+            let a = ((value & 0x07) as u16) << 12;
+            let b = ((value >> 3) as u16) << 5;
+            self.t = (self.t & !0x73E0) | a | b;
         }
 
         self.latch.borrow_mut().latch();
@@ -851,7 +853,7 @@ impl Ppu2c02 {
 
                 let pixel_pos_x_plus_pixel = pixel_pos_x.wrapping_add(pixel as u8);
 
-                if mode == PixelMode::Sprite && sprite0_hit_detect {
+                if mode == PixelMode::Sprite && sprite0_hit_detect && self.get_flag(Status(Sprite0Hit)) == false {
                     let pixel = self.renderer.borrow().frame().get_pixel(pixel_pos_x_plus_pixel, pixel_pos_y);
                     if pixel != Palette2C02::rgb(0) {
                         self.set_flag(Status(Sprite0Hit), true);
@@ -1056,7 +1058,9 @@ impl Ppu2c02 {
      *
      ***/
     fn render_background(&mut self, scanline: u16) -> Result<(), PpuError> {
-        let mut name_table_addr = self.get_name_table_addr_from_v();
+        let name_table_addr_from_v = self.get_name_table_addr_from_v();
+        let mut name_table_addr = name_table_addr_from_v;
+
         let pattern_table_addr = self.get_background_pattern_table_addr();
         let attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
 
@@ -1073,16 +1077,9 @@ impl Ppu2c02 {
 
         let mut pixel_pos_x= 0u16;
         while pixel_pos_x <= PIXEL_X_MAX as u16 {
-            /***if pixel_pos_x == 0 {
-                info!("scanline {}, nametable: 0x{:04X}, fine_x: {}", scanline, name_table_addr, fine_x);
-
-                let pseudo_v = ((fine_y as u16) << 12) | (name_table_addr & 0x0C00) | ((coarse_y as u16) << 5) | coarse_x as u16;
-                info!("scanline {}, artificial v: 0x{:04X}, real v: 0x{:04X}, nametable from control register: 0x{:04X}", scanline, pseudo_v, *self.v.borrow(), name_table_addr);
-            }***/
-
             /***
              * TODO wrong, fine_y can be something else than 0.
-             * TODO replace by a get_file() function that set and get cached tiles.
+             * TODO replace by a get_tile() function that set and get cached tiles.
              ***/
             if fine_y == 0 {
                 let fetched_tile = self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
@@ -1095,27 +1092,14 @@ impl Ppu2c02 {
 
             pixel_pos_x += self.set_pixel(pixel_pos_x as u8, fine_x, pixel_pos_y as u8, &tile, &line_pattern_data, PixelMode::Background, false) as u16;
 
-            fine_x = 0;
-
-            let old_one = name_table_addr;
-            (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
-            if old_one != name_table_addr {
-                //info!("scanline {}, nametable changed from: 0x{:04X}, to: 0x{:04X}, fine_x: {}", scanline, old_one, name_table_addr, fine_x);
-                break;
+            if fine_x != 0 {
+                fine_x = 0;
             }
+
+            (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
         }
 
-        /***
-         * TODO test - reset nametable
-         */
         name_table_addr = self.get_name_table_addr_from_v();
-
-        /***
-         * TODO should be probably be moved in the render_scanline() method, as it must be
-         * incremented after sprite are rendered.
-         */
-        self.put_horizontal_t_into_v();
-
         (name_table_addr, fine_y, coarse_y) = self.fine_and_coarse_y_increment(name_table_addr, fine_y, coarse_y);
 
         self.update_v_coarse_x(name_table_addr, coarse_x);
@@ -1170,9 +1154,7 @@ impl Ppu2c02 {
                 let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
                 trace!("tile: {}", tile);
 
-                let sprite0_hit_detect = if self.get_flag(Mask(ShowBackground)) == true
-                    && self.get_flag(Status(Sprite0Hit)) == false
-                    && i == 0 {
+                let sprite0_hit_detect = if self.get_flag(Mask(ShowBackground)) == true && self.get_flag(Status(Sprite0Hit)) == false && i == 0 {
                     true
                 } else {
                     false
@@ -1222,6 +1204,8 @@ impl Ppu2c02 {
             PpuState::Rendering(scanline) if scanline <= 239 => {
                 if self.get_flag(Mask(ShowBackground)) {
                     self.render_background(scanline)?;
+                    self.put_horizontal_t_into_v();
+
                 }
 
                 if self.get_flag(Mask(ShowSprites)) {
