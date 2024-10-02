@@ -1,5 +1,8 @@
 use crate::palette::Palette;
 
+const TRANSPARENT: u8 = 0;
+const OPAQUE: u8 = 255;
+
 pub static SYSTEM_PALETTE: [(u8, u8, u8); 64] = [
     (0x80, 0x80, 0x80), (0x00, 0x3D, 0xA6), (0x00, 0x12, 0xB0), (0x44, 0x00, 0x96), (0xA1, 0x00, 0x5E),
     (0xC7, 0x00, 0x28), (0xBA, 0x06, 0x00), (0x8C, 0x17, 0x00), (0x5C, 0x2F, 0x00), (0x10, 0x45, 0x00),
@@ -22,5 +25,23 @@ impl Palette for Palette2C02 {
     fn rgb(color: u8) -> (u8, u8, u8) {
         let index = color as usize % 64;
         SYSTEM_PALETTE[index]
+    }
+
+    fn rgba_opaque(color: u8) -> (u8, u8, u8, u8) {
+        let rgb = Self::rgb(color);
+        (rgb.0, rgb.1, rgb.2, OPAQUE)
+    }
+
+    fn rgba_transparent(color: u8) -> (u8, u8, u8, u8) {
+        let rgb = Self::rgb(color);
+        (rgb.0, rgb.1, rgb.2, TRANSPARENT)
+    }
+
+    fn is_transparent(alpha: u8) -> bool {
+        alpha == TRANSPARENT
+    }
+
+    fn transparent_alpha() -> u8 {
+        TRANSPARENT
     }
 }

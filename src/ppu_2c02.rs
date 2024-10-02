@@ -211,27 +211,86 @@ enum PixelMode {
     Sprite
 }
 
+#[derive(Debug, Copy, Clone)]
+struct Pixel {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+    priority: SpritePriority,
+}
+
+impl Default for Pixel {
+    fn default() -> Self {
+        Pixel {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+            priority: SpritePriority::None,
+        }
+    }
+}
+
+impl Pixel {
+    fn new(r: u8, g: u8, b: u8, a: u8, priority: SpritePriority) -> Self {
+        Pixel {
+            r,
+            g,
+            b,
+            a,
+            priority,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct PixelLines {
-    rgba_pixels: [(u8, u8, u8, u8); PIXEL_X_MAX as usize],
+    rgba_pixels: [Pixel; PIXEL_X_MAX as usize + 1]
 }
 
 impl Default for PixelLines {
     fn default() -> Self {
         PixelLines {
-            rgba_pixels: [(0, 0, 0, 0); PIXEL_X_MAX as usize],
+            rgba_pixels: [Pixel::default(); PIXEL_X_MAX as usize + 1]
         }
     }
 }
 
 impl PixelLines {
 
-    fn get_pixel_rgb(&self, x: u8) -> (u8, u8, u8) {
-        let (r, g, b, _) = self.rgba_pixels[x as usize];
-        (r, g, b)
+    fn clear(&mut self) {
+        self.rgba_pixels = [Pixel::default(); PIXEL_X_MAX as usize+ 1]
+    }
+
+    fn get_pixel_rgba(&self, x: u8) -> &Pixel {
+        &self.rgba_pixels[x as usize]
+    }
+
+    fn set_pixel_rgba(&mut self, x: u8, pixel: Pixel) {
+        self.rgba_pixels[x as usize] = pixel;
     }
 
     fn is_transparent(&self, x: u8) -> bool {
-        self.rgba_pixels[x as usize].3 == 0
+        Palette2C02::is_transparent(self.rgba_pixels[x as usize].a)
+    }
+
+    fn merge(&self, other: &PixelLines) -> PixelLines {
+        let mut merged_pixels = PixelLines::default();
+
+        for (x, pixel) in self.rgba_pixels.iter().enumerate() {
+            merged_pixels.set_pixel_rgba(x as u8, pixel.clone());
+        }
+
+        for (x, pixel) in other.rgba_pixels.iter().enumerate() {
+            if pixel.priority == SpritePriority::Front || Palette2C02::is_transparent(merged_pixels.get_pixel_rgba(x as u8).a) {
+                if Palette2C02::is_transparent(pixel.a) == false {
+                    merged_pixels.set_pixel_rgba(x as u8, pixel.clone());
+                }
+            }
+        }
+
+        merged_pixels
     }
 }
 
@@ -261,8 +320,9 @@ pub struct Ppu2c02 {
     renderer: RefCell<Renderer>,
     cpu: Rc<RefCell<dyn CPU>>,
     state: PpuState,
-    #[allow(dead_code)]
     tile_cache: [Tile; TILE_CACHE_SIZE],
+    background_pixels_line: PixelLines,
+    sprites_pixels_line: PixelLines
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -699,6 +759,8 @@ impl Ppu2c02 {
             cpu,
             state: PpuState::VBlank(261),
             tile_cache: [Tile::default(); TILE_X_MAX as usize],
+            background_pixels_line: PixelLines::default(),
+            sprites_pixels_line: PixelLines::default(),
         };
 
         Ok(ppu)
@@ -838,11 +900,11 @@ impl Ppu2c02 {
         Ok(pattern_data)
     }
 
-    fn fetch_line_pattern_data<'a>(&self, tile: &'a Tile, line: u8, size: usize) -> &'a [u8] {
+    fn fetch_line_pattern_data(&self, tile: &Tile, line: u8, size: usize) -> Vec<u8> {
         let a = (line * 8) as usize;
         let b = (line * 8) as usize + size;
 
-        &tile.pattern_table[a..b]
+        tile.pattern_table[a..b].to_vec()
     }
 
     fn fetch_tile_index(&self, tile_x: u8, tile_y: u8, base_name_table_addr: u16) -> Result<u8, PpuError> {
@@ -894,54 +956,47 @@ impl Ppu2c02 {
         Ok(colors)
     }
 
-    fn set_pixel(&self, pixel_pos_x: u8, offset_x: u8, pixel_pos_y: u8, tile: &Tile,
-                 line_pattern_data: &[u8], mode: PixelMode, priority: SpritePriority,
-                 sprite0_hit_detect: bool, original_background: Option<&[(u8, u8, u8)]>) -> u8 {
+    fn detect_sprite_0_hit_and_set_status_flag(&self, pixel_pos_x: u8) {
+        let background_transparency = self.background_pixels_line.is_transparent(pixel_pos_x);
+        let sprite_transparency = self.sprites_pixels_line.is_transparent(pixel_pos_x);
+
+        if sprite_transparency == false && background_transparency == false {
+            self.set_flag(Status(Sprite0Hit), true);
+        }
+    }
+
+    fn set_pixel(&mut self, pixel_pos_x: u8, offset_x: u8, pixel_pos_y: u8,
+                 line_pattern_data: &[u8], palette: (u8, u8, u8, u8), mode: PixelMode, priority: SpritePriority, sprite0_hit_detect: bool) -> u8 {
 
         line_pattern_data.iter().enumerate().skip(offset_x as usize).for_each(|(pixel, color)| {
-            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, tile.colors);
+            trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, palette);
 
-            let rgb: (u8, u8, u8) = match (color, mode) {
-                (0, PixelMode::Background) => Palette2C02::rgb(tile.colors.0),
-                (0, PixelMode::Sprite) => return,
-                (1, _) => Palette2C02::rgb(tile.colors.1),
-                (2, _) => Palette2C02::rgb(tile.colors.2),
-                (3, _) => Palette2C02::rgb(tile.colors.3),
+            let (r, g, b, a) = match (color, mode) {
+                (0, PixelMode::Background) => Palette2C02::rgba_transparent(palette.0),
+                (0, PixelMode::Sprite) => Palette2C02::rgba_transparent(palette.0),
+                (1, _) => Palette2C02::rgba_opaque(palette.1),
+                (2, _) => Palette2C02::rgba_opaque(palette.2),
+                (3, _) => Palette2C02::rgba_opaque(palette.3),
                 _ => unreachable!("unknown color: {}", color)
             };
 
             let pixel_pos_x_plus_pixel = pixel_pos_x.wrapping_add(pixel as u8);
+            let pixel = Pixel::new(r, g, b, a, priority);
 
             match mode {
                 PixelMode::Background => {
-                    self.renderer.borrow_mut().frame_as_mut().set_pixel(pixel_pos_x_plus_pixel, pixel_pos_y, rgb);
+                    self.background_pixels_line.set_pixel_rgba(pixel_pos_x_plus_pixel, pixel)
                 },
 
                 PixelMode::Sprite => {
-                    if sprite0_hit_detect && self.get_flag(Status(Sprite0Hit)) == false {
-                        let pixel = self.renderer.borrow().frame().get_pixel(pixel_pos_x_plus_pixel, pixel_pos_y);
-                        if pixel != Palette2C02::rgb(0) {
-                            self.set_flag(Status(Sprite0Hit), true);
-                        }
+                    if Palette2C02::is_transparent(pixel.a) == false {
+                        self.sprites_pixels_line.set_pixel_rgba(pixel_pos_x_plus_pixel, pixel);
                     }
 
-                    match priority {
-                        SpritePriority::Front => {
-                            self.renderer.borrow_mut().frame_as_mut().set_pixel(pixel_pos_x_plus_pixel, pixel_pos_y, rgb);
-                        },
-
-                        SpritePriority::Back => {
-                            let original_pixel = original_background.unwrap()[pixel];
-                            if original_pixel != Palette2C02::rgb(0) {
-                                self.renderer.borrow_mut().frame_as_mut().set_pixel(pixel_pos_x_plus_pixel, pixel_pos_y, original_pixel);
-                            } else {
-                                self.renderer.borrow_mut().frame_as_mut().set_pixel(pixel_pos_x_plus_pixel, pixel_pos_y, rgb);
-                            }
-                        },
-
-                        _ => unreachable!()
+                    if sprite0_hit_detect {
+                        self.detect_sprite_0_hit_and_set_status_flag(pixel_pos_x_plus_pixel);
                     }
-                }
+                },
             }
         });
 
@@ -1148,6 +1203,8 @@ impl Ppu2c02 {
         trace!("PPU: rendering background, scanline: {}, nametable: 0x{:04X}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
             scanline, name_table_addr, fine_y, coarse_y, coarse_x, pixel_pos_y);
 
+        self.background_pixels_line.clear();
+
         let mut pixel_pos_x= 0u16;
         while pixel_pos_x <= PIXEL_X_MAX as u16 {
             /***
@@ -1166,10 +1223,10 @@ impl Ppu2c02 {
              * TODO compute tile size
              */
             let line_pattern_data = self.fetch_line_pattern_data(tile, fine_y, 8);
+            let palette = tile.colors;
 
-            pixel_pos_x += self.set_pixel(pixel_pos_x as u8, fine_x, pixel_pos_y as u8, &tile,
-                                          &line_pattern_data, PixelMode::Background, SpritePriority::None,
-                                          false, None) as u16;
+            pixel_pos_x += self.set_pixel(pixel_pos_x as u8, fine_x, pixel_pos_y as u8,
+                                          &line_pattern_data, palette, PixelMode::Background, SpritePriority::None, false) as u16;
 
             if fine_x != 0 {
                 fine_x = 0;
@@ -1274,36 +1331,47 @@ impl Ppu2c02 {
      */
     fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
         let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
-        let original_background_line = self.get_original_background_pixels(0, scanline as u8, PIXEL_X_MAX as usize);
 
         trace!("rendering {} sprites for scanline: {}", self.oam.sprite_count, scanline);
+
+        self.sprites_pixels_line.clear();
 
         for i in (0..self.oam.sprite_count).rev() {
             let sprite = &self.oam.secondary[i];
             let pixel_pos_y = (scanline - sprite.y as u16 - 1) as u8;
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
 
-            if tile.index == 0xD0 {
+            /***if tile.index == 0xD0 {
                 println!("tile index 0x{:02X}: attributes: 0x{:02X} (priority: {}), pos: {}, {}",
                          sprite.tile_index, sprite.attributes, sprite.get_attribute_value(SpriteAttribute::Priority), sprite.x, sprite.y);
-            }
+            }***/
             trace!("tile: {}", tile);
 
             let sprite0_hit_detect = self.detect_sprite_0_hit(sprite.sprite0);
             let priority = self.get_sprite_priority(sprite);
             let size = if PIXEL_X_MAX - sprite.x > 8 { 8usize } else { (PIXEL_X_MAX - sprite.x) as usize };
             let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y, size);
+            let palette = tile.colors;
 
-            let original_background_pixels = &original_background_line[sprite.x as usize .. sprite.x as usize + size];
-
-            self.set_pixel(sprite.x, 0, scanline as u8, &tile, &line_pattern_data,
-                           PixelMode::Sprite, priority, sprite0_hit_detect,
-                           Some(original_background_pixels));
+            self.set_pixel(sprite.x, 0, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, priority, sprite0_hit_detect);
         }
 
         self.do_sprite_evaluation(scanline)?;
 
         Ok(())
+    }
+
+    fn write_pixels_lines_to_frame(&self, scanline: u16, show_background: bool, show_sprites: bool) {
+        let pixels = match (show_background, show_sprites) {
+            (true, true) => &self.background_pixels_line.merge(&self.sprites_pixels_line),
+            (true, false) => &self.background_pixels_line,
+            (false, true) => &self.sprites_pixels_line,
+            (false, false) => return,
+        };
+
+        pixels.rgba_pixels.iter().enumerate().for_each(|(x, pixel)| {
+            self.renderer.borrow_mut().frame_as_mut().set_pixel(x as u8, scanline as u8, (pixel.r, pixel.g, pixel.b));
+        });
     }
 
     fn render_scanline(&mut self) -> Result<(), PpuError> {
@@ -1340,15 +1408,20 @@ impl Ppu2c02 {
             },
 
             PpuState::Rendering(scanline) if scanline <= 239 => {
-                if self.get_flag(Mask(ShowBackground)) {
+                let show_background = self.get_flag(Mask(ShowBackground));
+                let show_sprites = self.get_flag(Mask(ShowSprites));
+
+                if show_background {
                     self.render_background(scanline)?;
                     self.put_horizontal_t_into_v();
 
                 }
 
-                if self.get_flag(Mask(ShowSprites)) {
+                if show_sprites {
                     self.render_sprites(scanline)?;
                 }
+
+                self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
 
                 self.register.borrow_mut().oam_addr = 0;
                 self.state = PpuState::Rendering(scanline + 1);
