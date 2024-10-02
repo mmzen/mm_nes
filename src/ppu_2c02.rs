@@ -211,6 +211,30 @@ enum PixelMode {
     Sprite
 }
 
+struct PixelLines {
+    rgba_pixels: [(u8, u8, u8, u8); PIXEL_X_MAX as usize],
+}
+
+impl Default for PixelLines {
+    fn default() -> Self {
+        PixelLines {
+            rgba_pixels: [(0, 0, 0, 0); PIXEL_X_MAX as usize],
+        }
+    }
+}
+
+impl PixelLines {
+
+    fn get_pixel_rgb(&self, x: u8) -> (u8, u8, u8) {
+        let (r, g, b, _) = self.rgba_pixels[x as usize];
+        (r, g, b)
+    }
+
+    fn is_transparent(&self, x: u8) -> bool {
+        self.rgba_pixels[x as usize].3 == 0
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum PpuState {
     Rendering(u16),
@@ -1259,6 +1283,10 @@ impl Ppu2c02 {
             let pixel_pos_y = (scanline - sprite.y as u16 - 1) as u8;
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
 
+            if tile.index == 0xD0 {
+                println!("tile index 0x{:02X}: attributes: 0x{:02X} (priority: {}), pos: {}, {}",
+                         sprite.tile_index, sprite.attributes, sprite.get_attribute_value(SpriteAttribute::Priority), sprite.x, sprite.y);
+            }
             trace!("tile: {}", tile);
 
             let sprite0_hit_detect = self.detect_sprite_0_hit(sprite.sprite0);

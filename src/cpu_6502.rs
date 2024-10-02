@@ -873,6 +873,15 @@ impl Instruction {
         }
     }
 
+    /***
+     * BEQ - Branch on Result Zero
+     * it seems there is an issue: it is likely that pc get incremented after
+     * returning from this function. It shall not happen, as pc is forced to a target value.
+     * E755  F0 FE     BEQ $E755
+     * returning to run() triggers an issue, as pc was modified to loop back to E755, but it is not
+     * detected as the value is kept the same, and then pc is incremented
+     * TODO: introduce a dirty flag when pc is touched.
+     */
     fn beq_branch_on_result_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Zero) {
             let addr = cpu.get_operand_word_value(operand)?;

@@ -1,5 +1,6 @@
 use sdl2::pixels::PixelFormatEnum;
 use sdl2::render::{Canvas, Texture};
+use sdl2::sys::SDL_PumpEvents;
 use sdl2::video::Window;
 use crate::frame::Frame;
 
@@ -48,6 +49,7 @@ impl Renderer {
     }
 
     pub fn update(&mut self) {
+        unsafe { SDL_PumpEvents() };
         self.texture.update(None, &self.frame.pixels(), WIDTH * 3).unwrap();
         self.canvas.copy(&self.texture, None, None).unwrap();
         self.canvas.present();
