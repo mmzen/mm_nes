@@ -39,6 +39,7 @@ const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
 const TILE_X_MAX: u8 = 32;
 const TILE_CACHE_SIZE: usize = TILE_X_MAX as usize;
 const PIXEL_X_MAX: u8 = 255;
+const PIXEL_Y_MAX: u8 = 239;
 const PATTERN_DATA_SIZE: usize = 16;
 const MERGED_PATTERN_DATA_SIZE: usize = 64;
 const SPRITE_PALETTE_ADDR: u16 = 0x3F10;
@@ -904,6 +905,9 @@ impl Ppu2c02 {
         let a = (line * 8) as usize;
         let b = (line * 8) as usize + size;
 
+        if b > 64 {
+            println!("line: {}, size: {}, a: {}, b: {}", line, size, a, b);
+        }
         tile.pattern_table[a..b].to_vec()
     }
 
@@ -1245,14 +1249,15 @@ impl Ppu2c02 {
         Ok(())
     }
 
+    /***
+     * TODO hard coded sprite size - to be fixed when support for 8x16 sprites is implemented
+     */
     fn is_scanline_in_sprite_range(&self, scanline: u16, sprite: &Sprite) -> bool {
         let sprite_size = 8u16;
+        let sprite_y_min = sprite.y as u16;
+        let sprite_y_max = (sprite_y_min + sprite_size).clamp(0, PIXEL_Y_MAX as u16);
 
-        if scanline < sprite.y as u16 || scanline >= sprite.y as u16 + sprite_size {
-            false
-        } else {
-            true
-        }
+        scanline >= sprite_y_min && scanline < sprite_y_max
     }
 
     fn get_flip_values(&self, sprite: &Sprite) -> (bool, bool) {
@@ -1338,18 +1343,18 @@ impl Ppu2c02 {
 
         for i in (0..self.oam.sprite_count).rev() {
             let sprite = &self.oam.secondary[i];
-            let pixel_pos_y = (scanline - sprite.y as u16 - 1) as u8;
+            let pixel_pos_y = scanline as u8 - (sprite.y + 1);
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
 
-            /***if tile.index == 0xD0 {
-                println!("tile index 0x{:02X}: attributes: 0x{:02X} (priority: {}), pos: {}, {}",
-                         sprite.tile_index, sprite.attributes, sprite.get_attribute_value(SpriteAttribute::Priority), sprite.x, sprite.y);
-            }***/
             trace!("tile: {}", tile);
 
             let sprite0_hit_detect = self.detect_sprite_0_hit(sprite.sprite0);
             let priority = self.get_sprite_priority(sprite);
             let size = if PIXEL_X_MAX - sprite.x > 8 { 8usize } else { (PIXEL_X_MAX - sprite.x) as usize };
+
+            if pixel_pos_y > 7 {
+                println!("===> pixel_pos_y: {}, scanline: {}, sprite.y: {}", pixel_pos_y, scanline, sprite.y);
+            }
             let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y, size);
             let palette = tile.colors;
 
