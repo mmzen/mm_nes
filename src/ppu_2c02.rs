@@ -901,9 +901,9 @@ impl Ppu2c02 {
         Ok(pattern_data)
     }
 
-    fn fetch_line_pattern_data(&self, tile: &Tile, line: u8, size: usize) -> Vec<u8> {
-        let a = (line * 8) as usize;
-        let b = (line * 8) as usize + size;
+    fn fetch_line_pattern_data(&self, tile: &Tile, line: u8, offset_x: u8, size: usize) -> Vec<u8> {
+        let a = (line * 8) as usize + offset_x as usize;
+        let b = a + size;
 
         if b > 64 {
             println!("line: {}, size: {}, a: {}, b: {}", line, size, a, b);
@@ -969,10 +969,10 @@ impl Ppu2c02 {
         }
     }
 
-    fn set_pixel(&mut self, pixel_pos_x: u8, offset_x: u8, pixel_pos_y: u8,
-                 line_pattern_data: &[u8], palette: (u8, u8, u8, u8), mode: PixelMode, priority: SpritePriority, sprite0_hit_detect: bool) -> u8 {
+    fn set_pixel(&mut self, pixel_pos_x: u8, pixel_pos_y: u8, line_pattern_data: &[u8],
+                 palette: (u8, u8, u8, u8), mode: PixelMode, priority: SpritePriority, sprite0_hit_detect: bool) {
 
-        line_pattern_data.iter().enumerate().skip(offset_x as usize).for_each(|(pixel, color)| {
+        line_pattern_data.iter().enumerate().for_each(|(pixel_num, color)| {
             trace!("PPU: x: {}, y: {}, color: {}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, palette);
 
             let (r, g, b, a) = match (color, mode) {
@@ -984,7 +984,7 @@ impl Ppu2c02 {
                 _ => unreachable!("unknown color: {}", color)
             };
 
-            let pixel_pos_x_plus_pixel = pixel_pos_x.wrapping_add(pixel as u8);
+            let pixel_pos_x_plus_pixel = pixel_pos_x + pixel_num as u8;
             let pixel = Pixel::new(r, g, b, a, priority);
 
             match mode {
@@ -1003,8 +1003,6 @@ impl Ppu2c02 {
                 },
             }
         });
-
-        8 - offset_x
     }
 
     fn get_background_pattern_table_addr(&self) -> u16 {
@@ -1209,8 +1207,8 @@ impl Ppu2c02 {
 
         self.background_pixels_line.clear();
 
-        let mut pixel_pos_x= 0u16;
-        while pixel_pos_x <= PIXEL_X_MAX as u16 {
+        let mut pixel_pos_x= 0u8;
+        loop {
             /***
              * TODO wrong, fine_y can be something else than 0.
              * TODO replace by a get_tile() function that set and get cached tiles.
@@ -1223,20 +1221,24 @@ impl Ppu2c02 {
             let tile =  self.get_cached_tile(coarse_x, coarse_y);
             trace!("{}", tile);
 
-            /***
-             * TODO compute tile size
-             */
-            let line_pattern_data = self.fetch_line_pattern_data(tile, fine_y, 8);
+            let size = if PIXEL_X_MAX - pixel_pos_x >= 8 { 8usize - fine_x as usize } else { (PIXEL_X_MAX - pixel_pos_x) as usize + 1 };
+            let line_pattern_data = self.fetch_line_pattern_data(tile, fine_y, fine_x, size);
             let palette = tile.colors;
 
-            pixel_pos_x += self.set_pixel(pixel_pos_x as u8, fine_x, pixel_pos_y as u8,
-                                          &line_pattern_data, palette, PixelMode::Background, SpritePriority::None, false) as u16;
+            self.set_pixel(pixel_pos_x, pixel_pos_y as u8, &line_pattern_data, palette,
+                           PixelMode::Background, SpritePriority::None, false);
 
-            if fine_x != 0 {
-                fine_x = 0;
+            if pixel_pos_x + (size as u8 - 1) == PIXEL_X_MAX {
+                break;
+            } else {
+                pixel_pos_x += size as u8;
+
+                if fine_x != 0 {
+                    fine_x = 0;
+                }
+
+                (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
             }
-
-            (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
         }
 
         name_table_addr = self.get_name_table_addr_from_v();
@@ -1319,17 +1321,6 @@ impl Ppu2c02 {
         }
     }
 
-    fn get_original_background_pixels(&self, x: u8, y: u8, size: usize) -> Vec<(u8, u8, u8)> {
-        let mut background= Vec::new();
-
-        for i in 0..size {
-            let pixel = self.renderer.borrow().frame().get_pixel(x + i as u8, y);
-            background.push((pixel.0, pixel.1, pixel.2));
-        }
-
-        background
-    }
-
     /***
      * [...] all sprites are displayed one pixel lower than their Y coordinate says [...]
      * https://www.reddit.com/r/EmuDev/comments/x1ol0k/nes_emulator_working_perfectly_except_one/
@@ -1343,6 +1334,10 @@ impl Ppu2c02 {
 
         for i in (0..self.oam.sprite_count).rev() {
             let sprite = &self.oam.secondary[i];
+
+            if scanline as u8 <= sprite.y {
+                println!("scanline: {}, sprite.y: {}", scanline, sprite.y);
+            }
             let pixel_pos_y = scanline as u8 - (sprite.y + 1);
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
 
@@ -1352,13 +1347,10 @@ impl Ppu2c02 {
             let priority = self.get_sprite_priority(sprite);
             let size = if PIXEL_X_MAX - sprite.x > 8 { 8usize } else { (PIXEL_X_MAX - sprite.x) as usize };
 
-            if pixel_pos_y > 7 {
-                println!("===> pixel_pos_y: {}, scanline: {}, sprite.y: {}", pixel_pos_y, scanline, sprite.y);
-            }
-            let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y, size);
+            let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y, 0, size);
             let palette = tile.colors;
 
-            self.set_pixel(sprite.x, 0, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, priority, sprite0_hit_detect);
+            self.set_pixel(sprite.x, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, priority, sprite0_hit_detect);
         }
 
         self.do_sprite_evaluation(scanline)?;
@@ -1410,6 +1402,11 @@ impl Ppu2c02 {
                     self.put_horizontal_t_into_v();
                     self.put_vertical_t_into_v();
                 }
+
+                /***
+                 * TODO this is probably wrong
+                 */
+                self.do_sprite_evaluation(255)?;
             },
 
             PpuState::Rendering(scanline) if scanline <= 239 => {
