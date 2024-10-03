@@ -1336,7 +1336,7 @@ impl Ppu2c02 {
             let sprite = &self.oam.secondary[i];
 
             if scanline as u8 <= sprite.y {
-                println!("scanline: {}, sprite.y: {}", scanline, sprite.y);
+                println!("scanline: {}, sprite.y: {} ({})", scanline, sprite.y, self.oam.sprite_count);
             }
             let pixel_pos_y = scanline as u8 - (sprite.y + 1);
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
@@ -1352,8 +1352,6 @@ impl Ppu2c02 {
 
             self.set_pixel(sprite.x, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, priority, sprite0_hit_detect);
         }
-
-        self.do_sprite_evaluation(scanline)?;
 
         Ok(())
     }
@@ -1402,11 +1400,6 @@ impl Ppu2c02 {
                     self.put_horizontal_t_into_v();
                     self.put_vertical_t_into_v();
                 }
-
-                /***
-                 * TODO this is probably wrong
-                 */
-                self.do_sprite_evaluation(255)?;
             },
 
             PpuState::Rendering(scanline) if scanline <= 239 => {
@@ -1421,6 +1414,12 @@ impl Ppu2c02 {
 
                 if show_sprites {
                     self.render_sprites(scanline)?;
+                }
+
+                if show_background || show_sprites {
+                    self.do_sprite_evaluation(scanline)?;
+                } else {
+                    self.oam.clear_secondary();
                 }
 
                 self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
