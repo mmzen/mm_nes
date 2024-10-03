@@ -681,7 +681,7 @@ impl Ppu2c02 {
         if self.latch.borrow().state == LatchState::HIGH {
             self.t = (self.t & 0x00FF) | ((value as u16 & 0x3F) << 8);
         } else {
-            self.t = (self.t & 0xFF00) | (value as u16);
+            self.t = (self.t & 0x7F00) | (value as u16);
             *self.v.borrow_mut() = self.t;
         }
 
