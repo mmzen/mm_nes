@@ -1,3 +1,4 @@
+use std::array::from_fn;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -321,7 +322,7 @@ pub struct Ppu2c02 {
     renderer: RefCell<Renderer>,
     cpu: Rc<RefCell<dyn CPU>>,
     state: PpuState,
-    tile_cache: [Tile; TILE_CACHE_SIZE],
+    tile_cache: TileCache,
     background_pixels_line: PixelLines,
     sprites_pixels_line: PixelLines
 }
@@ -361,6 +362,58 @@ impl Display for Tile {
             write!(f, "{:02X} ", byte)?;
         }
         Ok(())
+    }
+}
+
+struct TileCache {
+    tiles: [Option<Rc<Tile>>; TILE_CACHE_SIZE],
+    tile_y: Option<u8>
+}
+
+impl Default for TileCache {
+    fn default() -> Self {
+        TileCache {
+            tiles: from_fn(|_| None),
+            tile_y: None,
+        }
+    }
+}
+
+impl TileCache {
+
+    fn clear(&mut self) {
+        self.tiles.iter_mut().for_each(|t| *t = None);
+        self.tile_y = None;
+    }
+
+    fn get_cached_tile(&self, tile_x: u8, tile_y: u8) -> &Option<Rc<Tile>> {
+        match self.tile_y {
+            Some(current_y) if current_y == tile_y => {
+                &self.tiles[tile_x as usize]
+            },
+            _ => {
+                &None
+            }
+        }
+    }
+
+    fn set_cached_tile(&mut self, tile: Tile, tile_x: u8, tile_y: u8) -> Rc<Tile> {
+        let entry = Rc::new(tile);
+
+        match self.tile_y {
+            Some(current_y) => {
+                if current_y != tile_y {
+                    self.clear();
+                    self.tile_y = Some(tile_y);
+                }
+            },
+            None => {
+                self.tile_y = Some(tile_y);
+            }
+        }
+
+        self.tiles[tile_x as usize] = Some(entry.clone());
+        entry
     }
 }
 
@@ -759,20 +812,12 @@ impl Ppu2c02 {
             renderer: RefCell::new(Renderer::new()),
             cpu,
             state: PpuState::VBlank(261),
-            tile_cache: [Tile::default(); TILE_X_MAX as usize],
+            tile_cache: TileCache::default(),
             background_pixels_line: PixelLines::default(),
             sprites_pixels_line: PixelLines::default(),
         };
 
         Ok(ppu)
-    }
-
-    fn get_cached_tile(&self, tile_x: u8, _: u8) -> &Tile {
-        &self.tile_cache[tile_x as usize]
-    }
-
-    fn set_cached_tile(&mut self, tile: Tile, tile_x: u8, _: u8) {
-        self.tile_cache[tile_x as usize] = tile;
     }
 
     #[cfg(test)]
@@ -867,8 +912,8 @@ impl Ppu2c02 {
         let mut line_pattern_data = vec![0u8; 8];
 
         for bit in 0..=7 {
-            let value0 = (*data_plane0 >> 7 - bit) & 0x01;
-            let value1 = (*data_plane1 >> 7 - bit) & 0x01;
+            let value0 = (*data_plane0 >> (7 - bit)) & 0x01;
+            let value1 = (*data_plane1 >> (7 - bit)) & 0x01;
             let combined = (value1 << 1) | value0;
             line_pattern_data[bit] = combined;
         }
@@ -905,9 +950,6 @@ impl Ppu2c02 {
         let a = (line * 8) as usize + offset_x as usize;
         let b = a + size;
 
-        if b > 64 {
-            println!("line: {}, size: {}, a: {}, b: {}", line, size, a, b);
-        }
         tile.pattern_table[a..b].to_vec()
     }
 
@@ -1066,7 +1108,7 @@ impl Ppu2c02 {
         *boxed_array
     }
 
-    fn get_tile(&self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Tile, PpuError> {
+    fn fetch_tile(&self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Tile, PpuError> {
         let tile_index = self.fetch_tile_index(coarse_x, coarse_y, name_table_addr)?;
         let palette = self.fetch_palette(coarse_x, coarse_y, attribute_table_addr)?;
         let colors = self.get_background_palette_colors(palette)?;
@@ -1075,6 +1117,23 @@ impl Ppu2c02 {
         let tile = Tile::new(tile_index, colors, Ppu2c02::vec_to_array::<64>(pattern_data));
 
         trace!("{}", tile);
+        Ok(tile)
+    }
+
+    fn get_tile(&mut self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Rc<Tile>, PpuError> {
+        let tile = if let Some(cached_tile) = self.tile_cache.get_cached_tile(coarse_x, coarse_y) {
+            trace!("cache hit: coarse_x: {}, coarse_y: {}, tile: 0x{:02X}", coarse_x, coarse_y, cached_tile.index);
+            cached_tile.clone()
+        } else {
+            trace!("cache miss: coarse_x: {}, coarse_y: {}", coarse_x, coarse_y);
+            let fetched_tile = self.fetch_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
+
+            let cache = &mut self.tile_cache;
+            let cached_tile = cache.set_cached_tile(fetched_tile, coarse_x, coarse_y);
+
+            cached_tile.clone()
+        };
+
         Ok(tile)
     }
 
@@ -1164,15 +1223,13 @@ impl Ppu2c02 {
     fn fine_and_coarse_y_increment(&self, name_table_addr: u16, fine_y: u8, coarse_y: u8) -> (u16, u8, u8) {
         if fine_y < 7 {
             (name_table_addr, fine_y + 1, coarse_y)
-        } else {
-            if coarse_y == 29 {
+        } else if coarse_y == 29 {
                 let addr = name_table_addr ^ 0x0800;
                 (addr, 0, 0)
-            } else if coarse_y == 31 {
+        } else if coarse_y == 31 {
                 (name_table_addr, 0, 0)
-            } else {
+        } else {
                 (name_table_addr, 0, coarse_y + 1)
-            }
         }
     }
 
@@ -1209,20 +1266,11 @@ impl Ppu2c02 {
 
         let mut pixel_pos_x= 0u8;
         loop {
-            /***
-             * TODO wrong, fine_y can be something else than 0.
-             * TODO replace by a get_tile() function that set and get cached tiles.
-             ***/
-            if fine_y == 0 {
-                let fetched_tile = self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
-                self.set_cached_tile(fetched_tile, coarse_x, coarse_y);
-            }
-
-            let tile =  self.get_cached_tile(coarse_x, coarse_y);
+            let tile =  self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
             trace!("{}", tile);
 
             let size = if PIXEL_X_MAX - pixel_pos_x >= 8 { 8usize - fine_x as usize } else { (PIXEL_X_MAX - pixel_pos_x) as usize + 1 };
-            let line_pattern_data = self.fetch_line_pattern_data(tile, fine_y, fine_x, size);
+            let line_pattern_data = self.fetch_line_pattern_data(tile.as_ref(), fine_y, fine_x, size);
             let palette = tile.colors;
 
             self.set_pixel(pixel_pos_x, pixel_pos_y as u8, &line_pattern_data, palette,
@@ -1335,9 +1383,6 @@ impl Ppu2c02 {
         for i in (0..self.oam.sprite_count).rev() {
             let sprite = &self.oam.secondary[i];
 
-            if scanline as u8 <= sprite.y {
-                println!("scanline: {}, sprite.y: {} ({})", scanline, sprite.y, self.oam.sprite_count);
-            }
             let pixel_pos_y = scanline as u8 - (sprite.y + 1);
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
 
