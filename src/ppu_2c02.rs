@@ -1,5 +1,5 @@
-use std::array::from_fn;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 use std::time::Duration;
@@ -366,15 +366,13 @@ impl Display for Tile {
 }
 
 struct TileCache {
-    tiles: [Option<Rc<Tile>>; TILE_CACHE_SIZE],
-    tile_y: Option<u8>
+    tiles: HashMap<u16, Rc<Tile>>
 }
 
 impl Default for TileCache {
     fn default() -> Self {
         TileCache {
-            tiles: from_fn(|_| None),
-            tile_y: None,
+            tiles: HashMap::new()
         }
     }
 }
@@ -382,38 +380,20 @@ impl Default for TileCache {
 impl TileCache {
 
     fn clear(&mut self) {
-        self.tiles.iter_mut().for_each(|t| *t = None);
-        self.tile_y = None;
+        self.tiles.clear();
     }
 
-    fn get_cached_tile(&self, tile_x: u8, tile_y: u8) -> &Option<Rc<Tile>> {
-        match self.tile_y {
-            Some(current_y) if current_y == tile_y => {
-                &self.tiles[tile_x as usize]
-            },
-            _ => {
-                &None
-            }
+    fn get_cached_tile(&self, addr: u16) -> Option<Rc<Tile>> {
+        if let Some(tile) = self.tiles.get(&addr) {
+            Some(tile.clone())
+        } else {
+            None
         }
     }
 
-    fn set_cached_tile(&mut self, tile: Tile, tile_x: u8, tile_y: u8) -> Rc<Tile> {
-        let entry = Rc::new(tile);
-
-        match self.tile_y {
-            Some(current_y) => {
-                if current_y != tile_y {
-                    self.clear();
-                    self.tile_y = Some(tile_y);
-                }
-            },
-            None => {
-                self.tile_y = Some(tile_y);
-            }
-        }
-
-        self.tiles[tile_x as usize] = Some(entry.clone());
-        entry
+    fn set_cached_tile(&mut self, tile: Tile, addr: u16) -> Rc<Tile> {
+        self.tiles.insert(addr, Rc::new(tile));
+        self.get_cached_tile(addr).unwrap()
     }
 }
 
@@ -1121,15 +1101,17 @@ impl Ppu2c02 {
     }
 
     fn get_tile(&mut self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Rc<Tile>, PpuError> {
-        let tile = if let Some(cached_tile) = self.tile_cache.get_cached_tile(coarse_x, coarse_y) {
+        let addr = name_table_addr | (coarse_y as u16) << 5  | coarse_x as u16;
+
+        let tile = if let Some(cached_tile) = self.tile_cache.get_cached_tile(addr) {
             trace!("cache hit: coarse_x: {}, coarse_y: {}, tile: 0x{:02X}", coarse_x, coarse_y, cached_tile.index);
-            cached_tile.clone()
+            cached_tile
         } else {
             trace!("cache miss: coarse_x: {}, coarse_y: {}", coarse_x, coarse_y);
             let fetched_tile = self.fetch_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
 
             let cache = &mut self.tile_cache;
-            let cached_tile = cache.set_cached_tile(fetched_tile, coarse_x, coarse_y);
+            let cached_tile = cache.set_cached_tile(fetched_tile, addr);
 
             cached_tile.clone()
         };
@@ -1475,6 +1457,7 @@ impl Ppu2c02 {
 
             PpuState::Rendering(240) => {
                 self.renderer.borrow_mut().update();
+                self.tile_cache.clear();
                 self.state = PpuState::Rendering(241);
             },
 
