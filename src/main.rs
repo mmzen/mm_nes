@@ -6,7 +6,7 @@ use clap_num::maybe_hex;
 use crate::apu::ApuType::RP2A03;
 use crate::bus::BusType;
 use crate::bus_device::BusDeviceType::{APU, CARTRIDGE, PPU, WRAM};
-use crate::cartridge::CartridgeType::NROM128;
+use crate::cartridge::CartridgeType::NROM;
 use crate::cpu::CpuType::NES6502;
 use crate::loader::LoaderType::INESV1;
 use crate::memory::MemoryType::NESMemory;
@@ -28,7 +28,7 @@ mod bus;
 mod apu;
 mod bus_device;
 mod cartridge;
-mod nrom128_cartridge;
+mod nrom_cartridge;
 mod util;
 mod ppu_2c02;
 mod palette;
@@ -116,7 +116,7 @@ fn main() -> Result<(), NESConsoleError> {
         .with_cpu_tracing_options(NES6502, args.cpu_tracing, trace_file)
         .with_bus_type(BusType::NESBus)
         .with_bus_device_type(WRAM(NESMemory))
-        .with_bus_device_type(CARTRIDGE(NROM128))
+        .with_bus_device_type(CARTRIDGE(NROM))
         .with_bus_device_type(PPU(NES2C02))
         .with_bus_device_type(APU(RP2A03))
         .with_loader_type(INESV1)

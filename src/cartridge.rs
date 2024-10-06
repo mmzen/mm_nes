@@ -9,14 +9,14 @@ use crate::ppu::PpuNameTableMirroring;
 pub enum CartridgeType {
     #[default]
     NESCARTRIDGE,
-    NROM128,
+    NROM,
 }
 
 impl Display for CartridgeType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             CartridgeType::NESCARTRIDGE => { write!(f, "cartridge type: NESCARTRIDGE") },
-            CartridgeType::NROM128 => { write!(f, "cartridge type: NROM128") }
+            CartridgeType::NROM => { write!(f, "cartridge type: NROM128") }
         }
     }
 }
@@ -25,7 +25,7 @@ impl PartialEq for CartridgeType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (CartridgeType::NESCARTRIDGE, CartridgeType::NESCARTRIDGE) => true,
-            (CartridgeType::NROM128, CartridgeType::NROM128) => true,
+            (CartridgeType::NROM, CartridgeType::NROM) => true,
             _ => false,
         }
     }

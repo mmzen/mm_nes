@@ -6,7 +6,7 @@ use std::rc::Rc;
 use log::{debug, warn};
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
-use crate::nrom128_cartridge::NROM128Cartridge;
+use crate::nrom_cartridge::NROMCartridge;
 use crate::ppu::PpuNameTableMirroring;
 
 const HEADER_SIZE: usize = 16;
@@ -79,7 +79,7 @@ impl  INesLoader  {
     fn build_cartridge(&self, file: File, prg_rom_size: usize, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
         debug!("creating cartridge");
 
-        let cartridge = NROM128Cartridge::new(file.bytes(), prg_rom_size, chr_rom_size, mirroring)?;
+        let cartridge = NROMCartridge::new(file.bytes(), prg_rom_size, chr_rom_size, mirroring)?;
         Ok(Rc::new(RefCell::new(cartridge)))
     }
 

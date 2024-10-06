@@ -5,24 +5,25 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
-use crate::cartridge::CartridgeType::NROM128;
+use crate::cartridge::CartridgeType::NROM;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
 const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
 const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
-const MAPPER_NAME: &str = "NROM-128";
+const MAPPER_NAME: &str = "NROM";
 
 #[derive(Debug)]
-pub struct NROM128Cartridge {
+pub struct NROMCartridge {
     prg_rom: Rc<RefCell<MemoryBank>>,
     chr_rom: Rc<RefCell<MemoryBank>>,
     device_type: BusDeviceType,
-    mirroring: PpuNameTableMirroring
+    mirroring: PpuNameTableMirroring,
+    prg_rom_size: usize,
 }
 
-impl NROM128Cartridge {
+impl NROMCartridge {
 
     fn write_rom_data(rom: &mut dyn Memory, size: usize, data: impl Iterator<Item = io::Result<u8>>) -> Result<(), MemoryError> {
         let mut total = 0;
@@ -49,23 +50,24 @@ impl NROM128Cartridge {
         let mut chr_rom = MemoryBank::new(chr_rom_size, PPU_ADDRESS_SPACE);
 
         debug!("CARTRIDGE: loading prg_rom data ({} KB)...", prg_rom_size / 1024);
-        NROM128Cartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
+        NROMCartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
 
         debug!("CARTRIDGE: loading chr_rom data ({} KB)...", chr_rom_size / 1024);
-        NROM128Cartridge::write_rom_data(&mut chr_rom, chr_rom_size, &mut data)?;
+        NROMCartridge::write_rom_data(&mut chr_rom, chr_rom_size, &mut data)?;
 
-        let cartridge = NROM128Cartridge {
+        let cartridge = NROMCartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
             chr_rom: Rc::new(RefCell::new(chr_rom)),
-            device_type: BusDeviceType::CARTRIDGE(NROM128),
+            device_type: BusDeviceType::CARTRIDGE(NROM),
             mirroring,
+            prg_rom_size,
         };
 
         Ok(cartridge)
     }
 }
 
-impl Memory for NROM128Cartridge {
+impl Memory for NROMCartridge {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         let mut result = 0;
 
@@ -104,9 +106,9 @@ impl Memory for NROM128Cartridge {
     }
 }
 
-impl BusDevice for NROM128Cartridge {
+impl BusDevice for NROMCartridge {
     fn get_name(&self) -> String {
-        MAPPER_NAME.to_string()
+        format!("MAPPER_NAME-{}", self.prg_rom_size)
     }
 
     fn get_device_type(&self) -> BusDeviceType {
@@ -122,7 +124,7 @@ impl BusDevice for NROM128Cartridge {
     }
 }
 
-impl Cartridge for NROM128Cartridge {
+impl Cartridge for NROMCartridge {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>> {
         self.chr_rom.clone()
     }
