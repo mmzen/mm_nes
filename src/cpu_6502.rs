@@ -118,6 +118,7 @@ struct Registers  {
     p: u8,      // Status register
     sp: u8,     // Stack pointer
     pc: u16,    // Program counter
+    is_pc_dirty: bool // Indicates whether the program counter needs to be updated
 }
 
 impl Registers {
@@ -147,6 +148,15 @@ impl Registers {
         };
 
         Ok(pc)
+    }
+
+    fn set_pc(&mut self, pc: u16) {
+        self.pc = pc;
+        self.is_pc_dirty = true;
+    }
+
+    fn increment_pc(&mut self, n: u16) {
+        self.pc += n;
     }
 }
 
@@ -251,7 +261,6 @@ impl CPU for Cpu6502 {
 
         loop {
             debug!("CPU: program counter: 0x{:04X}", self.registers.pc);
-            let original_pc = self.registers.pc;
 
             let byte = self.bus.borrow().read_byte(self.registers.pc)?;
             let instruction = Cpu6502::decode_instruction(byte)?;
@@ -264,8 +273,10 @@ impl CPU for Cpu6502 {
             let additional_cycles = self.execute_instruction(&instruction, &operand)?;
             cycles = cycles + instruction.cycles + additional_cycles;
 
-            if original_pc == self.registers.pc {
+            if self.registers.is_pc_dirty == false {
                 self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
+            } else {
+                self.registers.is_pc_dirty = false;
             }
 
             self.instructions_executed += 1;
@@ -317,7 +328,8 @@ impl Cpu6502 {
                 y: 0,
                 p: 0,
                 sp: 0,
-                pc: 0
+                pc: 0,
+                is_pc_dirty: false,
             },
             bus,
             instructions_executed: 0,
@@ -851,7 +863,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -865,7 +877,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -888,7 +900,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -914,7 +926,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -928,7 +940,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -942,7 +954,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -961,13 +973,16 @@ impl Instruction {
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
 
-        if cpu.interrupt == Interrupt::NMI {
-            cpu.registers.pc = cpu.bus.borrow().read_word(NMI_VECTOR)?;
+        let addr = if cpu.interrupt == Interrupt::NMI {
+            cpu.bus.borrow().read_word(NMI_VECTOR)?
         } else if cpu.interrupt == Interrupt::IRQ {
-            cpu.registers.pc = cpu.bus.borrow().read_word(IRQ_VECTOR)?;
+            cpu.bus.borrow().read_word(IRQ_VECTOR)?
         } else {
-            cpu.registers.pc = cpu.bus.borrow().read_word(BRK_VECTOR)?;
-        }
+            cpu.bus.borrow().read_word(BRK_VECTOR)?
+        };
+
+        cpu.registers.set_pc(addr);
+        cpu.interrupt = Interrupt::NONE;
 
         Ok(0)
     }
@@ -978,7 +993,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -992,7 +1007,7 @@ impl Instruction {
             let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
 
             debug!("CPU: branching to address {:04X}", addr);
-            cpu.registers.pc = addr;
+            cpu.registers.set_pc(addr);
 
             Ok(cycles)
         } else {
@@ -1129,7 +1144,7 @@ impl Instruction {
         let addr = cpu.get_operand_word_value(operand)?;
 
         debug!("CPU: preparing to jump to absolute address {:04X}", addr);
-        cpu.registers.pc = addr;
+        cpu.registers.set_pc(addr);
 
         Ok(0)
     }
@@ -1141,7 +1156,7 @@ impl Instruction {
         cpu.push_stack((pc >> 8) as u8)?;
         cpu.push_stack(pc as u8)?;
 
-        cpu.registers.pc = addr;
+        cpu.registers.set_pc(addr);
 
         Ok(0)
     }
@@ -1302,7 +1317,8 @@ impl Instruction {
         let pcl = cpu.pop_stack()?;
         let pch = cpu.pop_stack()?;
 
-        cpu.registers.pc = (pch as u16) << 8 | pcl as u16;
+        let addr = (pch as u16) << 8 | pcl as u16;
+        cpu.registers.set_pc(addr);
 
         Ok(0)
     }
@@ -1311,8 +1327,11 @@ impl Instruction {
         let pcl = cpu.pop_stack()?;
         let pch = cpu.pop_stack()?;
 
-        cpu.registers.pc = (pch as u16) << 8 | pcl as u16;
-        cpu.registers.pc = cpu.registers.safe_pc_add(1)?;
+        let mut addr = (pch as u16) << 8 | pcl as u16;
+        cpu.registers.set_pc(addr);
+
+        addr = cpu.registers.safe_pc_add(1)?;
+        cpu.registers.set_pc(addr);
 
         Ok(0)
     }
