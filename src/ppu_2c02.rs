@@ -942,10 +942,10 @@ impl Ppu2c02 {
         Ok(tile_index)
     }
 
-    fn get_palette_address(&self, palette: u8) -> u16 {
+    fn get_background_palette_address(&self, palette: u8) -> u16 {
         let palette_address = PALETTE_ADDRESS_SPACE.0 + (palette as u16 * 4);
 
-        trace!("PPU: palette address: 0x{:04X}", palette_address);
+        trace!("PPU: background palette address: 0x{:04X}", palette_address);
         palette_address
     }
 
@@ -959,7 +959,9 @@ impl Ppu2c02 {
     fn get_palette_colors(&self, palette_addr: u16) -> Result<(u8, u8, u8, u8), PpuError> {
         let mut colors = [0u8; 4];
 
-        for i in 0..=3 {
+        colors[0] = self.bus.read_byte(palette_addr & !0x10)?;
+
+        for i in 1..=3 {
             colors[i] = self.bus.read_byte(palette_addr + i as u16)?;
         }
 
@@ -967,7 +969,7 @@ impl Ppu2c02 {
     }
 
     fn get_background_palette_colors(&self, palette: u8) -> Result<(u8, u8, u8, u8), PpuError> {
-        let palette_address = self.get_palette_address(palette);
+        let palette_address = self.get_background_palette_address(palette);
         let colors = self.get_palette_colors(palette_address)?;
 
         trace!("PPU: background palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
