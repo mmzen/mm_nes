@@ -1450,8 +1450,11 @@ impl Instruction {
 
     fn alr_and_oper_plus_lsr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         self.and_and_memory_with_accumulator(cpu, operand)?;
+
+        cpu.registers.set_status(StatusFlag::Carry, cpu.registers.a & 0x01 == 0x01);
         cpu.registers.a >>= 1;
-        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+
+        cpu.update_flags_zero_negative(cpu.registers.a);
 
         Ok(0)
     }
@@ -1476,16 +1479,15 @@ impl Instruction {
     fn arr_and_oper_plus_ror(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         self.and_and_memory_with_accumulator(cpu, operand)?;
 
-        let a = cpu.registers.a;
-        let c = cpu.registers.a >> 7;
+        cpu.registers.set_status(StatusFlag::Overflow, (cpu.registers.a ^ (cpu.registers.a >> 1)) & 0x40 == 0x40);
 
-        cpu.registers.set_status(StatusFlag::Overflow, (a ^ (a >> 1)) & 0x40 == 0x40);
+        let c = cpu.registers.a >> 7;
 
         cpu.registers.a >>= 1 ;
         cpu.registers.a |= (cpu.registers.get_status(StatusFlag::Carry) as u8) << 7;
 
-        cpu.registers.set_status(StatusFlag::Carry, c == 0x01);
-        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+        cpu.registers.set_status(StatusFlag::Carry, c & 0x01 == 0x01);
+        cpu.update_flags_zero_negative(cpu.registers.a);
 
         Ok(0)
     }
@@ -1557,8 +1559,14 @@ impl Instruction {
     }
 
     fn sbx_cmp_and_dex_at_once_sets_flags_like_cmp(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.cmp_compare_memory_with_accumulator(cpu, operand)?;
-        self.dex_decrement_index_x_by_one(cpu, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let result0 = cpu.registers.a & cpu.registers.x;
+        let result1 = result0.wrapping_sub(value);
+
+        cpu.update_flags_zero_negative(result1);
+        cpu.registers.set_status(StatusFlag::Carry, result1 <= result0);
+
+        cpu.registers.x = result1;
 
         Ok(0)
     }
