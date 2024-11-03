@@ -186,7 +186,6 @@ fn write_to_addr_and_data_and_read_to_data_registers_to_palette_works() {
     ppu.write_byte(data, VALID_DATA_VALUE).unwrap();
 
     write_address_to_addr_register(&mut ppu, VALID_PALETTE_ADDRESS).unwrap();
-    let _ = ppu.read_byte(data).unwrap();
     let result = ppu.read_byte(data).unwrap();
 
     assert_eq!(result, VALID_DATA_VALUE);
@@ -315,7 +314,7 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
 }
 
 #[test]
-fn v_wraps_to_0x2000_when_incrementing_from_0x3fff() {
+fn v_wraps_to_0x0000_when_incrementing_from_0x3fff() {
     init();
 
     let mut ppu = create_ppu();
@@ -327,5 +326,5 @@ fn v_wraps_to_0x2000_when_incrementing_from_0x3fff() {
     write_data_to_data_register(&mut ppu, data).unwrap();;
     let v = ppu.get_v_value();
     println!("V: 0x{:04X}", v);
-    assert_eq!(ppu.get_v_value(), 0x2000);
+    assert_eq!(ppu.get_v_value(), 0x0000);
 }
