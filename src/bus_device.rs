@@ -5,6 +5,7 @@ use std::fmt::{Display, Formatter};
 use mockall::mock;
 use crate::apu::ApuType;
 use crate::cartridge::CartridgeType;
+use crate::controller::ControllerType;
 use crate::dma::DmaType;
 use crate::memory::{Memory, MemoryType};
 #[cfg(test)]
@@ -18,6 +19,7 @@ pub enum BusDeviceType {
     APU(ApuType),
     CARTRIDGE(CartridgeType),
     DMA(DmaType),
+    CONTROLLER(ControllerType),
     OPENBUS
 }
 
@@ -29,7 +31,8 @@ impl Display for BusDeviceType {
             BusDeviceType::APU(apu) => write!(f, "device type: APU - {}", apu),
             BusDeviceType::CARTRIDGE(cartridge) => write!(f, "device type: CARTRIDGE - {}", cartridge),
             BusDeviceType::DMA(dma) => { write!(f, "device type: DMA - {}", dma) }
-            BusDeviceType::OPENBUS => { write!(f, "device type: OPEN BUS") }
+            BusDeviceType::OPENBUS => { write!(f, "device type: OPEN BUS") },
+            BusDeviceType::CONTROLLER(controller) => { write!(f, "device type: CONTROLLER - {}", controller) }
         }
     }
 }
@@ -41,6 +44,7 @@ impl PartialEq for BusDeviceType {
             (BusDeviceType::PPU(a), BusDeviceType::PPU(b)) => a == b,
             (BusDeviceType::APU(a), BusDeviceType::APU(b)) => a == b,
             (BusDeviceType::CARTRIDGE(a), BusDeviceType::CARTRIDGE(b)) => a == b,
+            (BusDeviceType::CONTROLLER(a), BusDeviceType::CONTROLLER(b)) => a == b,
             (BusDeviceType::OPENBUS, BusDeviceType::OPENBUS) => true,
             _ => false,
         }

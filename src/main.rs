@@ -5,8 +5,9 @@ use clap::Parser;
 use clap_num::maybe_hex;
 use crate::apu::ApuType::RP2A03;
 use crate::bus::BusType;
-use crate::bus_device::BusDeviceType::{APU, CARTRIDGE, PPU, WRAM};
+use crate::bus_device::BusDeviceType::{APU, CARTRIDGE, CONTROLLER, PPU, WRAM};
 use crate::cartridge::CartridgeType::NROM;
+use crate::controller::ControllerType::StandardController;
 use crate::cpu::CpuType::NES6502;
 use crate::loader::LoaderType::INESV1;
 use crate::memory::MemoryType::NESMemory;
@@ -39,6 +40,9 @@ mod ppu_dma;
 mod frame;
 mod apu_rp2a03;
 mod renderer;
+mod memory_palette;
+mod controller;
+mod standard_controller;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -119,6 +123,7 @@ fn main() -> Result<(), NESConsoleError> {
         .with_bus_device_type(CARTRIDGE(NROM))
         .with_bus_device_type(PPU(NES2C02))
         .with_bus_device_type(APU(RP2A03))
+        .with_bus_device_type(CONTROLLER(StandardController))
         .with_loader_type(INESV1)
         .with_rom_file(args.rom_file)
         .with_entry_point(args.pc)

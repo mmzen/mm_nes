@@ -9,6 +9,7 @@ use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
+use crate::controller::ControllerType;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::dma::{PpuDmaType};
@@ -21,6 +22,7 @@ use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
+use crate::standard_controller::StandardController;
 use crate::util::measure_exec_time;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
@@ -291,6 +293,21 @@ impl NESConsoleBuilder {
         Ok((ppu.clone(), dma))
     }
 
+    fn build_controller_device(&self, controller_type: &ControllerType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+        debug!("creating controller {:?}", controller_type);
+
+        let result = match controller_type {
+            ControllerType::StandardController => {
+                StandardController::new()
+            },
+        };
+
+        let controller = Rc::new(RefCell::new(result));
+        controller.borrow_mut().initialize()?;
+
+        Ok(controller)
+    }
+
     fn build_apu_device(&self, apu_type: &ApuType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
@@ -353,6 +370,11 @@ impl NESConsoleBuilder {
                 bus.borrow_mut().add_device(ppu)?;
                 bus.borrow_mut().add_device(dma)?;
             },
+
+            BusDeviceType::CONTROLLER(controller_type) => {
+                let controller = self.build_controller_device(controller_type)?;
+                bus.borrow_mut().add_device(controller)?;
+            }
 
             BusDeviceType::APU(apu_type) => {
                 let apu = self.build_apu_device(apu_type)?;
