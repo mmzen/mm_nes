@@ -4,6 +4,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
 use log::{debug, info, trace};
+use sdl2::Sdl;
 use crate::apu::ApuType;
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
@@ -15,6 +16,8 @@ use crate::cpu_6502::Cpu6502;
 use crate::dma::{PpuDmaType};
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
+use crate::input::InputError;
+use crate::input_sdl2::InputSDL2;
 use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
@@ -91,6 +94,7 @@ pub enum NESConsoleError {
     ProgramLoaderError(String),
     CpuError(CpuError),
     PpuError(PpuError),
+    InternalError(String),
 }
 
 impl From<std::io::Error> for NESConsoleError {
@@ -129,14 +133,24 @@ impl From<PpuError> for NESConsoleError {
     }
 }
 
+impl From<InputError> for NESConsoleError {
+    fn from(error: InputError) -> Self {
+        match error {
+            InputError::InputFailure(s) => NESConsoleError::InternalError(s)
+        }
+    }
+}
+
+
 impl Display for NESConsoleError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            NESConsoleError::BuilderError(s) => { write!(f, "builder error: {}", s) }
-            NESConsoleError::IOError(s) => { write!(f, "i/o error: {}", s) }
-            NESConsoleError::ProgramLoaderError(s) => { write!(f, "program loader error: {}", s) }
-            NESConsoleError::CpuError(s) => { write!(f, "cpu error: {}", s) }
-            NESConsoleError::PpuError(s) => { write!(f, "ppu error: {}", s) }
+            NESConsoleError::BuilderError(s) => { write!(f, "builder error: {}", s) },
+            NESConsoleError::IOError(s) => { write!(f, "i/o error: {}", s) },
+            NESConsoleError::ProgramLoaderError(s) => { write!(f, "program loader error: {}", s) },
+            NESConsoleError::CpuError(s) => { write!(f, "cpu error: {}", s) },
+            NESConsoleError::PpuError(s) => { write!(f, "ppu error: {}", s) },
+            NESConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
         }
     }
 }
@@ -271,6 +285,10 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(ppu_dma)))
     }
 
+    /***
+     * TODO inject Sdl2 renderer into Ppu
+     *
+     ***/
     fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
                         mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>,
                         cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
@@ -293,12 +311,13 @@ impl NESConsoleBuilder {
         Ok((ppu.clone(), dma))
     }
 
-    fn build_controller_device(&self, controller_type: &ControllerType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_controller_device(&self, controller_type: &ControllerType, sdl_context: &Sdl) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating controller {:?}", controller_type);
 
         let result = match controller_type {
             ControllerType::StandardController => {
-                StandardController::new()
+                let input = InputSDL2::new(sdl_context)?;
+                StandardController::new(input)
             },
         };
 
@@ -338,7 +357,7 @@ impl NESConsoleBuilder {
     }
 
     fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType,
-                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(), NESConsoleError> {
+                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>, sdl_context: &Sdl) -> Result<(), NESConsoleError> {
         debug!("creating device: {:?}", device_type);
 
         match device_type {
@@ -372,7 +391,7 @@ impl NESConsoleBuilder {
             },
 
             BusDeviceType::CONTROLLER(controller_type) => {
-                let controller = self.build_controller_device(controller_type)?;
+                let controller = self.build_controller_device(controller_type, &sdl_context)?;
                 bus.borrow_mut().add_device(controller)?;
             }
 
@@ -404,6 +423,9 @@ impl NESConsoleBuilder {
 
         let bus = self.build_bus()?;
         let cpu = self.build_cpu(bus.clone())?;
+        let sdl_context = sdl2::init().map_err(
+            |s| NESConsoleError::InternalError(s)
+        )?;
 
         self.bus = Some(bus.clone());
         self.cpu = Some(cpu.clone());
@@ -411,7 +433,7 @@ impl NESConsoleBuilder {
         let device_types = self.device_types.clone();
 
         for device_type in device_types {
-            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone())?;
+            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone(), &sdl_context)?;
         }
 
         let cpu = self.cpu.take()

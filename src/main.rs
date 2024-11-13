@@ -43,6 +43,8 @@ mod renderer;
 mod memory_palette;
 mod controller;
 mod standard_controller;
+mod input;
+mod input_sdl2;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
