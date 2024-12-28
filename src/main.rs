@@ -118,13 +118,19 @@ fn main() -> Result<(), NESConsoleError> {
 
     info!("emulator bootstrapping...");
 
+    /***
+     * XXX order of initialization is important:
+     * 1. APU covers a single range from 0x4000 to 0x4017, because of the default bus implementation that does not support multiple ranges.
+     * 2. PPU (OAM DMA) and CONTROLLER overwrites part of the APU range with their own memory spaces.
+     * /!\ Changing the order will result in PPU and CONTROLLER having no mapping to the bus.
+     ***/
     let mut console = builder
         .with_cpu_tracing_options(NES6502, args.cpu_tracing, trace_file)
         .with_bus_type(BusType::NESBus)
         .with_bus_device_type(WRAM(NESMemory))
         .with_bus_device_type(CARTRIDGE(NROM))
-        .with_bus_device_type(PPU(NES2C02))
         .with_bus_device_type(APU(RP2A03))
+        .with_bus_device_type(PPU(NES2C02))
         .with_bus_device_type(CONTROLLER(StandardController))
         .with_loader_type(INESV1)
         .with_rom_file(args.rom_file)
