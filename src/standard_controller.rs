@@ -42,8 +42,8 @@ impl<T: Input> Memory for StandardController<T> {
         let control_state = if *self.state.borrow() == State::StateReady {
             let index = *self.control_index.borrow();
 
-            if *self.control_index.borrow() == CONTROLLER_NUM_BUTTONS - 1 {
-                *self.state.borrow_mut() == State::Idle;
+            if index == CONTROLLER_NUM_BUTTONS - 1 {
+                *self.state.borrow_mut() = State::Idle;
             } else {
                 *self.control_index.borrow_mut() = index + 1;
             }
