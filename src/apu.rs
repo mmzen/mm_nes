@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use crate::memory::MemoryError;
 
 #[derive(Default, Debug, Clone)]
 pub enum ApuType {
@@ -23,5 +24,23 @@ impl PartialEq for ApuType {
     }
 }
 
+#[derive(Debug)]
+pub enum ApuError {
+    MemoryError(MemoryError)
+}
+
+impl Display for ApuError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            ApuError::MemoryError(e) => { write!(f, "memory error: {}", e) }
+        }
+    }
+}
+
+
 #[allow(dead_code)]
-pub trait APU {}
+pub trait APU {
+    fn reset(&mut self) -> Result<(), ApuError>;
+    fn panic(&self, error: &ApuError);
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, ApuError>;
+}

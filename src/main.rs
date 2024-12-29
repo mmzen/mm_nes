@@ -121,7 +121,7 @@ fn main() -> Result<(), NESConsoleError> {
     /***
      * XXX order of initialization is important:
      * 1. APU covers a single range from 0x4000 to 0x4017, because of the default bus implementation that does not support multiple ranges.
-     * 2. PPU (OAM DMA) and CONTROLLER overwrites part of the APU range with their own memory spaces.
+     * 2. PPU (OAM DMA) and CONTROLLER overwrite part of the APU range with their own memory spaces.
      * /!\ Changing the order will result in PPU and CONTROLLER having no mapping to the bus.
      ***/
     let mut console = builder

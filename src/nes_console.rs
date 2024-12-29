@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use log::{debug, info, trace};
 use sdl2::Sdl;
-use crate::apu::ApuType;
+use crate::apu::{ApuError, ApuType, APU};
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
@@ -39,6 +39,7 @@ const CYCLE_CREDITS: u32 = 114;
 pub struct NESConsole {
     cpu: Rc<RefCell<dyn CPU>>,
     ppu: Rc<RefCell<dyn PPU>>,
+    apu: Rc<RefCell<dyn APU>>,
     entry_point: Option<u16>,
 }
 
@@ -58,6 +59,7 @@ impl NESConsole {
             debt = (cycles - previous_cycles) - (CYCLE_CREDITS - debt);
 
             self.ppu.borrow_mut().run(cycles, credits)?;
+            self.apu.borrow_mut().run(cycles, credits)?;
         }
     }
 
@@ -94,6 +96,7 @@ pub enum NESConsoleError {
     ProgramLoaderError(String),
     CpuError(CpuError),
     PpuError(PpuError),
+    ApuError(ApuError),
     InternalError(String),
 }
 
@@ -133,6 +136,13 @@ impl From<PpuError> for NESConsoleError {
     }
 }
 
+impl From<ApuError> for NESConsoleError {
+    fn from(error: ApuError) -> Self {
+        NESConsoleError::ApuError(error)
+    }
+}
+
+
 impl From<InputError> for NESConsoleError {
     fn from(error: InputError) -> Self {
         match error {
@@ -150,6 +160,7 @@ impl Display for NESConsoleError {
             NESConsoleError::ProgramLoaderError(s) => { write!(f, "program loader error: {}", s) },
             NESConsoleError::CpuError(s) => { write!(f, "cpu error: {}", s) },
             NESConsoleError::PpuError(s) => { write!(f, "ppu error: {}", s) },
+            NESConsoleError::ApuError(s) => { write!(f, "apu error: {}", s) }
             NESConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
         }
     }
@@ -164,6 +175,8 @@ pub struct NESConsoleBuilder {
     bus_type: Option<BusType>,
     ppu: Option<Rc<RefCell<dyn PPU>>>,
     ppu_type: Option<PpuType>,
+    apu: Option<Rc<RefCell<dyn APU>>>,
+    apu_type: Option<ApuType>,
     device_types: Vec<BusDeviceType>,
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
@@ -182,6 +195,8 @@ impl NESConsoleBuilder {
             bus_type: None,
             ppu: None,
             ppu_type: None,
+            apu: None,
+            apu_type: None,
             device_types: Vec::new(),
             loader_type: None,
             rom_file: None,
@@ -327,7 +342,7 @@ impl NESConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&self, apu_type: &ApuType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
@@ -338,6 +353,9 @@ impl NESConsoleBuilder {
 
         let apu = Rc::new(RefCell::new(result));
         apu.borrow_mut().initialize()?;
+
+        self.apu = Some(apu.clone());
+        self.apu_type = Some(apu_type.clone());
 
         Ok(apu)
     }
@@ -442,9 +460,13 @@ impl NESConsoleBuilder {
         let ppu = self.ppu.take()
             .ok_or(NESConsoleError::BuilderError("ppu missing".to_string()))?;
 
+        let apu = self.apu.take()
+            .ok_or(NESConsoleError::BuilderError("apu missing".to_string()))?;
+
         let console = NESConsole {
             cpu,
             ppu,
+            apu,
             entry_point: self.entry_point.take()
         };
 

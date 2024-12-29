@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
 use log::{debug, trace};
-use crate::apu::ApuType::RP2A03;
 use crate::bus::{Bus, BusError};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
@@ -76,7 +75,7 @@ impl Bus for NESBus {
 
         for addr in address_space.0..=address_space.1 {
             if self.devices[addr as usize].borrow().get_device_type() != BusDeviceType::OPENBUS {
-                println!("BUS: address 0x{:04X} already mapped by device {}, overwriting by {} ...",
+                debug!("BUS: address 0x{:04X} already mapped by device {}, overwriting by {} ...",
                          addr, self.devices[addr as usize].borrow().get_name(), device.borrow().get_name());
             }
 

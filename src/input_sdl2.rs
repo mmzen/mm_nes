@@ -57,7 +57,7 @@ impl Input for InputSDL2 {
 }
 
 impl Debug for InputSDL2 {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, _: &mut Formatter<'_>) -> std::fmt::Result {
         todo!()
     }
 }
