@@ -37,7 +37,6 @@ impl Display for ApuError {
     }
 }
 
-
 #[allow(dead_code)]
 pub trait APU {
     fn reset(&mut self) -> Result<(), ApuError>;

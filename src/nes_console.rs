@@ -25,6 +25,8 @@ use crate::nes_bus::NESBus;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
+use crate::sound_playback::SoundPlaybackError;
+use crate::sound_playback_sdl2::SoundPlaybackSDL2;
 use crate::standard_controller::StandardController;
 use crate::util::measure_exec_time;
 
@@ -45,6 +47,9 @@ pub struct NESConsole {
 
 impl NESConsole {
 
+    /***
+     * TODO - switch cycle to master clock cycles instead of CPU cycles
+     ***/
     fn run_scheduler(&mut self) -> Result<(), NESConsoleError> {
         let mut cycles = CYCLE_START_SEQUENCE;
         let credits = CYCLE_CREDITS;
@@ -147,6 +152,14 @@ impl From<InputError> for NESConsoleError {
     fn from(error: InputError) -> Self {
         match error {
             InputError::InputFailure(s) => NESConsoleError::InternalError(s)
+        }
+    }
+}
+
+impl From<SoundPlaybackError> for NESConsoleError {
+    fn from(error: SoundPlaybackError) -> Self {
+        match error {
+            SoundPlaybackError::SoundPlaybackFailure(s) => NESConsoleError::InternalError(s)
         }
     }
 }
@@ -342,12 +355,13 @@ impl NESConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
             ApuType::RP2A03 => {
-                ApuRp2A03::new()
+                let sound_player = SoundPlaybackSDL2::new(sdl_context)?;
+                ApuRp2A03::new(sound_player)
             },
         };
 
@@ -414,7 +428,7 @@ impl NESConsoleBuilder {
             }
 
             BusDeviceType::APU(apu_type) => {
-                let apu = self.build_apu_device(apu_type)?;
+                let apu = self.build_apu_device(apu_type, &sdl_context)?;
                 bus.borrow_mut().add_device(apu)?;
             }
 
