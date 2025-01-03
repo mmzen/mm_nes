@@ -464,7 +464,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         cpu_cycle / 2
     }
 
-    fn clock_sweep_unit(sweep: &mut Sweep) {
+    fn clock_sweep_unit(_: &mut Sweep) {
         todo!();
     }
 
@@ -586,7 +586,6 @@ impl<T: SoundPlayback> APU for ApuRp2A03<T> {
 
             if self.last_mixer_cycle > MIXER_SAMPLING_CYCLE_THRESHOLD {
                 self.clock_mixer();
-                self.sound_player.playback();
                 self.last_mixer_cycle += 1;
             } else {
                 self.last_mixer_cycle = 0;

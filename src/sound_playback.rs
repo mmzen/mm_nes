@@ -1,7 +1,8 @@
 use std::fmt::Debug;
 
 pub trait SoundPlayback : Debug {
-    fn playback(&self);
+    fn push_sample(&mut self, sample: f32);
+    fn resume(&self);
 }
 
 #[derive(Debug, PartialEq)]
