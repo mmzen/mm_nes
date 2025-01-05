@@ -1,3 +1,5 @@
+use std::thread::sleep;
+use std::time::Duration;
 use log::{debug, info, trace};
 use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
@@ -77,7 +79,7 @@ impl Envelope {
     }
 
     fn get_volume(&self) -> u8 {
-        if self.const_volume {
+        if self.const_volume == true {
             self.volume
         } else {
             self.counter
@@ -149,6 +151,8 @@ impl Channel for Pulse {
     }
 
     fn get_sample(&self) -> f32 {
+        //println!("XXX cycle: {:?}, index: {}, volume: {}",
+        //         Self::DUTY_CYCLES[self.duty_cycle], Self::DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index], self.envelope.get_volume());
         (Self::DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index] * self.envelope.get_volume()) as f32
     }
 }
@@ -185,20 +189,8 @@ enum FrameCounterMode {
 struct FrameCounter {
     mode: FrameCounterMode,
     inhibit_irq: bool,
-    apu_cycle: u32
-}
-
-impl FrameCounter {
-    fn get_frame_sequencer_step_by_cycle(cycle: u32) -> u8 {
-        match cycle {
-            3729 => 1,
-            7457 => 2,
-            11485 => 3,
-            14914 => 4,
-            18641 => 5,
-            _ => 0,
-        }
-    }
+    apu_cycle: u32,
+    next_step: u8
 }
 
 impl FrameCounter {
@@ -206,7 +198,8 @@ impl FrameCounter {
         FrameCounter {
             mode: FrameCounterMode::FourStep,
             inhibit_irq: false,
-            apu_cycle: 0
+            apu_cycle: 0,
+            next_step: 0,
         }
     }
 }
@@ -337,9 +330,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         pulse.envelope.divider = value & 0x0F;
         pulse.envelope.volume = value & 0x0F;
 
-        trace!("APU: updated pulse control: duty: {} ({:?}), length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
-                 pulse.duty_cycle, Pulse::DUTY_CYCLES[pulse.duty_cycle as usize], pulse.length_counter.halt, pulse.envelope.loop_flag,
-                 pulse.envelope.const_volume, pulse.envelope.divider, pulse.envelope.volume);
+        //println!("APU: updated pulse control (0x{:02X}) {:?}: enabled: {}, duty: {} ({:?}), length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
+        //         value, channel_type, pulse.enabled, pulse.duty_cycle, Pulse::DUTY_CYCLES[pulse.duty_cycle],
+        //         pulse.length_counter.halt, pulse.envelope.loop_flag, pulse.envelope.const_volume, pulse.envelope.divider, pulse.envelope.volume);
 
         Ok(())
     }
@@ -353,7 +346,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         pulse.sweep.shift = value & 0x07;
         pulse.sweep.reload = true;
 
-        trace!("APU: updated pulse sweep unit: enabled: {}, period: {}, negate: {}, shift: {}, reload: {}",
+        trace!("APU: updated pulse sweep: enabled: {}, period: {}, negate: {}, shift: {}, reload: {}",
              pulse.sweep.enabled, pulse.sweep.period, pulse.sweep.negate, pulse.sweep.shift, pulse.sweep.reload);
 
         Ok(())
@@ -381,7 +374,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     fn write_length_counter_and_timer_hi(&mut self, channel_type: ChannelType, value: u8) -> Result<(), MemoryError> {
         let pulse = self.get_pulse_channel_by_type(&channel_type);
 
-        pulse.period = pulse.period & 0x00FF | (value & 0x07) as u16;
+        pulse.period = (pulse.period & 0x00FF) | (((value & 0x07) as u16) << 8);
 
         if pulse.enabled {
             pulse.length_counter.reload = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
@@ -390,7 +383,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         pulse.envelope.start_flag = true;
         pulse.duty_cycle_index = 0;
 
-        trace!("APU: updated pulse timer high byte: {}, and length counter load: {}", pulse.period, pulse.length_counter.reload);
+        //println!("APU: updated pulse timer high byte: 0x{:04X} ({}), length counter load: {}",
+        //         pulse.period, pulse.period, pulse.length_counter.reload);
 
         Ok(())
     }
@@ -424,9 +418,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     fn write_frame_counter(&mut self, value: u8) -> Result<(), MemoryError> {
-        self.frame_counter.mode = match value & 0x80 == 0 {
-            true => FrameCounterMode::FourStep,
-            false => FrameCounterMode::FiveStep,
+        self.frame_counter.mode = match (value & 0x80) != 0 {
+            true => FrameCounterMode::FiveStep,
+            false => FrameCounterMode::FourStep,
         };
 
         self.frame_counter.inhibit_irq = (value & 0x40) != 0;
@@ -450,8 +444,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
                 pulse.period_counter = pulse.period;
 
                 trace!("APU: period counter for pulse channel {}: {} (period: {})", idx, pulse.period_counter, pulse.period);
-                trace!("APU: cycle: {:?}, index: {}, position: {}",
-                         Pulse::DUTY_CYCLES[pulse.duty_cycle], pulse.duty_cycle_index, Pulse::DUTY_CYCLES[pulse.duty_cycle][pulse.duty_cycle_index]);
+                trace!("APU: pulse channel {}, cycle: {:?}, index: {}, position: {}",
+                         idx, Pulse::DUTY_CYCLES[pulse.duty_cycle], pulse.duty_cycle_index, Pulse::DUTY_CYCLES[pulse.duty_cycle][pulse.duty_cycle_index]);
             } else {
                 pulse.period_counter -= 1;
             }
@@ -465,7 +459,6 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     fn clock_sweep_unit(_: &mut Sweep) {
-        todo!();
     }
 
     fn clock_length_counter(length_counter: &mut LengthCounter) {
@@ -477,7 +470,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     fn clock_envelope(envelop: &mut Envelope) {
         if envelop.start_flag {
             envelop.start_flag = false;
-            envelop.volume = 15;
+            envelop.counter = 15;
             envelop.divider = envelop.volume;
         } else {
             if envelop.divider > 0 {
@@ -513,45 +506,62 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     fn clock_frame_sequencer(&mut self, cycle: u32) {
-        let step = FrameCounter::get_frame_sequencer_step_by_cycle(cycle);
-        self.frame_counter.apu_cycle = cycle;
+        self.frame_counter.apu_cycle += cycle;
 
-        match (&self.frame_counter.mode, step) {
-            (_, 0) => {},
-            (_, 1) => {
-                self.clock_envelopes();
-            },
-            (_, 2) => {
-                self.clock_envelopes();
-                self.clock_length_counters();
-                self.clock_sweep_units();
-            },
-            (_, 3) => {
-                self.clock_envelopes();
-            },
-            (FrameCounterMode::FourStep, 4) => {
-                self.clock_envelopes();
-                self.clock_length_counters();
-                self.clock_sweep_units();
-                self.frame_counter.apu_cycle = 0;
-            },
-            (FrameCounterMode::FiveStep, 4) => {
-                self.clock_envelopes();
-            },
-            (FrameCounterMode::FiveStep, 5) => {
-                self.clock_envelopes();
-                self.clock_length_counters();
-                self.clock_sweep_units();
-                self.frame_counter.apu_cycle = 0;
-            },
-            _ => unreachable!(),
+        if self.frame_counter.apu_cycle < 3729 {
+            return
         }
+
+        let steps_to_execute= (self.frame_counter.apu_cycle / 3729) as u8;
+        self.frame_counter.apu_cycle = self.frame_counter.apu_cycle % 3729;
+
+        for step in self.frame_counter.next_step..(steps_to_execute + self.frame_counter.next_step) {
+
+            match (&self.frame_counter.mode, step) {
+                (_, 0) => {
+                    self.clock_envelopes();
+                },
+                (_, 1) => {
+                    self.clock_envelopes();
+                    self.clock_length_counters();
+                    self.clock_sweep_units();
+                },
+                (_, 2) => {
+                    self.clock_envelopes();
+                },
+                (FrameCounterMode::FourStep, 3) => {
+                    self.clock_envelopes();
+                    self.clock_length_counters();
+                    self.clock_sweep_units();
+                },
+                (FrameCounterMode::FiveStep, 3) => {
+                    self.clock_envelopes();
+                },
+                (FrameCounterMode::FiveStep, 4) => {
+                    self.clock_envelopes();
+                    self.clock_length_counters();
+                    self.clock_sweep_units();
+                },
+                _ => unreachable!(),
+            }
+        }
+
+        let max_steps = if let FrameCounterMode::FiveStep = self.frame_counter.mode {
+            5
+        } else {
+            4
+        };
+        self.frame_counter.next_step = (self.frame_counter.next_step + steps_to_execute) % max_steps;
     }
 
     fn clock_mixer(&mut self) {
-        let sample = self.pulse1.get_sample();
-        self.samples[self.samples_index] = sample;
-        self.samples_index = (self.samples_index + 1) % MAX_SAMPLING_BUFFER_SIZE;
+        let sample1 = self.pulse1.get_sample();
+        let sample2 = self.pulse2.get_sample();
+        //let sample = sample1 + sample2;
+
+        let sample = (95.88) / ((8128.0 / (sample1 + sample2)) + 100.0);
+
+        self.sound_player.push_sample(sample);
     }
 }
 
@@ -582,13 +592,13 @@ impl<T: SoundPlayback> APU for ApuRp2A03<T> {
 
         while apu_cycles_used < apu_credits {
             self.clock_pulse_timers();
-            self.clock_frame_sequencer(apu_cycles_used);
+            self.clock_frame_sequencer(1);
 
             if self.last_mixer_cycle > MIXER_SAMPLING_CYCLE_THRESHOLD {
                 self.clock_mixer();
-                self.last_mixer_cycle += 1;
-            } else {
                 self.last_mixer_cycle = 0;
+            } else {
+                self.last_mixer_cycle += 1;
             }
 
             apu_cycles_used += 1;
