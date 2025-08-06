@@ -78,7 +78,7 @@ impl Tick for Sweep {
         self.divider -= 1;
 
         if self.divider == 0 {
-            if self.shift > 0 && self.enabled && self.period >= 8 && self.target_period <= 0x7FF {
+            if self.shift > 0 && self.enabled && self.period >= 8 /*** && self.target_period <= 0x7FF ***/ {
                 self.target_period = self.compute_target_period();
             }
 
