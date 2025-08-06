@@ -91,7 +91,7 @@ impl SoundPlaybackSDL2 {
             samples: None,
         };
 
-        let mut audio_buffer = Arc::new(Mutex::new(NESAudioBuffer::new()));
+        let audio_buffer = Arc::new(Mutex::new(NESAudioBuffer::new()));
         let audio_callback = NesAudioCallback::new(audio_buffer.clone());
 
         let audio_device = audio_subsystem

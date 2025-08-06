@@ -1,7 +1,7 @@
 [package]
 name = "mm_nes"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 log = { version = "0.4.22", features = ["max_level_trace", "release_max_level_info"] }
@@ -10,7 +10,7 @@ once_cell = "1.19.0"
 lazy_static = "1.5.0"
 clap = { version = "4.5.15", features = ["derive"] }
 clap-num = "1.1.1"
-sdl2 = { version = "0.37.0", features = ["unsafe_textures"] }
+sdl2 = { version = "0.38.0", features = ["unsafe_textures"] }
 
 
 [dev-dependencies]
