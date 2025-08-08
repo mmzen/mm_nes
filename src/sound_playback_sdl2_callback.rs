@@ -32,11 +32,11 @@ impl NESAudioBuffer {
 }
 
 struct NesAudioCallback {
-        audio_buffer: Arc<Mutex<NESAudioBuffer>>
+        audio_buffer: NESAudioBuffer
 }
 
 impl NesAudioCallback {
-    fn new(audio_buffer: Arc<Mutex<NESAudioBuffer>>) -> Self {
+    fn new(audio_buffer: NESAudioBuffer) -> Self {
         NesAudioCallback {
             audio_buffer
         }
@@ -47,29 +47,26 @@ impl AudioCallback for NesAudioCallback {
     type Channel = f32;
 
     fn callback(&mut self, out: &mut [f32]) {
-        debug!("filling buffer ({} samples)", out.len());
-
         for i in out.iter_mut() {
-            *i = self.audio_buffer.lock().unwrap().pop_sample();
+            *i = self.audio_buffer.pop_sample();
         }
     }
 }
 
 pub struct SoundPlaybackSDL2 {
-    audio_buffer: Arc<Mutex<NESAudioBuffer>>,
     audio_device: AudioDevice<NesAudioCallback>
 }
 
 impl Debug for SoundPlaybackSDL2 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SoundPlaybackSDL2")
-           .finish()
+        f.debug_struct("SoundPlaybackSDL2").finish()
     }
 }
 
 impl SoundPlayback for SoundPlaybackSDL2 {
     fn push_sample(&mut self, sample: f32) {
-        self.audio_buffer.lock().unwrap().push_sample(sample);
+        let clamped_sample = sample.clamp(-1.0, 1.0);
+        self.audio_device.lock().audio_buffer.push_sample(clamped_sample)
     }
 
     fn resume(&self) {
@@ -91,20 +88,18 @@ impl SoundPlaybackSDL2 {
             samples: None,
         };
 
-        let audio_buffer = Arc::new(Mutex::new(NESAudioBuffer::new()));
-        let audio_callback = NesAudioCallback::new(audio_buffer.clone());
+        let audio_buffer = NESAudioBuffer::new();
+        let audio_callback = NesAudioCallback::new(audio_buffer);
 
         let audio_device = audio_subsystem
             .open_playback(None, &desired_spec, |_| audio_callback)
             .unwrap();
 
         let player = SoundPlaybackSDL2 {
-            audio_buffer,
-            audio_device,
+            audio_device
         };
 
         player.audio_device.resume();
-
         Ok(player)
     }
 }

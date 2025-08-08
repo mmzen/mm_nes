@@ -46,7 +46,7 @@ mod standard_controller;
 mod input;
 mod input_sdl2;
 mod sound_playback;
-mod sound_playback_sdl2;
+mod sound_playback_sdl2_callback;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

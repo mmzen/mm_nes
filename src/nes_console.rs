@@ -26,7 +26,7 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
 use crate::sound_playback::SoundPlaybackError;
-use crate::sound_playback_sdl2::SoundPlaybackSDL2;
+use crate::sound_playback_sdl2_callback::SoundPlaybackSDL2;
 use crate::standard_controller::StandardController;
 use crate::util::measure_exec_time;
 

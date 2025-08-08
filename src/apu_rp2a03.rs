@@ -36,6 +36,7 @@ enum ChannelType {
 trait Channel {
     #[allow(dead_code)]
     fn reset(&mut self);
+    fn is_muted(&self) -> bool;
     fn get_sample(&self) -> f32;
 }
 
@@ -47,6 +48,7 @@ struct Sweep {
     divider: u8,
     negate: bool,
     reload: bool,
+    target_period: u16,
     update_real_period: bool
 }
 
@@ -59,6 +61,7 @@ impl Sweep {
             divider: 0,
             negate: false,
             reload: false,
+            target_period: 0,
             update_real_period: false
         }
     }
@@ -71,6 +74,8 @@ impl Sweep {
         self.divider = 0;
         self.negate = false;
         self.reload = false;
+        self.target_period = 0;
+        self.update_real_period = false;
     }
 
     fn compute_target_period(&self, timer_period: u16) -> u16 {
@@ -130,6 +135,7 @@ impl Envelope {
     #[allow(dead_code)]
     fn reset(&mut self) {
         self.start_flag = false;
+        self.loop_flag = false;
         self.const_volume = false;
         self.counter = 0;
         self.divider = 0;
@@ -146,7 +152,7 @@ impl Tick for Envelope {
         } else {
             if self.divider > 0 {
                 self.divider -= 1;
-            } else { /*** divider == 0 ***/
+            } else {
                 self.divider = self.volume;
 
                 if self.counter > 0 {
@@ -163,7 +169,7 @@ impl Tick for Envelope {
 struct LengthCounter {
     halt: bool,
     counter: u8,
-    reload: u8
+    counter_initial: u8
 }
 
 impl LengthCounter {
@@ -176,7 +182,7 @@ impl LengthCounter {
         LengthCounter {
             halt: false,
             counter: 0,
-            reload: 0
+            counter_initial: 0
         }
     }
 
@@ -184,7 +190,11 @@ impl LengthCounter {
     fn reset(&mut self) {
         self.halt = false;
         self.counter = 0;
-        self.reload = 0;
+        self.counter_initial = 0;
+    }
+
+    fn reload(&mut self) {
+        self.counter = self.counter_initial;
     }
 }
 
@@ -221,13 +231,45 @@ impl Channel for Pulse {
         self.length_counter.reset();
     }
 
+    fn is_muted(&self) -> bool {
+        if self.enabled == false {
+            return true;
+        }
+
+        if !self.length_counter.halt && self.length_counter.counter == 0 {
+            //println!("muted enabled {}", self.length_counter.halt);
+            return true;
+        }
+
+        if self.timer_period < 8 {
+            //println!("muted timer_period");
+            return true;
+        }
+
+        if self.sweep.target_period > 0x07FF {
+            //println!("muted sweep");
+            return true;
+        }
+
+        if !self.envelope.const_volume && self.envelope.counter == 0 {
+            //println!("muted envelope");
+            return true;
+        }
+
+        false
+    }
+
     fn get_sample(&self) -> f32 {
-        (DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index] * self.envelope.get_volume()) as f32
+        if self.is_muted() == true {
+            0.0
+        } else {
+            //println!("not muted");
+            (DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index] * self.envelope.get_volume()) as f32
+        }
     }
 }
 
 impl Pulse {
-
 
     fn new() -> Self {
         Pulse {
@@ -325,7 +367,7 @@ impl<T: SoundPlayback> Memory for ApuRp2A03<T> {
             0x04 | 0x05 | 0x06 | 0x07 => self.read_pulse(addr)?,
             0x15 => self.read_channels_status()?,
             _ => {
-                debug!("APU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x4000);
+                trace!("APU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x4000);
                 0
             },
         };
@@ -408,9 +450,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         pulse.envelope.divider = value & 0x0F;
         pulse.envelope.volume = value & 0x0F;
 
-        //println!("APU: updated pulse control (0x{:02X}) {:?}: enabled: {}, duty: {} ({:?}), length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
-        //         value, channel_type, pulse.enabled, pulse.duty_cycle, Pulse::DUTY_CYCLES[pulse.duty_cycle],
-        //         pulse.length_counter.halt, pulse.envelope.loop_flag, pulse.envelope.const_volume, pulse.envelope.divider, pulse.envelope.volume);
+        trace!("APU: updated pulse control (0x{:02X}) {:?}: enabled: {}, duty: {} ({}), length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
+                 value, channel_type, pulse.enabled, pulse.duty_name(), pulse.duty_position(),
+                 pulse.length_counter.halt, pulse.envelope.loop_flag, pulse.envelope.const_volume, pulse.envelope.divider, pulse.envelope.volume);
 
         Ok(())
     }
@@ -453,9 +495,11 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         let pulse = self.get_pulse_channel_by_type(&channel_type);
 
         pulse.timer_period = (pulse.timer_period & 0x00FF) | (((value & 0x07) as u16) << 8);
+        pulse.timer_counter = pulse.timer_period;
 
         if pulse.enabled {
-            pulse.length_counter.reload = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
+            pulse.length_counter.counter_initial = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
+            pulse.length_counter.reload();
         }
 
         pulse.envelope.start_flag = true;
@@ -486,11 +530,18 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     fn write_channels_status(&mut self, value: u8) -> Result<(), MemoryError> {
-        self.pulse1.enabled = (value & 0x01) != 0;
-        self.pulse2.enabled = (value & 0x02) != 0;
+        self.pulse1.enabled = value & 0x01 != 0;
+        self.pulse2.enabled = value & 0x02 != 0;
 
-        trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}",
-             self.pulse1.enabled, self.pulse2.enabled);
+        for pulse in [&mut self.pulse1, &mut self.pulse2] {
+            if pulse.enabled == false {
+                pulse.length_counter.counter = 0
+            }
+        }
+
+        trace!("APU: updated channels status: pulse1 enabled: {} (muted: {}), pulse2 enabled: {} (muted: {})",
+             self.pulse1.enabled, self.pulse1.is_muted(),
+             self.pulse2.enabled, self.pulse2.is_muted());
 
         Ok(())
     }
@@ -502,6 +553,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         };
 
         self.frame_counter.inhibit_irq = (value & 0x40) != 0;
+        self.frame_counter.next_step = 0;
+        self.frame_counter.apu_cycle = 0;
 
         trace!("APU: updated frame counter: mode: {:?}, inhibit_irq: {}",
              self.frame_counter.mode, self.frame_counter.inhibit_irq);
@@ -552,12 +605,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
                         pulse.timer_period.wrapping_sub(delta)
                     } else {
                         pulse.timer_period.wrapping_add(delta)
-                    } ;
+                    };
 
-                    /***
-                     * the target_period needs to be stored as it can mute the channel ?
-                     * 0x7FF
-                     ***/
+                    pulse.sweep.target_period = new_period;
                     pulse.timer_period = new_period & 0x07FF;
                 }
 
@@ -635,9 +685,10 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
     fn clock_mixer(&mut self) {
         let sample1 = self.pulse1.get_sample();
-        let sample2 = self.pulse2.get_sample();
+        //let sample2 = self.pulse2.get_sample();
 
-        let sample = (95.88) / ((8128.0 / (sample1 + sample2)) + 100.0);
+        let sample = (95.88) / ((8128.0 / (sample1)) + 100.0);
+        //let sample = 0.1;
 
         self.sound_player.push_sample(sample);
     }
