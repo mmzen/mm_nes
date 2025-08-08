@@ -1,5 +1,3 @@
-use std::thread::sleep;
-use std::time::Duration;
 use log::{debug, info, trace};
 use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
@@ -10,8 +8,10 @@ use crate::sound_playback::SoundPlayback;
 const APU_NAME: &str = "APU RP2A03";
 const APU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x4000, 0x4017);
 const APU_EXTERNAL_MEMORY_SIZE: usize = 32;
-const MAX_SAMPLING_BUFFER_SIZE: usize = 44_100;
-const MIXER_SAMPLING_CYCLE_THRESHOLD: u32 = 20;
+const APU_RATE: f64 = 894_886.5;
+const AUDIO_RATE: f64 = 44_100.0;
+const APU_CYCLES_PER_SAMPLE: f64 = APU_RATE / AUDIO_RATE; // ~20.29
+
 const DUTY_CYCLES: [[u8; 8]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 1],
     [0, 0, 0, 0, 0, 0, 1, 1],
@@ -243,14 +243,10 @@ impl Channel for Pulse {
     }
 
     fn get_sample(&self) -> f32 {
-        if self.is_muted() == true {
+        if self.is_muted() == true || self.duty_bit() == 0 {
             0.0
         } else {
-            if self.duty_bit() == 0 {
-                0.0
-            } else {
-                self.envelope.get_volume() as f32
-            }
+            self.envelope.get_volume() as f32
         }
     }
 }
@@ -283,7 +279,7 @@ impl Pulse {
             _ => unreachable!()
         }
     }
-    
+
     fn duty_bit(&self) -> u8 {
         DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index]
     }
@@ -319,9 +315,7 @@ pub struct ApuRp2A03<T: SoundPlayback> {
     pulse1: Pulse,
     pulse2: Pulse,
     frame_counter: FrameCounter,
-    last_mixer_cycle: u32,
-    samples: [f32; MAX_SAMPLING_BUFFER_SIZE],
-    samples_index: usize,
+    apu_cycles_acc: f64,
     sound_player: T
 }
 
@@ -412,10 +406,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
             frame_counter: FrameCounter::new(),
-            last_mixer_cycle: 0,
-            samples: [0.0; MAX_SAMPLING_BUFFER_SIZE],
-            samples_index: 0,
             sound_player,
+            apu_cycles_acc: 0.0,
         }
     }
 
@@ -508,8 +500,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
      * https://www.nesdev.org/wiki/APU#Status_($4015)
      ***/
     fn read_channels_status(&self) -> Result<u8, MemoryError> {
-        let pulse1 = self.pulse1.length_counter.halt || self.pulse1.timer_period == 0;
-        let pulse2 = self.pulse2.length_counter.halt || self.pulse2.timer_period == 0;
+        let pulse1 = self.pulse1.timer_period > 0;
+        let pulse2 = self.pulse2.timer_period > 0;
 
         let status = (pulse1 as u8) | ((pulse2 as u8) << 1);
 
@@ -585,13 +577,19 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
     fn tick_sweep_units(&mut self) {
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
+            let mut id = 1;
+
             pulse.sweep.tick();
 
             if pulse.sweep.update_real_period {
                 if pulse.timer_period >= 8 {
-                    let delta= pulse.sweep.compute_target_period(pulse.timer_period);
+                    let mut delta= pulse.sweep.compute_target_period(pulse.timer_period);
 
                     let new_period = if pulse.sweep.negate {
+                        if id == 1 {
+                            delta = delta + 1;
+                        }
+
                         pulse.timer_period.wrapping_sub(delta)
                     } else {
                         pulse.timer_period.wrapping_add(delta)
@@ -602,6 +600,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
                 }
 
                 pulse.sweep.update_real_period = false;
+                id = id + 1;
             }
         }
     }
@@ -675,10 +674,10 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
     fn clock_mixer(&mut self) {
         let sample1 = self.pulse1.get_sample();
-        //let sample2 = self.pulse2.get_sample();
+        let sample2 = self.pulse2.get_sample();
 
-        let sample_sum = sample1; // + sample2;
-        let sample = if sample_sum == 0.0 { 0.0 } else { (95.88) / ((8128.0 / (sample1)) + 100.0) };
+        let sample_sum = sample1 + sample2;
+        let sample = if sample_sum == 0.0 { 0.0 } else { (95.88) / ((8128.0 / (sample_sum)) + 100.0) };
 
         self.sound_player.push_sample(sample);
     }
@@ -706,21 +705,17 @@ impl<T: SoundPlayback> APU for ApuRp2A03<T> {
      *
      ***/
     fn run(&mut self, _: u32, credits: u32) -> Result<u32, ApuError> {
-        let mut apu_cycles_used = 0;
         let apu_credits = ApuRp2A03::<T>::convert_cpu_cycles_to_apu_cycles(credits);
 
-        while apu_cycles_used < apu_credits {
+        for _ in 0..apu_credits {
             self.clock_pulse_timers();
             self.clock_frame_sequencer(1);
+            self.apu_cycles_acc += 1.0;
 
-            if self.last_mixer_cycle > MIXER_SAMPLING_CYCLE_THRESHOLD {
+            while self.apu_cycles_acc >= APU_CYCLES_PER_SAMPLE {
                 self.clock_mixer();
-                self.last_mixer_cycle = 0;
-            } else {
-                self.last_mixer_cycle += 1;
+                self.apu_cycles_acc -= APU_CYCLES_PER_SAMPLE;
             }
-
-            apu_cycles_used += 1;
         }
 
         Ok(credits)
