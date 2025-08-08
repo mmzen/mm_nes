@@ -26,7 +26,8 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
 use crate::sound_playback::SoundPlaybackError;
-use crate::sound_playback_sdl2_callback::SoundPlaybackSDL2;
+use crate::sound_playback_sdl2_callback::SoundPlaybackSDL2Callback;
+use crate::sound_playback_sdl2_queue::SoundPlaybackSDL2Queue;
 use crate::standard_controller::StandardController;
 use crate::util::measure_exec_time;
 
@@ -360,7 +361,7 @@ impl NESConsoleBuilder {
 
         let result = match apu_type {
             ApuType::RP2A03 => {
-                let sound_player = SoundPlaybackSDL2::new(sdl_context)?;
+                let sound_player = SoundPlaybackSDL2Queue::new(sdl_context)?;
                 ApuRp2A03::new(sound_player)
             },
         };

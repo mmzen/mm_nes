@@ -232,27 +232,10 @@ impl Channel for Pulse {
     }
 
     fn is_muted(&self) -> bool {
-        if self.enabled == false {
-            return true;
-        }
-
-        if !self.length_counter.halt && self.length_counter.counter == 0 {
-            //println!("muted enabled {}", self.length_counter.halt);
-            return true;
-        }
-
-        if self.timer_period < 8 {
-            //println!("muted timer_period");
-            return true;
-        }
-
-        if self.sweep.target_period > 0x07FF {
-            //println!("muted sweep");
-            return true;
-        }
-
-        if !self.envelope.const_volume && self.envelope.counter == 0 {
-            //println!("muted envelope");
+        if self.enabled == false ||
+            self.length_counter.counter == 0 ||
+            self.timer_period < 8 ||
+            (self.sweep.enabled && self.sweep.target_period > 0x07FF) {
             return true;
         }
 
@@ -263,8 +246,11 @@ impl Channel for Pulse {
         if self.is_muted() == true {
             0.0
         } else {
-            //println!("not muted");
-            (DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index] * self.envelope.get_volume()) as f32
+            if self.duty_bit() == 0 {
+                0.0
+            } else {
+                self.envelope.get_volume() as f32
+            }
         }
     }
 }
@@ -296,6 +282,10 @@ impl Pulse {
             1 => "UP",
             _ => unreachable!()
         }
+    }
+    
+    fn duty_bit(&self) -> u8 {
+        DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index]
     }
 }
 
@@ -687,8 +677,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         let sample1 = self.pulse1.get_sample();
         //let sample2 = self.pulse2.get_sample();
 
-        let sample = (95.88) / ((8128.0 / (sample1)) + 100.0);
-        //let sample = 0.1;
+        let sample_sum = sample1; // + sample2;
+        let sample = if sample_sum == 0.0 { 0.0 } else { (95.88) / ((8128.0 / (sample1)) + 100.0) };
 
         self.sound_player.push_sample(sample);
     }

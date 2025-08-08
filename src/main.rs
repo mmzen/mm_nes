@@ -47,6 +47,7 @@ mod input;
 mod input_sdl2;
 mod sound_playback;
 mod sound_playback_sdl2_callback;
+mod sound_playback_sdl2_queue;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
