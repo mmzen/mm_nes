@@ -87,17 +87,15 @@ impl Tick for Sweep {
     fn tick(&mut self) {
         self.divider = self.divider.wrapping_sub(1);
 
-        if self.divider == 0 {
+        if self.reload == true {
+            self.divider = self.initial_divider;
+            self.reload = false;
+        } else if self.divider == 0 {
             if self.shift > 0 && self.enabled {
                 self.update_real_period = true;
             }
 
             self.divider = self.initial_divider;
-        }
-
-        if self.reload == true {
-            self.divider = self.initial_divider;
-            self.reload = false;
         }
     }
 }
@@ -500,8 +498,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
      * https://www.nesdev.org/wiki/APU#Status_($4015)
      ***/
     fn read_channels_status(&self) -> Result<u8, MemoryError> {
-        let pulse1 = self.pulse1.timer_period > 0;
-        let pulse2 = self.pulse2.timer_period > 0;
+        let pulse1 = self.pulse1.length_counter.counter > 0;
+        let pulse2 = self.pulse2.length_counter.counter > 0;
 
         let status = (pulse1 as u8) | ((pulse2 as u8) << 1);
 
@@ -576,31 +574,33 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
 
     fn tick_sweep_units(&mut self) {
-        for pulse in [&mut self.pulse1, &mut self.pulse2] {
-            let mut id = 1;
+
+        for (idx, pulse) in [&mut self.pulse1, &mut self.pulse2].iter_mut().enumerate() {
+            let is_pulse1 = idx == 0;
 
             pulse.sweep.tick();
 
             if pulse.sweep.update_real_period {
-                if pulse.timer_period >= 8 {
+                if pulse.timer_period >= 8 && pulse.sweep.shift > 0 {
                     let mut delta= pulse.sweep.compute_target_period(pulse.timer_period);
 
                     let new_period = if pulse.sweep.negate {
-                        if id == 1 {
+                        if is_pulse1 == true {
                             delta = delta + 1;
                         }
-
                         pulse.timer_period.wrapping_sub(delta)
                     } else {
                         pulse.timer_period.wrapping_add(delta)
                     };
 
                     pulse.sweep.target_period = new_period;
-                    pulse.timer_period = new_period & 0x07FF;
+
+                    if new_period <= 0x07FF {
+                        pulse.timer_period = new_period & 0x07FF;
+                    }
                 }
 
                 pulse.sweep.update_real_period = false;
-                id = id + 1;
             }
         }
     }
@@ -678,8 +678,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
         let sample_sum = sample1 + sample2;
         let sample = if sample_sum == 0.0 { 0.0 } else { (95.88) / ((8128.0 / (sample_sum)) + 100.0) };
+        let out = (sample.min(1.0).max(0.0) * 2.0) - 1.0;
 
-        self.sound_player.push_sample(sample);
+        self.sound_player.push_sample(out);
     }
 }
 
