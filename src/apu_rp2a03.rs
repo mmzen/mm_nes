@@ -31,7 +31,8 @@ trait Tick {
 #[derive(Debug)]
 enum ChannelType {
     Pulse1,
-    Pulse2
+    Pulse2,
+    Noise
 }
 
 trait Channel {
@@ -212,10 +213,9 @@ struct Pulse {
     duty_cycle_index: usize,
     timer_period: u16,
     timer_counter: u16,
-
     sweep: Sweep,
     envelope: Envelope,
-    length_counter: LengthCounter,
+    length_counter: LengthCounter
 }
 
 impl Channel for Pulse {
@@ -285,6 +285,69 @@ impl Pulse {
 }
 
 #[derive(Debug)]
+enum ShiftMode {
+    Zero,
+    One
+}
+const NOISE_PERIOD_DURATIONS: [u16; 16] = [
+    4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068
+];
+
+#[derive(Debug)]
+struct Noise {
+    enabled: bool,
+    timer_period: u16,
+    timer_counter: u16,
+    shift_register: u16,
+    shift_mode: ShiftMode,
+    envelope: Envelope,
+    length_counter: LengthCounter
+}
+
+impl Channel for Noise {
+    fn reset(&mut self) {
+        self.enabled = false;
+        self.timer_period = 0;
+        self.timer_counter = 0;
+        self.shift_register = 1;
+        self.shift_mode = ShiftMode::Zero;
+        self.envelope.reset();
+        self.length_counter.reset();
+    }
+
+    fn is_muted(&self) -> bool {
+        self.enabled == false || self.length_counter.counter == 0 ||
+            self.shift_register & 0x01 == 0x01
+    }
+
+    fn get_sample(&self) -> f32 {
+        if self.is_muted() == true {
+            0.0
+        } else {
+            self.envelope.get_volume() as f32
+        }
+    }
+}
+
+impl Noise {
+    fn new() -> Self {
+        Noise {
+            enabled: false,
+            timer_period: 0,
+            timer_counter: 0,
+            shift_register: 1,
+            shift_mode: ShiftMode::Zero,
+            envelope: Envelope::new(),
+            length_counter: LengthCounter::new(),
+        }
+    }
+
+    fn period(value: u8) -> u16 {
+        NOISE_PERIOD_DURATIONS[value as usize] / 2
+    }
+}
+
+#[derive(Debug)]
 enum FrameCounterMode {
     FourStep,
     FiveStep
@@ -347,6 +410,7 @@ impl FrameCounter {
 pub struct ApuRp2A03<T: SoundPlayback> {
     pulse1: Pulse,
     pulse2: Pulse,
+    noise: Noise,
     frame_counter: FrameCounter,
     apu_cycles_acc: f64,
     sound_player: T
@@ -410,6 +474,9 @@ impl<T: SoundPlayback> Memory for ApuRp2A03<T> {
             0x07 => self.write_length_counter_and_timer_hi(ChannelType::Pulse2, value)?,
             0x15 => self.write_channels_status(value)?,
             0x17 => self.write_frame_counter(value)?,
+            0x0C => self.write_noise_control(value)?,
+            0x0E => self.write_noise_mode_and_period(value)?,
+            0x0F => self.write_length_counter_and_envelope_restart(ChannelType::Noise, value)?,
             _ => debug!("APU: registers access: write byte at 0x{:04X} (0x{:04X}): 0x{:02X}", addr, addr + 0x4000, value),
         };
 
@@ -438,6 +505,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         ApuRp2A03 {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
+            noise: Noise::new(),
             frame_counter: FrameCounter::new(),
             sound_player,
             apu_cycles_acc: 0.0,
@@ -452,6 +520,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         match channel_type {
             ChannelType::Pulse1 => &mut self.pulse1,
             ChannelType::Pulse2 => &mut self.pulse2,
+            _ => { unreachable!() }
         }
     }
 
@@ -591,6 +660,50 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         Ok(())
     }
 
+    fn write_noise_control(&mut self, value: u8) -> Result<(), MemoryError> {
+        let noise = &mut self.noise;
+
+        noise.length_counter.halt = (value & 0x20) != 0;
+        noise.envelope.loop_flag = (value & 0x20) != 0;
+        noise.envelope.const_volume = (value & 0x10) != 0;
+        noise.envelope.divider = value & 0x0F;
+        noise.envelope.volume = value & 0x0F;
+
+        trace!("APU: updated noise control (0x{:02X}): enabled: {}, length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
+                 value, noise.enabled, noise.length_counter.halt, noise.envelope.loop_flag,
+                 noise.envelope.const_volume, noise.envelope.divider, noise.envelope.volume);
+
+        Ok(())
+    }
+
+    fn write_noise_mode_and_period(&mut self, value: u8) -> Result<(), MemoryError> {
+        let noise = &mut self.noise;
+
+        let idx = value & 0x0F;
+        noise.timer_period = Noise::period(idx);
+        noise.shift_mode = if (value & 0x80) == 0 {
+            ShiftMode::Zero
+        } else {
+            ShiftMode::One
+        };
+
+        Ok(())
+    }
+
+    fn write_length_counter_and_envelope_restart(&mut self, _: ChannelType, value: u8) -> Result<(), MemoryError> {
+        let noise = &mut self.noise;
+
+        noise.length_counter.counter_initial = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
+        noise.length_counter.reload();
+
+        noise.envelope.start_flag = true;
+
+        trace!("APU: updated length counter and envelope restart for noise channel: counter initial: {}, reload: {}",
+                 noise.length_counter.counter_initial, noise.envelope.start_flag);
+
+        Ok(())
+    }
+
     fn clock_pulse_timers(&mut self) {
         let mut idx = 1;
 
@@ -614,6 +727,22 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             }
 
             idx += 1 ;
+        }
+    }
+
+    fn clock_noise_timer(&mut self) {
+
+        if self.noise.timer_counter == 0 {
+            let shift_by = match self.noise.shift_mode {
+                ShiftMode::Zero => { 1 },
+                ShiftMode::One => { 6 }
+            };
+
+            let feedback = (self.noise.shift_register & 0x01) ^ ((self.noise.shift_register >> shift_by) & 0x01);
+            self.noise.shift_register >>= 1;
+            self.noise.shift_register |= feedback << 14;
+
+            self.noise.timer_counter -= 1;
         }
     }
 
@@ -658,12 +787,16 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
             pulse.length_counter.tick();
         }
+
+        self.noise.length_counter.tick();
     }
 
     fn tick_envelopes(&mut self) {
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
             pulse.envelope.tick();
         }
+
+        self.noise.envelope.tick();
     }
 
     fn clock_frame_sequencer(&mut self, cycle: u32) {
@@ -707,7 +840,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         }
     }
 
-    fn clock_mixer(&mut self) {
+    fn pulse_out(&mut self) -> f32 {
         let sample1 = self.pulse1.get_sample();
         let sample2 = self.pulse2.get_sample();
 
@@ -715,7 +848,24 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         let sample = if sample_sum == 0.0 { 0.0 } else { (95.88) / ((8128.0 / (sample_sum)) + 100.0) };
         let out = (sample.min(1.0).max(0.0) * 2.0) - 1.0;
 
-        self.sound_player.push_sample(out);
+        out
+    }
+
+    fn tnd_out(&mut self) -> f32 {
+        let noise = self.noise.get_sample();
+        let triangle = 0.0;
+        let dmc = 0.0;
+
+        let tnd_out = 159.79 / ((1.0 / (triangle / 8227.0) + (noise / 12241.0) + (dmc / 22638.0)) + 100.0);
+
+        tnd_out
+    }
+
+    fn clock_mixer(&mut self) {
+        let pulse_out = self.pulse_out();
+        let tnd_out = self.tnd_out();
+
+        self.sound_player.push_sample(pulse_out + tnd_out);
     }
 }
 
@@ -745,7 +895,9 @@ impl<T: SoundPlayback> APU for ApuRp2A03<T> {
 
         for _ in 0..apu_credits {
             self.clock_pulse_timers();
+            self.clock_noise_timer();
             self.clock_frame_sequencer(1);
+
             self.apu_cycles_acc += 1.0;
 
             while self.apu_cycles_acc >= APU_CYCLES_PER_SAMPLE {
