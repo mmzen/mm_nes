@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use log::{debug, info, trace};
 use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
@@ -289,12 +290,35 @@ enum FrameCounterMode {
     FiveStep
 }
 
+const FRAME_COUNTER_4_STEPS_EVENTS: [u32; 4] = [3728, 7456, 11185, 14914];
+
+/***
+ * quarter_frame, half_frame, interrupt flag
+ */
+const FRAME_COUNTER_4_STEPS_SEQUENCES: [(bool, bool, bool); 4] = [
+    (true,  false, false), // step 0 (3728)  : quarter
+    (true,  true, false ), // step 1 (7456)  : quarter + half
+    (true,  false, false), // step 2 (11185) : quarter
+    (true,  true, true ), // step 3 (14914) : quarter + half + irq
+];
+
+const FRAME_COUNTER_5_STEPS_EVENTS: [u32; 5] = [3728, 7456, 11185, 14914, 18640];
+
+const FRAME_COUNTER_5_STEPS_SEQUENCES: [(bool, bool, bool); 5] = [
+    (true,  false, false), // step 0 (3728)  : quarter
+    (true,  true, false ), // step 1 (7456)  : quarter + half
+    (true,  false, false), // step 2 (11185) : quarter
+    (false, false, false), // step 3 (14914) : nothing
+    (true,  true, false), // step 4 (18640) : quarter + half
+];
+
 #[derive(Debug)]
 struct FrameCounter {
     mode: FrameCounterMode,
     inhibit_irq: bool,
+    frame_irq: Cell<bool>,
     apu_cycle: u32,
-    next_step: u8
+    next_step: usize
 }
 
 impl FrameCounter {
@@ -302,9 +326,20 @@ impl FrameCounter {
         FrameCounter {
             mode: FrameCounterMode::FourStep,
             inhibit_irq: false,
+            frame_irq: Cell::new(true),
             apu_cycle: 0,
             next_step: 0,
         }
+    }
+
+    fn frame_tables(&self) -> (&'static [u32], &'static [(bool, bool, bool)]) {
+        match self.mode {
+            FrameCounterMode::FourStep => (&FRAME_COUNTER_4_STEPS_EVENTS, &FRAME_COUNTER_4_STEPS_SEQUENCES),
+            FrameCounterMode::FiveStep => (&FRAME_COUNTER_5_STEPS_EVENTS, &FRAME_COUNTER_5_STEPS_SEQUENCES),
+        }
+    }
+
+    fn interrupt(&mut self) {
     }
 }
 
@@ -501,7 +536,13 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         let pulse1 = self.pulse1.length_counter.counter > 0;
         let pulse2 = self.pulse2.length_counter.counter > 0;
 
-        let status = (pulse1 as u8) | ((pulse2 as u8) << 1);
+        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1);
+
+        if self.frame_counter.frame_irq.get() == true {
+            status |= 0x40;
+        }
+
+        self.frame_counter.frame_irq.set(false);
 
         trace!("APU: channels status: pulse1: {}, pulse2: {}, status: 0x{:02X}",
              pulse1, pulse2, status);
@@ -533,8 +574,16 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         };
 
         self.frame_counter.inhibit_irq = (value & 0x40) != 0;
+        self.frame_counter.frame_irq.set(!self.frame_counter.inhibit_irq);
+
         self.frame_counter.next_step = 0;
         self.frame_counter.apu_cycle = 0;
+
+        if let FrameCounterMode::FiveStep = self.frame_counter.mode {
+            self.tick_envelopes();
+            self.tick_length_counters();
+            self.tick_sweep_units();
+        }
 
         trace!("APU: updated frame counter: mode: {:?}, inhibit_irq: {}",
              self.frame_counter.mode, self.frame_counter.inhibit_irq);
@@ -618,58 +667,44 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     fn clock_frame_sequencer(&mut self, cycle: u32) {
+        let (events, quarter_half_interrupt) = self.frame_counter.frame_tables();
+
         self.frame_counter.apu_cycle += cycle;
 
-        if self.frame_counter.apu_cycle < 3729 {
-            return
+        debug!("APU: frame sequencer: cycle: {}, mode: {:?}, next_step: {}",
+            self.frame_counter.apu_cycle, self.frame_counter.mode, self.frame_counter.next_step);
+
+        for _ in events.iter() {
+            let idx = self.frame_counter.next_step;
+
+           if self.frame_counter.apu_cycle >= events[idx] {
+               let do_quarter = quarter_half_interrupt[idx].0;
+               let do_half = quarter_half_interrupt[idx].1;
+               let do_interrupt = quarter_half_interrupt[idx].2;
+
+               if do_quarter {
+                   self.tick_envelopes();
+               }
+
+               if do_half {
+                   self.tick_length_counters();
+                   self.tick_sweep_units();
+               }
+
+               if do_interrupt && self.frame_counter.inhibit_irq == false && self.frame_counter.frame_irq.get() == true {
+                   self.frame_counter.interrupt();
+               }
+
+               self.frame_counter.next_step += 1;
+
+               if self.frame_counter.next_step >= events.len() {
+                   self.frame_counter.next_step = 0;
+                   self.frame_counter.apu_cycle = 0;
+               }
+           } else {
+               break;
+           }
         }
-
-        let steps_to_execute= (self.frame_counter.apu_cycle / 3729) as u8;
-        self.frame_counter.apu_cycle = self.frame_counter.apu_cycle % 3729;
-
-        for step in self.frame_counter.next_step..(steps_to_execute + self.frame_counter.next_step) {
-
-            match (&self.frame_counter.mode, step) {
-                (_, 0) => {
-                    self.tick_envelopes();
-                },
-                (_, 1) => {
-                    self.tick_envelopes();
-                    self.tick_length_counters();
-                    self.tick_sweep_units();
-                },
-                (_, 2) => {
-                    self.tick_envelopes();
-                },
-                (FrameCounterMode::FourStep, 3) => {
-                    self.tick_envelopes();
-                    self.tick_length_counters();
-                    self.tick_sweep_units();
-                },
-                (FrameCounterMode::FiveStep, 3) => {
-                    self.tick_envelopes();
-                },
-                (FrameCounterMode::FiveStep, 4) => {
-                    self.tick_envelopes();
-                    self.tick_length_counters();
-                    self.tick_sweep_units();
-                },
-                _ => unreachable!(),
-            }
-        }
-
-        /***
-         * XXX
-         * should be set at write to 0x4017
-         * https://www.nesdev.org/wiki/APU_Frame_Counter
-         * (side effects to manage)
-         */
-        let max_steps = if let FrameCounterMode::FiveStep = self.frame_counter.mode {
-            5
-        } else {
-            4
-        };
-        self.frame_counter.next_step = (self.frame_counter.next_step + steps_to_execute) % max_steps;
     }
 
     fn clock_mixer(&mut self) {
