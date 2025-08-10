@@ -32,6 +32,7 @@ trait Tick {
 enum ChannelType {
     Pulse1,
     Pulse2,
+    Triangle,
     Noise
 }
 
@@ -207,6 +208,47 @@ impl Tick for LengthCounter {
 }
 
 #[derive(Debug)]
+struct LinearCounter {
+    period: u8,
+    counter: u8,
+    reload: bool,
+    control: bool,
+}
+
+impl LinearCounter {
+    fn new() -> Self {
+        LinearCounter {
+            period: 0,
+            counter: 0,
+            reload: false,
+            control: false
+        }
+    }
+
+    #[allow(dead_code)]
+    fn reset(&mut self) {
+        self.period = 0;
+        self.counter = 0;
+        self.reload = false;
+        self.control = false;
+    }
+}
+
+impl Tick for LinearCounter {
+    fn tick(&mut self) {
+        if self.reload {
+            self.counter = self.period;
+        } else if self.counter > 0 {
+            self.counter -= 1;
+        }
+
+        if self.control == false {
+            self.reload = false;
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Pulse {
     enabled: bool,
     duty_cycle: usize,
@@ -346,6 +388,76 @@ impl Noise {
     }
 }
 
+const TRIANGLE_SEQUENCES: [f32; 32] = [
+    15.0, 14.0, 13.0, 12.0, 11.0, 10.0,  9.0,  8.0,  7.0,  6.0,  5.0,  4.0,  3.0,  2.0,  1.0,  0.0,
+    0.0,  1.0,  2.0,  3.0,  4.0,  5.0,  6.0,  7.0,  8.0,  9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0
+];
+
+#[derive(Debug)]
+struct Triangle {
+    enabled: bool,
+    timer_period: u16,
+    timer_counter: u16,
+    linear_counter: LinearCounter,
+    length_counter: LengthCounter,
+    sequencer_step: usize,
+}
+
+impl Channel for Triangle {
+    fn reset(&mut self) {
+        self.enabled = false;
+        self.timer_period = 0;
+        self.timer_counter = 0;
+        self.linear_counter.reset();
+        self.length_counter.reset();
+        self.sequencer_step = 0;
+    }
+
+    fn is_muted(&self) -> bool {
+        if self.enabled == false ||
+            self.length_counter.counter == 0 ||
+            self.linear_counter.counter == 0 ||
+            self.timer_period < 2 {
+            return true;
+        }
+
+        false
+    }
+
+    /***
+     * to check: https://forums.nesdev.org/viewtopic.php?t=10658
+     ***/
+    fn get_sample(&self) -> f32 {
+        if self.is_muted() == true {
+            0.0
+        } else {
+            self.sequence()
+        }
+    }
+}
+
+impl Triangle {
+
+    fn new() -> Self {
+        Triangle {
+            enabled: false,
+            timer_period: 0,
+            timer_counter: 0,
+            linear_counter: LinearCounter::new(),
+            length_counter: LengthCounter::new(),
+            sequencer_step: 0
+        }
+    }
+
+    fn sequence(&self) -> f32 {
+        TRIANGLE_SEQUENCES[self.sequencer_step]
+    }
+
+    fn num_of_sequences(&self) -> usize {
+        TRIANGLE_SEQUENCES.len()
+    }
+}
+
 #[derive(Debug)]
 enum FrameCounterMode {
     FourStep,
@@ -388,7 +500,7 @@ impl FrameCounter {
         FrameCounter {
             mode: FrameCounterMode::FourStep,
             inhibit_irq: false,
-            frame_irq: Cell::new(true),
+            frame_irq: Cell::new(false),
             apu_cycle: 0,
             next_step: 0,
         }
@@ -410,6 +522,7 @@ pub struct ApuRp2A03<T: SoundPlayback> {
     pulse1: Pulse,
     pulse2: Pulse,
     noise: Noise,
+    triangle: Triangle,
     frame_counter: FrameCounter,
     apu_cycles_acc: f64,
     sound_player: T
@@ -471,8 +584,11 @@ impl<T: SoundPlayback> Memory for ApuRp2A03<T> {
             0x05 => self.write_pulse_sweep(ChannelType::Pulse2, value)?,
             0x06 => self.write_pulse_timer_lo(ChannelType::Pulse2, value)?,
             0x07 => self.write_length_counter_and_timer_hi(ChannelType::Pulse2, value)?,
+            0x08 => self.write_triangle_linear_counter(value)?,
             0x15 => self.write_channels_status(value)?,
             0x17 => self.write_frame_counter(value)?,
+            0x0A => self.write_pulse_timer_lo(ChannelType::Triangle, value)?,
+            0x0B => self.write_length_counter_and_timer_hi(ChannelType::Triangle, value)?,
             0x0C => self.write_noise_control(value)?,
             0x0E => self.write_noise_mode_and_period(value)?,
             0x0F => self.write_length_counter_and_envelope_restart(ChannelType::Noise, value)?,
@@ -505,6 +621,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
             noise: Noise::new(),
+            triangle: Triangle::new(),
             frame_counter: FrameCounter::new(),
             sound_player,
             apu_cycles_acc: 0.0,
@@ -557,39 +674,84 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
     /***
      * 0x4002 and 0x4006 - pulse timer (period) low 8 bits
+     * 0x400A - triangle timer (period) low 8 bits
      *
      * https://www.nesdev.org/wiki/APU_Pulse
      ***/
     fn write_pulse_timer_lo(&mut self, channel_type: ChannelType, value: u8) -> Result<(), MemoryError> {
-        let pulse = self.get_pulse_channel_by_type(&channel_type);
 
-        pulse.timer_period = (pulse.timer_period & 0xFF00) | value as u16;
-        trace!("APU: updated pulse timer low byte: 0x{:04X}", pulse.timer_period);
+        match channel_type {
+            ChannelType::Pulse1 |
+            ChannelType::Pulse2 => {
+                let pulse = self.get_pulse_channel_by_type(&channel_type);
+
+                pulse.timer_period = (pulse.timer_period & 0xFF00) | value as u16;
+                trace!("APU: updated pulse timer low byte: 0x{:04X}", pulse.timer_period);
+            },
+            ChannelType::Triangle => {
+                let triangle = &mut self.triangle;
+
+                triangle.timer_period = (triangle.timer_period & 0xFF00) | value as u16;
+                trace!("APU: updated triangle timer low byte: 0x{:04X}", triangle.timer_period);
+            },
+            _ => { unreachable!() }
+        }
 
         Ok(())
     }
 
     /***
      * 0x4003 and 0x4007 - pulse length counter load and timer (period) high 3 bits
+     * 0x400B - triangle length counter load and timer (period) high 3 bits
      *
      * https://www.nesdev.org/wiki/APU_Pulse
      ***/
     fn write_length_counter_and_timer_hi(&mut self, channel_type: ChannelType, value: u8) -> Result<(), MemoryError> {
-        let pulse = self.get_pulse_channel_by_type(&channel_type);
 
-        pulse.timer_period = (pulse.timer_period & 0x00FF) | (((value & 0x07) as u16) << 8);
-        pulse.timer_counter = pulse.timer_period;
+        match channel_type {
+            ChannelType::Pulse1 |
+            ChannelType::Pulse2 => {
+                let pulse = self.get_pulse_channel_by_type(&channel_type);
 
-        if pulse.enabled {
-            pulse.length_counter.counter_initial = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
-            pulse.length_counter.reload();
+                pulse.timer_period = (pulse.timer_period & 0x00FF) | (((value & 0x07) as u16) << 8);
+                pulse.timer_counter = pulse.timer_period;
+
+                if pulse.enabled {
+                    pulse.length_counter.counter_initial = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
+                    pulse.length_counter.reload();
+                }
+
+                pulse.envelope.start_flag = true;
+                pulse.duty_cycle_index = 0;
+            },
+            ChannelType::Triangle => {
+                let triangle = &mut self.triangle;
+
+                triangle.timer_period = (triangle.timer_period & 0x00FF) | (((value & 0x07) as u16) << 8);
+                triangle.timer_counter = triangle.timer_period;
+
+                if triangle.enabled {
+                    triangle.length_counter.counter_initial = LengthCounter::LENGTH_COUNTER_LOOKUP_TABLE[(value >> 3) as usize];
+                    triangle.length_counter.reload();
+                }
+
+                triangle.linear_counter.reload = true;
+            }
+            _ => { unreachable!() }
         }
 
-        pulse.envelope.start_flag = true;
-        pulse.duty_cycle_index = 0;
+        Ok(())
+    }
 
-        //println!("APU: updated pulse timer high byte: 0x{:04X} ({}), length counter load: {}",
-        //         pulse.period, pulse.period, pulse.length_counter.reload);
+    /***
+     * 0x4008 - triangle linear counter
+     */
+    fn write_triangle_linear_counter(&mut self, value: u8) -> Result<(), MemoryError> {
+        let triangle = &mut self.triangle;
+
+        triangle.linear_counter.period = value & 0x7F;
+        triangle.linear_counter.control = (value & 0x80) == 0x80;
+        self.triangle.length_counter.halt = (value & 0x80) == 0x80;
 
         Ok(())
     }
@@ -603,9 +765,10 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     fn read_channels_status(&self) -> Result<u8, MemoryError> {
         let pulse1 = self.pulse1.length_counter.counter > 0;
         let pulse2 = self.pulse2.length_counter.counter > 0;
+        let triangle = self.triangle.length_counter.counter > 0;
         let noise = self.noise.length_counter.counter > 0;
 
-        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((noise as u8) << 3);
+        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3);
 
         if self.frame_counter.frame_irq.get() == true {
             status |= 0x40;
@@ -625,6 +788,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     fn write_channels_status(&mut self, value: u8) -> Result<(), MemoryError> {
         self.pulse1.enabled = value & 0x01 != 0;
         self.pulse2.enabled = value & 0x02 != 0;
+        self.triangle.enabled = value & 0x04 != 0;
         self.noise.enabled = value & 0x08 != 0;
 
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
@@ -633,12 +797,16 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             }
         }
 
-        if self.noise.enabled == false {
-            self.noise.length_counter.counter = 0
+        if self.triangle.enabled == false {
+            self.triangle.length_counter.counter = 0;
         }
 
-        trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, noise enabled: {}",
-             self.pulse1.enabled, self.pulse2.enabled, self.noise.enabled);
+        if self.noise.enabled == false {
+            self.noise.length_counter.counter = 0;
+        }
+
+        trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, triangle: {}, noise enabled: {}",
+             self.pulse1.enabled, self.pulse2.enabled, self.triangle.enabled, self.noise.enabled);
 
         Ok(())
     }
@@ -726,8 +894,18 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         }
     }
 
-    fn clock_noise_timer(&mut self) {
+    fn clock_triangle_timer(&mut self) {
+        let triangle = &mut self.triangle;
 
+        if triangle.timer_counter == 0 {
+            triangle.sequencer_step = (triangle.sequencer_step + 1) % triangle.num_of_sequences();
+            triangle.timer_counter = triangle.timer_period;
+        } else {
+            triangle.timer_counter -= 1;
+        }
+    }
+
+    fn clock_noise_timer(&mut self) {
         if self.noise.timer_counter == 0 {
             let shift_by = match self.noise.shift_mode {
                 ShiftMode::Zero => { 1 },
@@ -797,6 +975,10 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         self.noise.envelope.tick();
     }
 
+    fn tick_linear_counter(&mut self) {
+        self.triangle.linear_counter.tick();
+    }
+
     fn clock_frame_sequencer(&mut self, cycle: u32) {
         let (events, quarter_half_interrupt) = self.frame_counter.frame_tables();
 
@@ -812,6 +994,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
                if do_quarter {
                    self.tick_envelopes();
+                   self.tick_linear_counter();
                }
 
                if do_half {
@@ -848,7 +1031,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
     fn tnd_out(&mut self) -> f32 {
         let noise = self.noise.get_sample();
-        let triangle = 0.0;
+        let triangle = self.triangle.get_sample();
         let dmc = 0.0;
 
         let tnd = triangle / 8227.0 + noise / 12241.0 + dmc / 22638.0;
@@ -891,6 +1074,7 @@ impl<T: SoundPlayback> APU for ApuRp2A03<T> {
 
         for _ in 0..apu_credits {
             self.clock_pulse_timers();
+            self.clock_triangle_timer();
             self.clock_noise_timer();
             self.clock_frame_sequencer(1);
 
