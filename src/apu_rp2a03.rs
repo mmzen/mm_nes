@@ -458,6 +458,66 @@ impl Triangle {
     }
 }
 
+const DMC_PERIODS: [u16; 16] = [
+    428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54
+];
+
+#[derive(Debug)]
+struct Dmc {
+    dmc_irq: bool,
+    timer_period: u16,
+    timer_counter: u16,
+    loop_flag: bool,
+    output_level: u8,
+    sample_address: u16,
+    sample_length: u16,
+    bytes_remaining: u16
+}
+
+impl Channel for Dmc {
+    fn reset(&mut self) {
+        self.dmc_irq = false;
+        self.timer_period = 0;
+        self.timer_counter = 0;
+        self.loop_flag = false;
+        self.output_level = 0;
+        self.sample_address = 0;
+        self.sample_length = 0;
+        self.bytes_remaining = 0;
+    }
+
+    fn is_muted(&self) -> bool {
+        todo!()
+    }
+
+    fn get_sample(&self) -> f32 {
+        todo!()
+    }
+}
+
+impl Dmc {
+    fn new() -> Self {
+        Dmc {
+            dmc_irq: false,
+            timer_period: 0,
+            timer_counter: 0,
+            loop_flag: false,
+            output_level: 0,
+            sample_address: 0,
+            sample_length: 0,
+            bytes_remaining: 0
+        }
+    }
+
+    fn period(value: u8) -> u16 {
+        DMC_PERIODS[value as usize] / 2
+    }
+
+    fn restart(&self) {
+        // TODO: Implement DMC restart
+    }
+}
+
 #[derive(Debug)]
 enum FrameCounterMode {
     FourStep,
@@ -523,6 +583,7 @@ pub struct ApuRp2A03<T: SoundPlayback> {
     pulse2: Pulse,
     noise: Noise,
     triangle: Triangle,
+    dmc: Dmc,
     frame_counter: FrameCounter,
     apu_cycles_acc: f64,
     sound_player: T
@@ -585,6 +646,10 @@ impl<T: SoundPlayback> Memory for ApuRp2A03<T> {
             0x06 => self.write_pulse_timer_lo(ChannelType::Pulse2, value)?,
             0x07 => self.write_length_counter_and_timer_hi(ChannelType::Pulse2, value)?,
             0x08 => self.write_triangle_linear_counter(value)?,
+            0x10 => self.write_dmc_flag_and_rate(value)?,
+            0x11 => self.write_dmc_output(value)?,
+            0x12 => self.write_dmc_sample_address(value)?,
+            0x13 => self.write_dmc_sample_length(value)?,
             0x15 => self.write_channels_status(value)?,
             0x17 => self.write_frame_counter(value)?,
             0x0A => self.write_pulse_timer_lo(ChannelType::Triangle, value)?,
@@ -622,6 +687,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             pulse2: Pulse::new(),
             noise: Noise::new(),
             triangle: Triangle::new(),
+            dmc: Dmc::new(),
             frame_counter: FrameCounter::new(),
             sound_player,
             apu_cycles_acc: 0.0,
@@ -757,8 +823,46 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     /***
-     * XXX
-     * should clear the frame counter interrupt flag
+     * 0x4010
+     */
+    fn write_dmc_flag_and_rate(&mut self, value: u8) -> Result<(), MemoryError> {
+        let dmc = &mut self.dmc;
+
+        dmc.dmc_irq = (value & 0x80) != 0;
+        dmc.loop_flag = (value & 0x40) != 0;
+        dmc.timer_period = Dmc::period(value & 0x0F);
+
+        Ok(())
+    }
+
+    /***
+     * 0x4011
+     */
+    fn write_dmc_output(&mut self, value: u8) -> Result<(), MemoryError> {
+        let dmc = &mut self.dmc;
+        dmc.output_level = value & 0x7F;
+
+        Ok(())
+    }
+
+    /***
+     * 0x4012
+     */
+    fn write_dmc_sample_address(&mut self, value: u8) -> Result<(), MemoryError> {
+        self.dmc.sample_address = 0xC000 | ((value as u16)<< 6);
+        Ok(())
+    }
+
+    /***
+     * 0x4013
+     */
+    fn write_dmc_sample_length(&mut self, value: u8) -> Result<(), MemoryError> {
+        self.dmc.sample_length = ((value as u16) << 4) | 0x01;
+        Ok(())
+    }
+
+    /***
+     * 0x4015
      *
      * https://www.nesdev.org/wiki/APU#Status_($4015)
      ***/
@@ -767,8 +871,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         let pulse2 = self.pulse2.length_counter.counter > 0;
         let triangle = self.triangle.length_counter.counter > 0;
         let noise = self.noise.length_counter.counter > 0;
+        let dmc = self.dmc.bytes_remaining > 0;
 
-        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3);
+        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
 
         if self.frame_counter.frame_irq.get() == true {
             status |= 0x40;
@@ -776,8 +881,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
         self.frame_counter.frame_irq.set(false);
 
-        trace!("APU: channels status: pulse1: {}, pulse2: {}, status: 0x{:02X}",
-             pulse1, pulse2, status);
+        trace!("APU: channels status: pulse1: {}, pulse2: {}, triangle: {}, noise {}, status: 0x{:02X}",
+             pulse1, pulse2, triangle, noise, status);
 
         Ok(status)
     }
@@ -790,6 +895,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         self.pulse2.enabled = value & 0x02 != 0;
         self.triangle.enabled = value & 0x04 != 0;
         self.noise.enabled = value & 0x08 != 0;
+        let dmc_bit = value & 0x10 != 0;
 
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
             if pulse.enabled == false {
@@ -804,6 +910,13 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         if self.noise.enabled == false {
             self.noise.length_counter.counter = 0;
         }
+
+        if dmc_bit == true && self.dmc.bytes_remaining == 0  {
+            self.dmc.restart();
+        } else {
+            self.dmc.bytes_remaining = 0;
+        }
+        self.dmc.dmc_irq = false;
 
         trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, triangle: {}, noise enabled: {}",
              self.pulse1.enabled, self.pulse2.enabled, self.triangle.enabled, self.noise.enabled);

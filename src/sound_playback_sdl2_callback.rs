@@ -24,13 +24,13 @@ impl NESAudioBuffer {
     }
 
     fn push_sample(&mut self, sample: f32) {
-        let safe_samples = sample.clamp(-1.0, 1.0);
+        let safe_sample = sample.clamp(-1.0, 1.0);
 
         if self.buffer.len() >= BUFFER_SIZE {
             self.buffer.pop_front();
         }
 
-        self.buffer.push_back(safe_samples);
+        self.buffer.push_back(safe_sample);
     }
 
     fn pop_sample(&mut self) -> f32 {
