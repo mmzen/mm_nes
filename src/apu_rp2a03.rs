@@ -316,12 +316,11 @@ impl Channel for Noise {
     }
 
     fn is_muted(&self) -> bool {
-        self.enabled == false || self.length_counter.counter == 0 ||
-            self.shift_register & 0x01 == 0x01
+        self.enabled == false || self.length_counter.counter == 0
     }
 
     fn get_sample(&self) -> f32 {
-        if self.is_muted() == true {
+        if self.is_muted() == true || self.shift_register & 0x01 == 0x01 {
             0.0
         } else {
             self.envelope.get_volume() as f32
@@ -604,8 +603,9 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     fn read_channels_status(&self) -> Result<u8, MemoryError> {
         let pulse1 = self.pulse1.length_counter.counter > 0;
         let pulse2 = self.pulse2.length_counter.counter > 0;
+        let noise = self.noise.length_counter.counter > 0;
 
-        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1);
+        let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((noise as u8) << 3);
 
         if self.frame_counter.frame_irq.get() == true {
             status |= 0x40;
@@ -619,9 +619,13 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         Ok(status)
     }
 
+    /***
+     * 0x4015 - status
+     ***/
     fn write_channels_status(&mut self, value: u8) -> Result<(), MemoryError> {
         self.pulse1.enabled = value & 0x01 != 0;
         self.pulse2.enabled = value & 0x02 != 0;
+        self.noise.enabled = value & 0x08 != 0;
 
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
             if pulse.enabled == false {
@@ -629,9 +633,12 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             }
         }
 
-        trace!("APU: updated channels status: pulse1 enabled: {} (muted: {}), pulse2 enabled: {} (muted: {})",
-             self.pulse1.enabled, self.pulse1.is_muted(),
-             self.pulse2.enabled, self.pulse2.is_muted());
+        if self.noise.enabled == false {
+            self.noise.length_counter.counter = 0
+        }
+
+        trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, noise enabled: {}",
+             self.pulse1.enabled, self.pulse2.enabled, self.noise.enabled);
 
         Ok(())
     }
@@ -705,28 +712,17 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
     }
 
     fn clock_pulse_timers(&mut self) {
-        let mut idx = 1;
-
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
             if pulse.enabled == false {
                 continue
             }
 
             if pulse.timer_counter == 0 {
-                /***
-                 * increment the duty cycle index when the timer counter reaches 0
-                 ***/
                 pulse.duty_cycle_index = (pulse.duty_cycle_index + 1) % 8;
                 pulse.timer_counter = pulse.timer_period;
-
-                trace!("APU: timer counter for pulse channel {}: {} (timer period: {})", idx, pulse.timer_counter, pulse.timer_period);
-                trace!("APU: pulse channel {}, cycle: {}, index: {}, position: {}",
-                         idx, pulse.duty_name(), pulse.duty_cycle_index, pulse.duty_position());
             } else {
                 pulse.timer_counter -= 1;
             }
-
-            idx += 1 ;
         }
     }
 
@@ -742,6 +738,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
             self.noise.shift_register >>= 1;
             self.noise.shift_register |= feedback << 14;
 
+            self.noise.timer_counter = self.noise.timer_period;
+        } else {
             self.noise.timer_counter -= 1;
         }
     }
@@ -804,9 +802,6 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
 
         self.frame_counter.apu_cycle += cycle;
 
-        debug!("APU: frame sequencer: cycle: {}, mode: {:?}, next_step: {}",
-            self.frame_counter.apu_cycle, self.frame_counter.mode, self.frame_counter.next_step);
-
         for _ in events.iter() {
             let idx = self.frame_counter.next_step;
 
@@ -856,7 +851,8 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         let triangle = 0.0;
         let dmc = 0.0;
 
-        let tnd_out = 159.79 / ((1.0 / (triangle / 8227.0) + (noise / 12241.0) + (dmc / 22638.0)) + 100.0);
+        let tnd = triangle / 8227.0 + noise / 12241.0 + dmc / 22638.0;
+        let tnd_out = if tnd == 0.0 { 0.0 } else { 159.79 / (1.0 / tnd + 100.0) };
 
         tnd_out
     }
