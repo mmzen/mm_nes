@@ -916,6 +916,7 @@ impl<T: SoundPlayback> ApuRp2A03<T> {
         } else {
             self.dmc.bytes_remaining = 0;
         }
+
         self.dmc.dmc_irq = false;
 
         trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, triangle: {}, noise enabled: {}",
