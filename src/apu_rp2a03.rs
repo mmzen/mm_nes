@@ -91,8 +91,6 @@ impl Sweep {
 
 impl Tick for Sweep {
     fn tick(&mut self) {
-        self.divider = self.divider.wrapping_sub(1);
-
         if self.reload == true {
             self.divider = self.initial_divider;
             self.reload = false;
@@ -102,6 +100,8 @@ impl Tick for Sweep {
             }
 
             self.divider = self.initial_divider;
+        } else {
+            self.divider -= 1;
         }
     }
 }
@@ -466,6 +466,12 @@ const DMC_PERIODS: [u16; 16] = [
 ];
 
 #[derive(Debug)]
+enum DmcBufferState {
+    Empty,
+    NotEmpty
+}
+
+#[derive(Debug)]
 struct Dmc<U: CPU + ?Sized> {
     dmc_irq: bool,
     timer_period: u16,
@@ -473,8 +479,14 @@ struct Dmc<U: CPU + ?Sized> {
     loop_flag: bool,
     output_level: u8,
     sample_address: u16,
+    current_address: u16,
     sample_length: u16,
+    sample_buffer: u8,
+    sample_state: DmcBufferState,
     bytes_remaining: u16,
+    shift_register: u8,
+    bits_remaining: u8,
+    silenced: bool,
     cpu: Rc<RefCell<U>>
 }
 
@@ -486,16 +498,22 @@ impl<U: CPU + ?Sized> Channel for Dmc<U> {
         self.loop_flag = false;
         self.output_level = 0;
         self.sample_address = 0;
+        self.current_address = 0;
         self.sample_length = 0;
+        self.sample_buffer = 0;
+        self.sample_state = DmcBufferState::Empty;
         self.bytes_remaining = 0;
+        self.shift_register = 0;
+        self.bits_remaining = 0;
+        self.silenced = false;
     }
 
     fn is_muted(&self) -> bool {
-        todo!()
+        self.silenced == true
     }
 
     fn get_sample(&self) -> f32 {
-        todo!()
+        self.output_level as f32
     }
 }
 
@@ -508,8 +526,14 @@ impl<U: CPU + ?Sized> Dmc<U> {
             loop_flag: false,
             output_level: 0,
             sample_address: 0,
+            current_address: 0,
             sample_length: 0,
+            sample_buffer: 0,
+            sample_state: DmcBufferState::Empty,
             bytes_remaining: 0,
+            shift_register: 0,
+            bits_remaining: 0,
+            silenced: false,
             cpu
         }
     }
@@ -518,8 +542,83 @@ impl<U: CPU + ?Sized> Dmc<U> {
         DMC_PERIODS[value as usize] / 2
     }
 
-    fn restart(&self) {
-        // TODO: Implement DMC restart
+    fn restart(&mut self) {
+        self.current_address = self.sample_address;
+        self.bytes_remaining = self.sample_length;
+    }
+
+    fn interrupt(&mut self) -> Result<(), ApuError> {
+        debug!("APU: signaling interrupt from dmc");
+        self.cpu.borrow_mut().signal_irq()?;
+        Ok(())
+    }
+
+    fn increment_sample_address(&mut self) {
+        self.current_address = if self.current_address == 0xFFFF {
+            0x8000
+        } else {
+            self.current_address + 1
+        };
+    }
+
+    fn cycle_output(&mut self) {
+        if self.timer_counter == 0 {
+            if self.bits_remaining == 0 {
+
+                if let DmcBufferState::Empty = self.sample_state {
+                    self.silenced = true;
+                } else {
+                    self.silenced = false;
+                    self.shift_register = self.sample_buffer;
+                    self.sample_state = DmcBufferState::NotEmpty;
+                    self.bits_remaining = 8;
+                }
+            } else {
+                self.bits_remaining -= 1;
+            }
+
+            self.timer_counter = self.timer_period;
+        } else {
+            self.timer_counter -= 1;
+        }
+    }
+
+    fn update_output_level(&mut self) {
+        if self.silenced == false {
+            let bit_0 = self.shift_register & 0x01;
+
+            if bit_0 == 1 && self.output_level <= 125 {
+                self.output_level += 2;
+            } else if self.output_level >= 2 {
+                self.output_level -= 2;
+            }
+
+            self.shift_register >>= 1;
+        }
+    }
+
+    fn conditional_refill(&mut self) -> Result<(), ApuError> {
+        if let DmcBufferState::Empty = self.sample_state {
+            if self.bytes_remaining > 0 {
+                self.sample_buffer = 60; // XXX load sample data
+                self.increment_sample_address();
+                self.bytes_remaining -= 1;
+
+                if self.bytes_remaining == 0 {
+                    if self.loop_flag == true {
+                        self.restart()
+                    }
+
+                    if self.dmc_irq == true {
+                        self.interrupt()?;
+                    }
+                } else {
+                    self.sample_state = DmcBufferState::NotEmpty;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -554,8 +653,7 @@ const FRAME_COUNTER_5_STEPS_SEQUENCES: [(bool, bool, bool); 5] = [
 #[derive(Debug)]
 struct FrameCounter<U: CPU + ?Sized> {
     mode: FrameCounterMode,
-    inhibit_irq: bool,
-    frame_irq: Cell<bool>,
+    inhibit_irq: Cell<bool>,
     apu_cycle: u32,
     next_step: usize,
     cpu: Rc<RefCell<U>>
@@ -565,12 +663,18 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
     fn new(cpu: Rc<RefCell<U>>) -> Self {
         FrameCounter {
             mode: FrameCounterMode::FourStep,
-            inhibit_irq: false,
-            frame_irq: Cell::new(false),
+            inhibit_irq: Cell::new(false),
             apu_cycle: 0,
             next_step: 0,
             cpu
         }
+    }
+
+    fn reset(&mut self) {
+        self.mode = FrameCounterMode::FourStep;
+        self.inhibit_irq = Cell::new(false);
+        self.apu_cycle = 0;
+        self.next_step = 0;
     }
 
     fn frame_tables(&self) -> (&'static [u32], &'static [(bool, bool, bool)]) {
@@ -581,7 +685,7 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
     }
 
     fn interrupt(&mut self) -> Result<(), ApuError> {
-        debug!("APU: signaling interrupt");
+        debug!("APU: signaling interrupt from frame counter");
         self.cpu.borrow_mut().signal_irq()?;
         Ok(())
     }
@@ -882,14 +986,14 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         let triangle = self.triangle.length_counter.counter > 0;
         let noise = self.noise.length_counter.counter > 0;
         let dmc = self.dmc.bytes_remaining > 0;
+        let dmc_irq = self.dmc.dmc_irq;
 
         let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
 
-        if self.frame_counter.frame_irq.get() == true {
-            status |= 0x40;
-        }
+        status |= (self.frame_counter.inhibit_irq.get() as u8) << 6;
+        status |= (dmc_irq as u8) << 7;
 
-        self.frame_counter.frame_irq.set(false);
+        self.frame_counter.inhibit_irq.set(true);
 
         trace!("APU: channels status: pulse1: {}, pulse2: {}, triangle: {}, noise {}, status: 0x{:02X}",
              pulse1, pulse2, triangle, noise, status);
@@ -924,6 +1028,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         if dmc_bit == true && self.dmc.bytes_remaining == 0  {
             self.dmc.restart();
         } else {
+            self.dmc.silenced = true;
             self.dmc.bytes_remaining = 0;
         }
 
@@ -941,8 +1046,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
             false => FrameCounterMode::FourStep,
         };
 
-        self.frame_counter.inhibit_irq = (value & 0x40) != 0;
-        self.frame_counter.frame_irq.set(!self.frame_counter.inhibit_irq);
+        self.frame_counter.inhibit_irq.set((value & 0x40) != 0);
 
         self.frame_counter.next_step = 0;
         self.frame_counter.apu_cycle = 0;
@@ -954,7 +1058,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         }
 
         trace!("APU: updated frame counter: mode: {:?}, inhibit_irq: {}",
-             self.frame_counter.mode, self.frame_counter.inhibit_irq);
+             self.frame_counter.mode, self.frame_counter.inhibit_irq.get());
 
         Ok(())
     }
@@ -1021,10 +1125,14 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
     fn clock_triangle_timer(&mut self) {
         let triangle = &mut self.triangle;
 
-        if triangle.timer_counter == 0 {
-            triangle.sequencer_step = (triangle.sequencer_step + 1) % triangle.num_of_sequences();
-            triangle.timer_counter = triangle.timer_period;
-        } else {
+        if triangle.length_counter.counter > 0 && triangle.linear_counter.counter > 0 && triangle.timer_period >= 2 {
+            if triangle.timer_counter == 0 {
+                triangle.sequencer_step = (triangle.sequencer_step + 1) % triangle.num_of_sequences();
+                triangle.timer_counter = triangle.timer_period;
+            } else {
+                triangle.timer_counter -= 1;
+            }
+        } else if triangle.timer_counter > 0 {
             triangle.timer_counter -= 1;
         }
     }
@@ -1044,6 +1152,13 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         } else {
             self.noise.timer_counter -= 1;
         }
+    }
+
+    fn clock_dmc_timer(&mut self) {
+        let dmc = &mut self.dmc;
+
+        dmc.cycle_output();
+        dmc.update_output_level();
     }
 
     fn convert_cpu_cycles_to_apu_cycles(cpu_cycle: u32) -> u32 {
@@ -1088,6 +1203,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
             pulse.length_counter.tick();
         }
 
+        self.triangle.length_counter.tick();
         self.noise.length_counter.tick();
     }
 
@@ -1126,7 +1242,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
                    self.tick_sweep_units();
                }
 
-               if do_interrupt && self.frame_counter.inhibit_irq == false && self.frame_counter.frame_irq.get() == true {
+               if do_interrupt && self.frame_counter.inhibit_irq.get() == false {
                    self.frame_counter.interrupt()?;
                }
 
@@ -1158,7 +1274,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
     fn tnd_out(&mut self) -> f32 {
         let noise = self.noise.get_sample();
         let triangle = self.triangle.get_sample();
-        let dmc = 0.0;
+        let dmc = self.dmc.get_sample();
 
         let tnd = triangle / 8227.0 + noise / 12241.0 + dmc / 22638.0;
         let tnd_out = if tnd == 0.0 { 0.0 } else { 159.79 / (1.0 / tnd + 100.0) };
@@ -1177,6 +1293,12 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
 impl<T: SoundPlayback, U: CPU + ?Sized> APU for ApuRp2A03<T, U> {
     fn reset(&mut self) -> Result<(), ApuError> {
         info!("resetting APU");
+        self.pulse1.reset();
+        self.pulse2.reset();
+        self.triangle.reset();
+        self.noise.reset();
+        self.dmc.reset();
+        self.frame_counter.reset();
         Ok(())
     }
 
@@ -1202,6 +1324,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> APU for ApuRp2A03<T, U> {
             self.clock_pulse_timers();
             self.clock_triangle_timer();
             self.clock_noise_timer();
+            self.clock_dmc_timer(); // should be clocked every CPU cycle and not APU cycle
             self.clock_frame_sequencer(1)?;
 
             self.apu_cycles_acc += 1.0;
