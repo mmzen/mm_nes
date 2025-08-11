@@ -356,13 +356,13 @@ impl NESConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
             ApuType::RP2A03 => {
                 let sound_player = SoundPlaybackSDL2Queue::new(sdl_context)?;
-                ApuRp2A03::new(sound_player)
+                ApuRp2A03::new(sound_player, cpu)
             },
         };
 
@@ -429,7 +429,7 @@ impl NESConsoleBuilder {
             }
 
             BusDeviceType::APU(apu_type) => {
-                let apu = self.build_apu_device(apu_type, &sdl_context)?;
+                let apu = self.build_apu_device(apu_type, &sdl_context, cpu)?;
                 bus.borrow_mut().add_device(apu)?;
             }
 

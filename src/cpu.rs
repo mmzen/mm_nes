@@ -10,7 +10,7 @@ pub enum CpuType {
     NES6502
 }
 
-pub trait CPU: Interruptible {
+pub trait CPU: Interruptible + Debug {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;
     fn panic(&self, error: &CpuError);

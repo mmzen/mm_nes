@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use crate::cpu::CpuError;
 use crate::memory::MemoryError;
 
 #[derive(Default, Debug, Clone)]
@@ -26,13 +27,21 @@ impl PartialEq for ApuType {
 
 #[derive(Debug)]
 pub enum ApuError {
+    CpuError(CpuError),
     MemoryError(MemoryError)
+}
+
+impl From<CpuError> for ApuError { 
+    fn from(error: CpuError) -> Self {
+        ApuError::CpuError(error)
+    }
 }
 
 impl Display for ApuError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            ApuError::MemoryError(e) => { write!(f, "memory error: {}", e) }
+            ApuError::MemoryError(e) => { write!(f, "memory error: {}", e) },
+            ApuError::CpuError(e) => { write!(f, "cpu error: {}", e) }
         }
     }
 }

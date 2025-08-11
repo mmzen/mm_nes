@@ -1,6 +1,6 @@
 use std::{fmt, io};
 use std::cell::RefCell;
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
@@ -167,6 +167,7 @@ enum Interrupt {
     NONE
 }
 
+#[derive(Debug)]
 pub struct Cpu6502 {
     registers: Registers,
     bus: Rc<RefCell<dyn Bus>>,
@@ -704,6 +705,12 @@ impl Cpu6502 {
 
 pub struct Tracer {
     trace: RefCell<Box<dyn Write>>,
+}
+
+impl Debug for Tracer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tracer").finish()
+    }
 }
 
 impl Tracer {
