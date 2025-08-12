@@ -37,6 +37,12 @@ impl From<CpuError> for ApuError {
     }
 }
 
+impl From<MemoryError> for ApuError {
+    fn from(error: MemoryError) -> Self {
+        ApuError::MemoryError(error)
+    }
+}
+
 impl Display for ApuError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {

@@ -5,7 +5,8 @@ use crate::memory::MemoryError;
 
 #[derive(Debug, Clone)]
 pub enum DmaType {
-    PpuDma(PpuDmaType)
+    PpuDma(PpuDmaType),
+    ApuDma(ApuDmaType)
 }
 
 #[derive(Default, Debug, Clone)]
@@ -14,10 +15,17 @@ pub enum PpuDmaType {
     NESPPUDMA
 }
 
+#[derive(Default, Debug, Clone)]
+pub enum ApuDmaType {
+    #[default]
+    NESAPUDMA
+}
+
 impl Display for DmaType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            DmaType::PpuDma(ppu_dma_type) => write!(f, "dma type: PPU - {}", ppu_dma_type)
+            DmaType::PpuDma(ppu_dma_type) => write!(f, "dma type: PPU - {}", ppu_dma_type),
+            DmaType::ApuDma(apu_dma_type) => write!(f, "dma type: APU - {}", apu_dma_type),
         }
     }
 }
@@ -26,6 +34,14 @@ impl Display for PpuDmaType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             PpuDmaType::NESPPUDMA => write!(f, "NESPPUDMA")
+        }
+    }
+}
+
+impl Display for ApuDmaType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ApuDmaType::NESAPUDMA => write!(f, "NESAPUDMA")
         }
     }
 }

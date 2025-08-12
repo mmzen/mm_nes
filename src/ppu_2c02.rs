@@ -450,7 +450,7 @@ impl PPU for Ppu2c02 {
         let mut cycles = start_cycle;
         let cycles_threshold = start_cycle + credits;
 
-        debug!("PPU: running PPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
+        //debug!("PPU: running PPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
 
         loop {
             cycles = cycles + self.render()? as u32;
@@ -473,7 +473,7 @@ impl Memory for Ppu2c02 {
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        trace!("PPU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x2000);
+        ////trace!("PPU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x2000);
 
         let value = match addr {
             0x00 => self.read_control_register(),
@@ -514,7 +514,7 @@ impl Memory for Ppu2c02 {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        trace!("PPU: registers access: writing byte (0x{:02X}) at 0x{:04X}", value, addr);
+        //trace!("PPU: registers access: writing byte (0x{:02X}) at 0x{:04X}", value, addr);
 
         match addr {
             0x00 => self.write_control_register(value),
@@ -577,7 +577,7 @@ impl BusDevice for Ppu2c02 {
 
 impl DmaDevice for Ppu2c02 {
     fn dma_write(&mut self, addr: u8, value: u8) -> Result<(), MemoryError> {
-        trace!("PPU: DMA write to OAM with value 0x{:02X} at OAM addr 0x{:02X}", value, addr);
+        //trace!("PPU: DMA write to OAM with value 0x{:02X} at OAM addr 0x{:02X}", value, addr);
         self.write_oam_data_register(addr, value);
         Ok(())
     }
@@ -594,14 +594,14 @@ impl Ppu2c02 {
     }
 
     fn write_control_register(&mut self, value: u8) {
-        trace!("PPU: writing to control register: 0x{:02X}", value);
+        //trace!("PPU: writing to control register: 0x{:02X}", value);
 
         self.register.borrow_mut().control = value;
         self.t = (self.t & 0xF3FF) | (((value & 0x03) as u16) << 10);
 
         if let PpuState::VBlank(_) = self.state {
             if value & 0x80 != 0 && self.get_flag(Status(VBlank)) && self.get_flag(Control(GenerateNmi)) == false {
-                trace!("PPU: forcing NMI as status changed: 0x{:02X}", value);
+                //trace!("PPU: forcing NMI as status changed: 0x{:02X}", value);
                 let cpu = self.cpu.as_ptr();
                 let _ = unsafe { &mut *cpu }.signal_nmi();
             }
@@ -613,7 +613,7 @@ impl Ppu2c02 {
     }
 
     fn write_mask_register(&mut self, value: u8) {
-        trace!("PPU: writing to mask register: 0x{:02X}", value);
+        //trace!("PPU: writing to mask register: 0x{:02X}", value);
         self.register.borrow_mut().mask = value;
     }
 
@@ -626,7 +626,7 @@ impl Ppu2c02 {
     }
 
     fn write_status_register(&mut self, value: u8) {
-        trace!("PPU: writing to status register: 0x{:02X}", value);
+        //trace!("PPU: writing to status register: 0x{:02X}", value);
         self.register.borrow_mut().status = value;
     }
 
@@ -635,7 +635,7 @@ impl Ppu2c02 {
     }
 
     fn write_oam_address_register(&mut self, value: u8) {
-        trace!("PPU: writing to oam address register: 0x{:02X}", value);
+        //trace!("PPU: writing to oam address register: 0x{:02X}", value);
         self.register.borrow_mut().oam_addr = value;
     }
 
@@ -657,10 +657,10 @@ impl Ppu2c02 {
      * https://www.nesdev.org/wiki/PPU_registers#OAMDATA
      ***/
     fn write_oam_data_register(&mut self, addr: u8, value: u8) {
-        trace!("PPU: writing to oam data register: 0x{:02X}: 0x{:02X}", addr, value);
+        //trace!("PPU: writing to oam data register: 0x{:02X}: 0x{:02X}", addr, value);
 
         if let PpuState::Rendering(_) = self.state  {
-            trace!("PPU: ignoring write to OAM address 0x{:02X} as PPU is in state {}", addr, self.state);
+            //trace!("PPU: ignoring write to OAM address 0x{:02X} as PPU is in state {}", addr, self.state);
             self.register.borrow_mut().oam_addr = addr.wrapping_add(4);
         } else {
             let sprite_index = (addr / 4) as usize;
@@ -683,7 +683,7 @@ impl Ppu2c02 {
     }
 
     fn write_scroll_register(&mut self, value: u8) {
-        trace!("PPU: writing to scroll register: 0x{:02X}", value);
+        //trace!("PPU: writing to scroll register: 0x{:02X}", value);
 
         if self.latch.borrow().state == LatchState::HIGH {
             self.t = (self.t & !0x001F) | ((value as u16) >> 3);
@@ -708,7 +708,7 @@ impl Ppu2c02 {
     }
 
     fn write_addr_register(&mut self, value: u8) {
-        trace!("PPU: writing to PPU addr register: 0x{:02X}", value);
+        //trace!("PPU: writing to PPU addr register: 0x{:02X}", value);
 
         if self.latch.borrow().state == LatchState::HIGH {
             self.t = (self.t & 0x00FF) | ((value as u16 & 0x3F) << 8);
@@ -745,7 +745,7 @@ impl Ppu2c02 {
         let incr = self.get_v_increment_value() as u16;
         let incremented_v = self.v_wrapping_add(incr);
 
-        trace!("PPU: writing to PPU data register: 0x{:02X} (v is: 0x{:04X})", value, *self.v.borrow());
+        //trace!("PPU: writing to PPU data register: 0x{:02X} (v is: 0x{:04X})", value, *self.v.borrow());
         self.bus.write_byte(*self.v.borrow(), value)?;
 
         *self.v.borrow_mut() = incremented_v;
@@ -885,7 +885,7 @@ impl Ppu2c02 {
         let shift = 2 * (quadrant_y * 2 + quadrant_x);
         let palette = (attribute_data >> shift ) & 0x03;
 
-        trace!("PPU: attribute_table_address: 0x{:04X}, palette: 0x{:02X}", attribute_table_address, palette);
+        //trace!("PPU: attribute_table_address: 0x{:04X}, palette: 0x{:02X}", attribute_table_address, palette);
         Ok(palette)
     }
 
@@ -928,7 +928,7 @@ impl Ppu2c02 {
             pattern_data.append(&mut line_pattern_data);
         }
 
-        trace!("PPU: pattern_data: {:?}", pattern_data);
+        //trace!("PPU: pattern_data: {:?}", pattern_data);
         Ok(pattern_data)
     }
 
@@ -944,21 +944,21 @@ impl Ppu2c02 {
         let addr = base_name_table_addr + name_table_index;
         let tile_index = self.bus.read_byte(addr)?;
 
-        trace!("PPU: tile_index at 0x{:04X} in name table: 0x{:02X}",addr, tile_index);
+        //trace!("PPU: tile_index at 0x{:04X} in name table: 0x{:02X}",addr, tile_index);
         Ok(tile_index)
     }
 
     fn get_background_palette_address(&self, palette: u8) -> u16 {
         let palette_address = PALETTE_ADDRESS_SPACE.0 + (palette as u16 * 4);
 
-        trace!("PPU: background palette address: 0x{:04X}", palette_address);
+        //trace!("PPU: background palette address: 0x{:04X}", palette_address);
         palette_address
     }
 
     fn get_sprite_palette_address(&self, palette: u8) -> u16 {
         let palette_address = SPRITE_PALETTE_ADDR + (palette as u16 * 4);
 
-        trace!("PPU: sprite palette address: 0x{:04X}", palette_address);
+        //trace!("PPU: sprite palette address: 0x{:04X}", palette_address);
         palette_address
     }
 
@@ -978,7 +978,7 @@ impl Ppu2c02 {
         let palette_address = self.get_background_palette_address(palette);
         let colors = self.get_palette_colors(palette_address)?;
 
-        trace!("PPU: background palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
+        //trace!("PPU: background palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
         Ok(colors)
     }
 
@@ -986,7 +986,7 @@ impl Ppu2c02 {
         let palette_address = self.get_sprite_palette_address(palette);
         let colors = self.get_palette_colors(palette_address)?;
 
-        trace!("PPU: sprite palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
+        //trace!("PPU: sprite palette color: (0x{:02X}, 0x{:02X}, 0x{:02X}, 0x{:02X})", colors.0, colors.1, colors.2, colors.3);
         Ok(colors)
     }
 
@@ -1003,7 +1003,7 @@ impl Ppu2c02 {
                  palette: (u8, u8, u8, u8), mode: PixelMode, priority: SpritePriority, sprite0_hit_detect: bool) {
 
         line_pattern_data.iter().enumerate().for_each(|(pixel_num, color)| {
-            trace!("PPU: x: {}, y: {}, color: {}, mode: {:?}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, mode, palette);
+            //trace!("PPU: x: {}, y: {}, color: {}, mode: {:?}, palette: {:?}", pixel_pos_x, pixel_pos_y, color, mode, palette);
 
             let (r, g, b, a) = match (color, mode) {
                 (0, PixelMode::Background) => Palette2C02::rgba_transparent(palette.0),
@@ -1042,7 +1042,7 @@ impl Ppu2c02 {
             PATTERN_TABLE_LEFT_ADDR
         };
 
-        trace!("PPU: background pattern table address: 0x{:04X}", pattern_table_addr);
+        //trace!("PPU: background pattern table address: 0x{:04X}", pattern_table_addr);
         pattern_table_addr
     }
 
@@ -1053,14 +1053,14 @@ impl Ppu2c02 {
             PATTERN_TABLE_LEFT_ADDR
         };
 
-        trace!("PPU: sprite pattern table address: 0x{:04X}", pattern_table_addr);
+        //trace!("PPU: sprite pattern table address: 0x{:04X}", pattern_table_addr);
         pattern_table_addr
     }
 
     fn get_attribute_table_addr(&self, base_name_table_addr: u16) -> u16 {
         let attribute_table_addr= base_name_table_addr + NAME_TABLE_SIZE as u16;
 
-        trace!("PPU: attribute table: 0x{:04X}", attribute_table_addr);
+        //trace!("PPU: attribute table: 0x{:04X}", attribute_table_addr);
         attribute_table_addr
     }
 
@@ -1074,7 +1074,7 @@ impl Ppu2c02 {
             _ => unreachable!(),
         };
 
-        trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
+        //trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
         base_name_table_addr
     }
 
@@ -1083,7 +1083,7 @@ impl Ppu2c02 {
 
         let base_name_table_addr = self.get_name_table_addr(select);
 
-        trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
+        //trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
         base_name_table_addr
     }
 
@@ -1097,7 +1097,7 @@ impl Ppu2c02 {
 
         let tile = Tile::new(tile_index, colors, vec_to_array::<64>(pattern_data));
 
-        trace!("{}", tile);
+        //trace!("{}", tile);
         Ok(tile)
     }
 
@@ -1105,10 +1105,10 @@ impl Ppu2c02 {
         let addr = name_table_addr | (coarse_y as u16) << 5  | coarse_x as u16;
 
         let tile = if let Some(cached_tile) = self.tile_cache.get_cached_tile(addr) {
-            trace!("cache hit: coarse_x: {}, coarse_y: {}, tile: 0x{:02X}", coarse_x, coarse_y, cached_tile.index);
+            //trace!("cache hit: coarse_x: {}, coarse_y: {}, tile: 0x{:02X}", coarse_x, coarse_y, cached_tile.index);
             cached_tile
         } else {
-            trace!("cache miss: coarse_x: {}, coarse_y: {}", coarse_x, coarse_y);
+            //trace!("cache miss: coarse_x: {}, coarse_y: {}", coarse_x, coarse_y);
             let fetched_tile = self.fetch_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
 
             let cache = &mut self.tile_cache;
@@ -1242,8 +1242,8 @@ impl Ppu2c02 {
 
         let mut fine_x = self.get_fine_x();
 
-        trace!("PPU: rendering background, scanline: {}, nametable: 0x{:04X}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
-            scanline, name_table_addr, fine_y, coarse_y, coarse_x, pixel_pos_y);
+        //trace!("PPU: rendering background, scanline: {}, nametable: 0x{:04X}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
+        //    scanline, name_table_addr, fine_y, coarse_y, coarse_x, pixel_pos_y);
 
         self.background_pixels_line.clear();
 
@@ -1277,7 +1277,7 @@ impl Ppu2c02 {
         self.update_v_coarse_x(name_table_addr, coarse_x);
         self.update_v_fine_and_coarse_y(name_table_addr, fine_y, coarse_y);
 
-        trace!("PPU: rendered background for scanline: {}", scanline);
+        //trace!("PPU: rendered background for scanline: {}", scanline);
         Ok(())
     }
 
@@ -1313,7 +1313,7 @@ impl Ppu2c02 {
             let sprite = &self.oam.primary[i];
 
             if self.is_scanline_in_sprite_range(scanline, sprite, sprite_size) {
-                trace!("sprite: {:?}", sprite);
+                //trace!("sprite: {:?}", sprite);
                 self.oam.secondary[self.oam.sprite_count] = sprite.clone();
 
                 if i == 0 {
@@ -1328,7 +1328,7 @@ impl Ppu2c02 {
             }
         }
 
-        trace!("evaluated {} sprites for next scanline ({} -> {})", self.oam.sprite_count, scanline, scanline + 1);
+        //trace!("evaluated {} sprites for next scanline ({} -> {})", self.oam.sprite_count, scanline, scanline + 1);
         Ok(())
     }
 
@@ -1356,7 +1356,7 @@ impl Ppu2c02 {
         let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
         let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
 
-        trace!("rendering {} sprites for scanline: {}", self.oam.sprite_count, scanline);
+        //trace!("rendering {} sprites for scanline: {}", self.oam.sprite_count, scanline);
 
         self.sprites_pixels_line.clear();
 
@@ -1366,7 +1366,7 @@ impl Ppu2c02 {
             let pixel_pos_y = scanline as u8 - (sprite.y + 1);
             let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
 
-            trace!("tile: {}", tile);
+            //trace!("tile: {}", tile);
 
             let sprite0_hit_detect = self.detect_sprite_0_hit(sprite.sprite0);
             let priority = self.get_sprite_priority(sprite);
@@ -1395,7 +1395,7 @@ impl Ppu2c02 {
     }
 
     fn render_scanline(&mut self) -> Result<(), PpuError> {
-        trace!("PPU: scanline starting: {}", self.state);
+        //trace!("PPU: scanline starting: {}", self.state);
 
         /***
          *  At dot 257 of each scanline:
@@ -1474,7 +1474,7 @@ impl Ppu2c02 {
             _ => unreachable!("render_scanline()")
         }
 
-        trace!("PPU: scanline ending: {}", self.state);
+        //trace!("PPU: scanline ending: {}", self.state);
         Ok(())
     }
 
@@ -1485,7 +1485,7 @@ impl Ppu2c02 {
             Ok(())
         });
 
-        trace!("PPU: rendered line in: {} ms", duration.as_millis());
+        //trace!("PPU: rendered line in: {} ms", duration.as_millis());
         Ok(CLOCK_CYCLES_PER_SCANLINE)
     }
 }

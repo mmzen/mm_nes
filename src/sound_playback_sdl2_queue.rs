@@ -56,6 +56,7 @@ impl SoundPlaybackSDL2Queue {
 
         player.prefill();
         player.resume();
+
         Ok(player)
     }
 

@@ -13,7 +13,7 @@ use crate::cartridge::Cartridge;
 use crate::controller::ControllerType;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
-use crate::dma::{PpuDmaType};
+use crate::dma::{ApuDmaType, PpuDmaType};
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::input::InputError;
@@ -56,12 +56,16 @@ impl NESConsole {
         let credits = CYCLE_CREDITS;
 
         let mut debt = 0;
+        //let mut cpu = self.cpu.borrow_mut();
+        //let mut ppu = self.ppu.borrow_mut();
+        //let mut apu = self.apu.borrow_mut();
+
         loop {
             let previous_cycles = cycles;
 
             cycles = self.cpu.borrow_mut().run(cycles, CYCLE_CREDITS - debt)?;
 
-            trace!("cycle: {}, previous: {}, used: {}, credits: {}, debt: {}", cycles, previous_cycles, cycles - previous_cycles, CYCLE_CREDITS - debt, debt);
+            //trace!("cycle: {}, previous: {}, used: {}, credits: {}, debt: {}", cycles, previous_cycles, cycles - previous_cycles, CYCLE_CREDITS - debt, debt);
             debt = (cycles - previous_cycles) - (CYCLE_CREDITS - debt);
 
             self.ppu.borrow_mut().run(cycles, credits)?;
@@ -333,6 +337,7 @@ impl NESConsoleBuilder {
         let dma = self.build_ppu_dma(&PpuDmaType::NESPPUDMA, bus.clone(), ppu.clone())?;
 
         ppu.borrow_mut().initialize()?;
+        dma.borrow_mut().initialize()?;
 
         self.ppu = Some(ppu.clone());
         self.ppu_type = Some(ppu_type.clone());
@@ -356,13 +361,14 @@ impl NESConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl,
+                        bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
             ApuType::RP2A03 => {
                 let sound_player = SoundPlaybackSDL2Queue::new(sdl_context)?;
-                ApuRp2A03::new(sound_player, cpu)
+                ApuRp2A03::new(sound_player, cpu, bus)
             },
         };
 
@@ -429,7 +435,7 @@ impl NESConsoleBuilder {
             }
 
             BusDeviceType::APU(apu_type) => {
-                let apu = self.build_apu_device(apu_type, &sdl_context, cpu)?;
+                let apu= self.build_apu_device(apu_type, &sdl_context, bus.clone(), cpu)?;
                 bus.borrow_mut().add_device(apu)?;
             }
 

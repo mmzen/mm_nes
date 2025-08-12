@@ -70,7 +70,7 @@ impl<T: Input> Memory for StandardController<T> {
                     *self.control_index.borrow_mut() = 0;
 
                     *self.state.borrow_mut() = State::StateReady;
-                    trace!("controller input: {:?}", self.control_states);
+                    //trace!("controller input: {:?}", self.control_states);
                 }
             },
 
@@ -78,8 +78,7 @@ impl<T: Input> Memory for StandardController<T> {
             _ => unreachable!(),
         };
 
-        trace!("controller state: {:?}", self.state);
-
+        //trace!("controller state: {:?}", self.state);
         Ok(result)
     }
 

@@ -5,8 +5,9 @@ use std::rc::Rc;
 use log::{debug, info, trace};
 use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
+use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
-use crate::cpu::{CpuError, CPU};
+use crate::cpu::CPU;
 use crate::memory::{Memory, MemoryError};
 use crate::sound_playback::SoundPlayback;
 
@@ -311,10 +312,12 @@ impl Pulse {
         }
     }
 
+    #[allow(dead_code)]
     fn duty_name(&self) -> &str {
         DUTY_CYCLES_NAMES[self.duty_cycle]
     }
 
+    #[allow(dead_code)]
     fn duty_position(&self) -> &str {
         let position = DUTY_CYCLES[self.duty_cycle][self.duty_cycle_index];
 
@@ -473,7 +476,7 @@ enum DmcBufferState {
 }
 
 #[derive(Debug)]
-struct Dmc<U: CPU + ?Sized> {
+struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
     dmc_irq: bool,
     timer_period: u16,
     timer_counter: u16,
@@ -488,10 +491,11 @@ struct Dmc<U: CPU + ?Sized> {
     shift_register: u8,
     bits_remaining: u8,
     silenced: bool,
-    cpu: Rc<RefCell<U>>
+    cpu: Rc<RefCell<U>>,
+    bus: Rc<RefCell<V>>
 }
 
-impl<U: CPU + ?Sized> Channel for Dmc<U> {
+impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
     fn reset(&mut self) {
         self.dmc_irq = false;
         self.timer_period = 0;
@@ -518,8 +522,8 @@ impl<U: CPU + ?Sized> Channel for Dmc<U> {
     }
 }
 
-impl<U: CPU + ?Sized> Dmc<U> {
-    fn new(cpu: Rc<RefCell<U>>) -> Self {
+impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
+    fn new(cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
         Dmc {
             dmc_irq: false,
             timer_period: 0,
@@ -535,7 +539,8 @@ impl<U: CPU + ?Sized> Dmc<U> {
             shift_register: 0,
             bits_remaining: 0,
             silenced: false,
-            cpu
+            cpu,
+            bus
         }
     }
 
@@ -549,8 +554,11 @@ impl<U: CPU + ?Sized> Dmc<U> {
         Ok(())
     }
 
-    fn dma_read(&mut self) -> Result<u8, ApuError> {
-        Ok(0x12)
+    fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
+        self.sample_buffer = self.bus.borrow().read_byte(self.sample_address)?;
+        self.sample_state = DmcBufferState::NotEmpty;
+        self.bytes_remaining -= 1;
+        Ok(0)
     }
 
     fn reload_sample_values(&mut self) {
@@ -568,18 +576,13 @@ impl<U: CPU + ?Sized> Dmc<U> {
 
     fn memory_reader(&mut self) -> Result<(), ApuError> {
         if self.bytes_remaining > 0 && self.sample_state == DmcBufferState::Empty {
-            self.sample_buffer = self.dma_read()?;
+            self.dma_read_and_update_sample_buffer_and_counter()?;
             self.increment_sample_address();
-            self.bytes_remaining -= 1;
-
-            self.sample_state = DmcBufferState::NotEmpty;
-
-            if self.bytes_remaining == 0 {
-                if self.loop_flag == true {
-                    self.reload_sample_values()
-                } else if self.dmc_irq == true {
-                    self.interrupt()?;
-                }
+        } else if self.bytes_remaining == 0 && self.bits_remaining == 0 {
+            if self.loop_flag == true {
+                self.reload_sample_values()
+            } else if self.dmc_irq == true {
+                self.interrupt()?;
             }
         }
 
@@ -690,18 +693,18 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
 }
 
 #[derive(Debug)]
-pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized> {
+pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> {
     pulse1: Pulse,
     pulse2: Pulse,
     noise: Noise,
     triangle: Triangle,
-    dmc: Dmc<U>,
+    dmc: Dmc<U, V>,
     frame_counter: FrameCounter<U>,
     apu_cycles_acc: f64,
     sound_player: T
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized> BusDevice for ApuRp2A03<T, U> {
+impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03<T, U, V> {
     fn get_name(&self) -> String {
         APU_NAME.to_string()
     }
@@ -719,21 +722,19 @@ impl<T: SoundPlayback, U: CPU + ?Sized> BusDevice for ApuRp2A03<T, U> {
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized> Memory for ApuRp2A03<T, U> {
+impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, U, V> {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         info!("initializing APU");
+        let _ = self.reset();
         Ok(APU_EXTERNAL_MEMORY_SIZE)
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        trace!("APU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x4000);
-
         let value = match addr {
             0x00 | 0x01 | 0x02 | 0x03 |
             0x04 | 0x05 | 0x06 | 0x07 => self.read_pulse(addr)?,
             0x15 => self.read_channels_status()?,
             _ => {
-                trace!("APU: registers access: reading byte at 0x{:04X} (0x{:04X})", addr, addr + 0x4000);
                 0
             },
         };
@@ -746,8 +747,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> Memory for ApuRp2A03<T, U> {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        trace!("APU: registers access: write byte at 0x{:04X} (0x{:04X})", addr, addr + 0x4000);
-
         match addr {
             0x00 => self.write_pulse_control(ChannelType::Pulse1, value)?,
             0x01 => self.write_pulse_sweep(ChannelType::Pulse1, value)?,
@@ -769,7 +768,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> Memory for ApuRp2A03<T, U> {
             0x0C => self.write_noise_control(value)?,
             0x0E => self.write_noise_mode_and_period(value)?,
             0x0F => self.write_length_counter_and_envelope_restart(ChannelType::Noise, value)?,
-            _ => debug!("APU: registers access: write byte at 0x{:04X} (0x{:04X}): 0x{:02X}", addr, addr + 0x4000, value),
+            _ => trace!("APU: invalid registers access: write byte at 0x{:04X} (0x{:04X}): 0x{:02X}", addr, addr + 0x4000, value),
         };
 
         Ok(())
@@ -792,17 +791,17 @@ impl<T: SoundPlayback, U: CPU + ?Sized> Memory for ApuRp2A03<T, U> {
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
-    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>) -> Self {
+impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
+    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
         ApuRp2A03 {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
             noise: Noise::new(),
             triangle: Triangle::new(),
-            dmc: Dmc::new(cpu.clone()),
+            dmc: Dmc::new(cpu.clone(), bus.clone()),
             frame_counter: FrameCounter::new(cpu.clone()),
             sound_player,
-            apu_cycles_acc: 0.0,
+            apu_cycles_acc: 0.0
         }
     }
 
@@ -828,10 +827,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         pulse.envelope.divider = value & 0x0F;
         pulse.envelope.volume = value & 0x0F;
 
-        trace!("APU: updated pulse control (0x{:02X}) {:?}: enabled: {}, duty: {} ({}), length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
-                 value, channel_type, pulse.enabled, pulse.duty_name(), pulse.duty_position(),
-                 pulse.length_counter.halt, pulse.envelope.loop_flag, pulse.envelope.const_volume, pulse.envelope.divider, pulse.envelope.volume);
-
         Ok(())
     }
 
@@ -843,9 +838,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         pulse.sweep.negate = (value & 0x08) != 0;
         pulse.sweep.shift = value & 0x07;
         pulse.sweep.reload = true;
-
-        trace!("APU: updated pulse sweep: enabled: {}, divider: {}, negate: {}, shift: {}, reload: {}",
-             pulse.sweep.enabled, pulse.sweep.initial_divider, pulse.sweep.negate, pulse.sweep.shift, pulse.sweep.reload);
 
         Ok(())
     }
@@ -864,13 +856,11 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
                 let pulse = self.get_pulse_channel_by_type(&channel_type);
 
                 pulse.timer_period = (pulse.timer_period & 0xFF00) | value as u16;
-                trace!("APU: updated pulse timer low byte: 0x{:04X}", pulse.timer_period);
             },
             ChannelType::Triangle => {
                 let triangle = &mut self.triangle;
 
                 triangle.timer_period = (triangle.timer_period & 0xFF00) | value as u16;
-                trace!("APU: updated triangle timer low byte: 0x{:04X}", triangle.timer_period);
             },
             _ => { unreachable!() }
         }
@@ -942,7 +932,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
 
         dmc.dmc_irq = (value & 0x80) != 0;
         dmc.loop_flag = (value & 0x40) != 0;
-        dmc.timer_period = Dmc::<U>::period(value & 0x0F);
+        dmc.timer_period = Dmc::<U, V>::period(value & 0x0F);
 
         Ok(())
     }
@@ -993,9 +983,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
 
         self.frame_counter.inhibit_irq.set(true);
 
-        trace!("APU: channels status: pulse1: {}, pulse2: {}, triangle: {}, noise {}, status: 0x{:02X}",
-             pulse1, pulse2, triangle, noise, status);
-
         Ok(status)
     }
 
@@ -1035,9 +1022,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
          */
         self.dmc.dmc_irq = false;
 
-        trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, triangle: {}, noise enabled: {}",
-             self.pulse1.enabled, self.pulse2.enabled, self.triangle.enabled, self.noise.enabled);
-
         Ok(())
     }
 
@@ -1058,9 +1042,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
             self.tick_sweep_units();
         }
 
-        trace!("APU: updated frame counter: mode: {:?}, inhibit_irq: {}",
-             self.frame_counter.mode, self.frame_counter.inhibit_irq.get());
-
         Ok(())
     }
 
@@ -1072,10 +1053,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         noise.envelope.const_volume = (value & 0x10) != 0;
         noise.envelope.divider = value & 0x0F;
         noise.envelope.volume = value & 0x0F;
-
-        trace!("APU: updated noise control (0x{:02X}): enabled: {}, length counter halt: {}, loop: {}, constant volume: {}, divider: {}, volume: {}",
-                 value, noise.enabled, noise.length_counter.halt, noise.envelope.loop_flag,
-                 noise.envelope.const_volume, noise.envelope.divider, noise.envelope.volume);
 
         Ok(())
     }
@@ -1101,9 +1078,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         noise.length_counter.reload();
 
         noise.envelope.start_flag = true;
-
-        trace!("APU: updated length counter and envelope restart for noise channel: counter initial: {}, reload: {}",
-                 noise.length_counter.counter_initial, noise.envelope.start_flag);
 
         Ok(())
     }
@@ -1300,7 +1274,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized> APU for ApuRp2A03<T, U> {
+impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U, V> {
     fn reset(&mut self) -> Result<(), ApuError> {
         info!("resetting APU");
         self.pulse1.reset();
@@ -1328,13 +1302,13 @@ impl<T: SoundPlayback, U: CPU + ?Sized> APU for ApuRp2A03<T, U> {
      *
      ***/
     fn run(&mut self, _: u32, credits: u32) -> Result<u32, ApuError> {
-        let apu_credits = ApuRp2A03::<T, U>::convert_cpu_cycles_to_apu_cycles(credits);
+        let apu_credits = ApuRp2A03::<T, U, V>::convert_cpu_cycles_to_apu_cycles(credits);
 
         for _ in 0..apu_credits {
             self.clock_pulse_timers();
             self.clock_triangle_timer();
             self.clock_noise_timer();
-            self.clock_dmc_timer(); // should be clocked every CPU cycle and not APU cycle
+            self.clock_dmc_timer()?; // should be clocked every CPU cycle and not APU cycle
             self.clock_frame_sequencer(1)?;
 
             self.apu_cycles_acc += 1.0;
