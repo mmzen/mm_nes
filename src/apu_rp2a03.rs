@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::cmp::PartialEq;
 use std::fmt::Debug;
 use std::rc::Rc;
 use log::{debug, info, trace};
@@ -465,7 +466,7 @@ const DMC_PERIODS: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54
 ];
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum DmcBufferState {
     Empty,
     NotEmpty
@@ -542,15 +543,19 @@ impl<U: CPU + ?Sized> Dmc<U> {
         DMC_PERIODS[value as usize] / 2
     }
 
-    fn restart(&mut self) {
-        self.current_address = self.sample_address;
-        self.bytes_remaining = self.sample_length;
-    }
-
     fn interrupt(&mut self) -> Result<(), ApuError> {
         debug!("APU: signaling interrupt from dmc");
         self.cpu.borrow_mut().signal_irq()?;
         Ok(())
+    }
+
+    fn dma_read(&mut self) -> Result<u8, ApuError> {
+        Ok(0x12)
+    }
+
+    fn reload_sample_values(&mut self) {
+        self.current_address = self.sample_address;
+        self.bytes_remaining = self.sample_length;
     }
 
     fn increment_sample_address(&mut self) {
@@ -561,29 +566,46 @@ impl<U: CPU + ?Sized> Dmc<U> {
         };
     }
 
-    fn cycle_output(&mut self) {
-        if self.timer_counter == 0 {
-            if self.bits_remaining == 0 {
+    fn memory_reader(&mut self) -> Result<(), ApuError> {
+        if self.bytes_remaining > 0 && self.sample_state == DmcBufferState::Empty {
+            self.sample_buffer = self.dma_read()?;
+            self.increment_sample_address();
+            self.bytes_remaining -= 1;
 
-                if let DmcBufferState::Empty = self.sample_state {
-                    self.silenced = true;
-                } else {
-                    self.silenced = false;
-                    self.shift_register = self.sample_buffer;
-                    self.sample_state = DmcBufferState::NotEmpty;
-                    self.bits_remaining = 8;
+            self.sample_state = DmcBufferState::NotEmpty;
+
+            if self.bytes_remaining == 0 {
+                if self.loop_flag == true {
+                    self.reload_sample_values()
+                } else if self.dmc_irq == true {
+                    self.interrupt()?;
                 }
-            } else {
-                self.bits_remaining -= 1;
             }
-
-            self.timer_counter = self.timer_period;
-        } else {
-            self.timer_counter -= 1;
         }
+
+        Ok(())
     }
 
-    fn update_output_level(&mut self) {
+    fn output_counter(&mut self) -> Result<(), ApuError> {
+        if self.bits_remaining == 0 {
+            self.bits_remaining = 8;
+            if self.sample_state == DmcBufferState::Empty {
+                self.silenced = true;
+            } else {
+                if self.silenced == true {
+                    self.silenced = false;
+                }
+                self.shift_register = self.sample_buffer;
+                self.sample_state = DmcBufferState::Empty;
+            }
+        } else {
+            self.bits_remaining -= 1;
+        }
+
+        Ok(())
+    }
+
+    fn update_level(&mut self) {
         if self.silenced == false {
             let bit_0 = self.shift_register & 0x01;
 
@@ -595,30 +617,6 @@ impl<U: CPU + ?Sized> Dmc<U> {
 
             self.shift_register >>= 1;
         }
-    }
-
-    fn conditional_refill(&mut self) -> Result<(), ApuError> {
-        if let DmcBufferState::Empty = self.sample_state {
-            if self.bytes_remaining > 0 {
-                self.sample_buffer = 60; // XXX load sample data
-                self.increment_sample_address();
-                self.bytes_remaining -= 1;
-
-                if self.bytes_remaining == 0 {
-                    if self.loop_flag == true {
-                        self.restart()
-                    }
-
-                    if self.dmc_irq == true {
-                        self.interrupt()?;
-                    }
-                } else {
-                    self.sample_state = DmcBufferState::NotEmpty;
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -1026,12 +1024,15 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         }
 
         if dmc_bit == true && self.dmc.bytes_remaining == 0  {
-            self.dmc.restart();
+            self.dmc.reload_sample_values();
         } else {
             self.dmc.silenced = true;
             self.dmc.bytes_remaining = 0;
         }
 
+        /***
+         * should clear the signal to the CPU as well.
+         */
         self.dmc.dmc_irq = false;
 
         trace!("APU: updated channels status: pulse1 enabled: {}, pulse2 enabled: {}, triangle: {}, noise enabled: {}",
@@ -1154,11 +1155,20 @@ impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
         }
     }
 
-    fn clock_dmc_timer(&mut self) {
+    fn clock_dmc_timer(&mut self) -> Result<(), ApuError> {
         let dmc = &mut self.dmc;
 
-        dmc.cycle_output();
-        dmc.update_output_level();
+        if dmc.timer_counter == 0 {
+            dmc.memory_reader()?;
+            dmc.output_counter()?;
+            dmc.update_level();
+
+            dmc.timer_counter = dmc.timer_period;
+        } else {
+            dmc.timer_counter -= 1;
+        }
+
+        Ok(())
     }
 
     fn convert_cpu_cycles_to_apu_cycles(cpu_cycle: u32) -> u32 {
