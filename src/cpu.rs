@@ -63,9 +63,13 @@ impl Display for CpuError {
 }
 
 pub trait Interruptible {
-    #[allow(dead_code)]
-    fn signal_irq(&mut self) -> Result<(), CpuError>;
+    fn signal_irq(&mut self, irq_source: u8) -> Result<(), CpuError>;
+    fn clear_irq(&mut self, irq_source: u8) -> Result<(), CpuError>;
+    fn is_asserted_irq(&self) -> Result<bool, CpuError>;
+    fn is_asserted_irq_by_source(&self, irq_source: u8) -> Result<bool, CpuError>;
     fn signal_nmi(&mut self) -> Result<(), CpuError>;
+    fn clear_nmi(&mut self) -> Result<(), CpuError>;
+    fn is_asserted_nmi(&self) -> Result<bool, CpuError>;
 }
 
 #[cfg(test)]
@@ -87,7 +91,12 @@ mock! {
     }
 
     impl Interruptible for CpuStub {
-        fn signal_irq(&mut self) -> Result<(), CpuError>;
+        fn signal_irq(&mut self, irq_source: u8) -> Result<(), CpuError>;
+        fn clear_irq(&mut self, irq_source: u8) -> Result<(), CpuError>;
+        fn is_asserted_irq(&self) -> Result<bool, CpuError>;
+        fn is_asserted_irq_by_source(&self, irq_source: u8) -> Result<bool, CpuError>;
         fn signal_nmi(&mut self) -> Result<(), CpuError>;
+        fn clear_nmi(&mut self) -> Result<(), CpuError>;
+        fn is_asserted_nmi(&self) -> Result<bool, CpuError>;
     }
 }

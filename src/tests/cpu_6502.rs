@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
 use crate::cpu::Interruptible;
-use crate::cpu_6502::Cpu6502;
+use crate::cpu_6502::{Cpu6502, APU_FRAME_COUNTER_IRQ};
 use crate::tests::init;
 
 
@@ -26,7 +26,7 @@ fn signal_irq_works() {
     let result = cpu.is_irq_pending();
     assert_eq!(result, false);
 
-    cpu.signal_irq().unwrap();
+    cpu.signal_irq(APU_FRAME_COUNTER_IRQ).unwrap();
     let result = cpu.is_irq_pending();
     assert_eq!(result, true);
 }

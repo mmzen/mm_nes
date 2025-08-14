@@ -43,7 +43,8 @@ pub trait Memory: Debug {
 #[derive(Debug, PartialEq)]
 pub enum MemoryError {
     OutOfRange(u16),
-    BusError(u16)
+    BusError(u16),
+    IllegalState(String),
 }
 
 impl Error for MemoryError {}
@@ -52,7 +53,8 @@ impl Display for MemoryError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             MemoryError::OutOfRange(addr) => write!(f, "memory access out of bounds: 0x{:04X}", addr),
-            MemoryError::BusError(addr) => { write!(f, "bus error: 0x{:04X}", addr) }
+            MemoryError::BusError(addr) => { write!(f, "bus error: 0x{:04X}", addr) },
+            MemoryError::IllegalState(s) => { write!(f, "illegal state: {}", s) }
         }
     }
 }

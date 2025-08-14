@@ -160,12 +160,35 @@ impl Registers {
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum Interrupt {
-    IRQ,
-    NMI,
-    NONE
+pub const APU_FRAME_COUNTER_IRQ: u8 = 0x01;
+pub const APU_DMC_IRQ: u8 = 0x02;
+pub const PPU_NMI: u8 = 0x80;
+
+#[derive(Debug, Default)]
+struct InterruptMask(u8);
+
+impl InterruptMask {
+    fn set(&mut self, mask: u8) {
+        self.0 |= mask;
+    }
+
+    fn unset(&mut self, mask: u8) {
+        self.0 &= !mask;
+    }
+
+    fn is_set(&self, mask: u8) -> bool {
+        (self.0 & mask) == mask
+    }
+
+    fn has_irq(&self) -> bool {
+        (self.0 & !PPU_NMI) != 0
+    }
+
+    fn has_nmi(&self) -> bool {
+        self.0 & PPU_NMI != 0
+    }
 }
+
 
 #[derive(Debug)]
 pub struct Cpu6502 {
@@ -174,24 +197,46 @@ pub struct Cpu6502 {
     instructions_executed: u64,
     tracing: bool,
     tracer: Tracer,
-    interrupt: Interrupt
+    interrupt: InterruptMask
 }
 
 impl Interruptible for Cpu6502 {
-    fn signal_irq(&mut self) -> Result<(), CpuError> {
-        if self.registers.get_status(StatusFlag::InterruptDisable) == false{
-            //debug!("CPU: IRQ interrupt - status register: {:02X} (interrupt disable: {})",
-            //    self.registers.p, self.registers.get_status(StatusFlag::InterruptDisable));
-            self.interrupt = Interrupt::IRQ;
+    fn signal_irq(&mut self, irq_source: u8) -> Result<(), CpuError> {
+        if self.registers.get_status(StatusFlag::InterruptDisable) == false {
+            self.interrupt.set(irq_source);
         }
 
         Ok(())
     }
 
-    fn signal_nmi(&mut self) -> Result<(), CpuError> {
-        //debug!("CPU: NMI interrupt");
-        self.interrupt = Interrupt::NMI;
+    fn clear_irq(&mut self, irq_source: u8) -> Result<(), CpuError> {
+        if self.interrupt.is_set(irq_source) {
+            self.interrupt.unset(irq_source);
+        }
+
         Ok(())
+    }
+
+    fn is_asserted_irq(&self) -> Result<bool, CpuError> {
+        Ok(self.interrupt.has_irq())
+    }
+
+    fn is_asserted_irq_by_source(&self, irq_source: u8) -> Result<bool, CpuError> {
+        Ok(self.interrupt.is_set(irq_source))
+    }
+
+    fn signal_nmi(&mut self) -> Result<(), CpuError> {
+        self.interrupt.set(PPU_NMI);
+        Ok(())
+    }
+
+    fn clear_nmi(&mut self) -> Result<(), CpuError> {
+        self.interrupt.unset(PPU_NMI);
+        Ok(())
+    }
+
+    fn is_asserted_nmi(&self) -> Result<bool, CpuError> {
+        Ok(self.interrupt.has_nmi())
     }
 }
 
@@ -336,22 +381,18 @@ impl Cpu6502 {
             instructions_executed: 0,
             tracing,
             tracer: Tracer::new_with_file(trace_file),
-            interrupt: Interrupt::NONE
+            interrupt: InterruptMask::default()
         }
     }
 
     fn interrupt(&mut self) -> Result<(), CpuError> {
-        match self.interrupt {
-            Interrupt::NMI => {
-                self.nmi()?;
-                self.interrupt = Interrupt::NONE;
-            },
-            Interrupt::IRQ => {
-                self.irq()?;
-                self.interrupt = Interrupt::NONE;
-            },
-            Interrupt::NONE => {}
-        };
+        if self.is_asserted_nmi()? {
+            self.nmi()?;
+            self.clear_nmi()?;
+        } else if self.is_asserted_irq()? {
+            self.irq()?;
+            // self.clear_irq(APU_DMC_IRQ)?; //  XXX should not be here
+        }
 
         Ok(())
     }
@@ -694,12 +735,12 @@ impl Cpu6502 {
 
     #[cfg(test)]
     pub fn is_nmi_pending(&self) -> bool {
-        self.interrupt == Interrupt::NMI
+        self.is_asserted_nmi().unwrap()
     }
 
     #[cfg(test)]
     pub fn is_irq_pending(&self) -> bool {
-        self.interrupt == Interrupt::IRQ
+        self.is_asserted_irq().unwrap()
     }
 }
 
@@ -982,16 +1023,16 @@ impl Instruction {
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
 
-        let addr = if cpu.interrupt == Interrupt::NMI {
+        let addr = if cpu.is_asserted_nmi()? == true {
+            cpu.clear_nmi()?;
             cpu.bus.borrow().read_word(NMI_VECTOR)?
-        } else if cpu.interrupt == Interrupt::IRQ {
+        } else if cpu.is_asserted_irq()? == true {
             cpu.bus.borrow().read_word(IRQ_VECTOR)?
         } else {
             cpu.bus.borrow().read_word(BRK_VECTOR)?
         };
 
         cpu.registers.set_pc(addr);
-        cpu.interrupt = Interrupt::NONE;
 
         Ok(0)
     }

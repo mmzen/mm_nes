@@ -3,9 +3,10 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
+use crate::mapper::NesMapper;
 use crate::nrom_cartridge::NROMCartridge;
 use crate::ppu::PpuNameTableMirroring;
 
@@ -44,6 +45,9 @@ impl Loader for INesLoader {
         debug!("loader: chr rom data starting at offset 0x{:04x}, {} bytes", chr_addr, chr_rom_size);
         debug!("loader: name tables mirroring: {:?}", mirroring);
         debug!("loader: mapper: {}", header.flags_6);
+
+        //let mapper = NesMapper::from_id(header.flags_6);
+        //info!("loader: mapper detected ({}): {}, id: {}, supported: {}", header.flags_6, mapper.name(), mapper.id(), mapper.is_supported());
 
         File::seek(&mut file, SeekFrom::Start(prg_addr as u64))?;
         let cartridge = self.build_cartridge(file, prg_rom_size, chr_rom_size, mirroring)?;

@@ -8,6 +8,7 @@ use crate::apu::ApuType::RP2A03;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cpu::CPU;
+use crate::cpu_6502::{APU_DMC_IRQ, APU_FRAME_COUNTER_IRQ};
 use crate::memory::{Memory, MemoryError};
 use crate::sound_playback::SoundPlayback;
 
@@ -472,7 +473,6 @@ const DMC_PERIODS: [u16; 16] = [
 #[derive(Debug)]
 struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
     irq_enable: bool,
-    irq_flag: bool,
     timer_period: u16,
     timer_counter: u16,
     loop_flag: bool,
@@ -492,7 +492,6 @@ struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
 impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
     fn reset(&mut self) {
         self.irq_enable = false;
-        self.irq_flag = false;
         self.timer_period = 0;
         self.timer_counter = 0;
         self.loop_flag = false;
@@ -520,7 +519,6 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     fn new(cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
         Dmc {
             irq_enable: false,
-            irq_flag: false,
             timer_period: 0,
             timer_counter: 0,
             loop_flag: false,
@@ -544,17 +542,40 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
 
     fn interrupt(&mut self) -> Result<(), ApuError> {
         debug!("APU: signaling interrupt from dmc");
-        self.cpu.borrow_mut().signal_irq()?;
+
+        /***
+         * unsafe code is needed as clear_interrupt can be called
+         * from a register write method, directly calling by the CPU,
+         * and already having a mutable reference to itself.
+         ***/
+        let cpu = self.cpu.as_ptr();
+        unsafe { &mut *cpu }.signal_irq(APU_DMC_IRQ)?;
         Ok(())
+    }
+
+    fn clear_interrupt(&mut self) -> Result<(), ApuError> {
+        debug!("APU: clearing interrupt line from dmc");
+
+        /***
+         * unsafe code is needed as clear_interrupt can be called
+         * from a register write method, directly calling by the CPU,
+         * and already having a mutable reference to itself.
+         ***/
+        let cpu = self.cpu.as_ptr();
+        unsafe { &mut *cpu }.clear_irq(APU_DMC_IRQ)?;
+        Ok(())
+    }
+
+    fn is_asserted_irq(&self) -> Result<bool, ApuError> {
+        let cpu = self.cpu.as_ptr();
+        let irq_line_asserted = unsafe { &mut *cpu }.is_asserted_irq_by_source(APU_DMC_IRQ)?;
+        Ok(irq_line_asserted)
     }
 
     fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
         self.sample_buffer = Some(self.bus.borrow().read_byte(self.current_address)?);
         self.bytes_remaining -= 1;
         self.current_address = if self.current_address == 0xFFFF { 0x8000 } else { self.current_address + 1 };
-
-        //println!("XXX READ THROUGH DMA: 0x{:02X}, current addr (after read): 0x{:04X}, initial addr: 0x{:04X}, remaining (after read): {} bytes)",
-        //         self.sample_buffer.clone().take().unwrap(), self.current_address, self.sample_address, self.bytes_remaining);
 
         Ok(0)
     }
@@ -565,16 +586,13 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     }
 
     fn memory_reader(&mut self) -> Result<(), ApuError> {
-        if self.bytes_remaining > 0 && self.sample_buffer.is_none() {
+        if  self.bytes_remaining > 0 && self.sample_buffer.is_none() {
             self.dma_read_and_update_sample_buffer_and_counter()?;
-        } else if self.bytes_remaining == 0 && self.bits_remaining == 0 {
+        } else if self.bytes_remaining == 0 {
             if self.loop_flag == true {
                 self.reload_sample_values()
-            } else {
-                if self.irq_enable == true {
-                    self.irq_flag = true;
-                    self.interrupt()?;
-                }
+            } else if self.irq_enable == true {
+                self.interrupt()?;
             }
         }
 
@@ -677,7 +695,7 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
 
     fn interrupt(&mut self) -> Result<(), ApuError> {
         debug!("APU: signaling interrupt from frame counter");
-        self.cpu.borrow_mut().signal_irq()?;
+        self.cpu.borrow_mut().signal_irq(APU_FRAME_COUNTER_IRQ)?;
         Ok(())
     }
 }
@@ -923,7 +941,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         dmc.irq_enable = (value & 0x80) != 0;
 
         if dmc.irq_enable == false {
-            dmc.irq_flag = false;
+            let _ = dmc.clear_interrupt();
+        } else {
+            let _ = dmc.interrupt();
         }
 
         dmc.loop_flag = (value & 0x40) != 0;
@@ -947,7 +967,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
      */
     fn write_dmc_sample_address(&mut self, value: u8) -> Result<(), MemoryError> {
         self.dmc.sample_address = 0xC000 | ((value as u16) << 6);
-        //println!("XXX SAMPLE ADDR: 0x{:04X}, value: 0x{:04X}", self.dmc.sample_address, value);
         Ok(())
     }
 
@@ -956,7 +975,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
      */
     fn write_dmc_sample_length(&mut self, value: u8) -> Result<(), MemoryError> {
         self.dmc.sample_length = ((value as u16) << 4) | 0x01;
-        //println!("XXX SAMPLE LENGTH: {}, value: 0x{:04X}", self.dmc.sample_length, value);
         Ok(())
     }
 
@@ -972,7 +990,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         let noise = self.noise.length_counter.counter > 0;
         let dmc = self.dmc.bytes_remaining > 0;
         let frame_irq = self.frame_counter.inhibit_irq.get();
-        let dmc_irq = self.dmc.irq_enable && self.dmc.irq_flag;
+        let dmc_irq = self.dmc.irq_enable
+            && self.dmc.is_asserted_irq()
+            .map_err(|_| MemoryError::IllegalState("could not get irq line status for DMC channel".to_string()))?;
 
         let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
 
@@ -1021,7 +1041,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             self.dmc.bytes_remaining = 0;
         }
 
-        self.dmc.irq_flag = false;
+        let _ = self.dmc.clear_interrupt();
 
         Ok(())
     }
@@ -1134,9 +1154,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         let dmc = &mut self.dmc;
 
         if dmc.timer_counter == 0 {
+            dmc.memory_reader()?;
             dmc.output_counter()?;
             dmc.update_level();
-            dmc.memory_reader()?;
             dmc.timer_counter = dmc.timer_period;
         } else {
             dmc.timer_counter -= 1;
