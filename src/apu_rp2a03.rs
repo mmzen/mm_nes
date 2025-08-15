@@ -470,15 +470,22 @@ const DMC_PERIODS: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54
 ];
 
+#[derive(Debug, PartialEq)]
+enum Reload {
+    None,
+    Once,
+    Loop,
+}
+
 #[derive(Debug)]
 struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
     irq_enable: bool,
     timer_period: u16,
     timer_counter: u16,
-    loop_flag: bool,
+    reload: Reload,
     output_level: u8,
     sample_address: u16,
-    current_address: u16,
+    current_address: Option<u16>,
     sample_length: u16,
     sample_buffer: Option<u8>,
     bytes_remaining: u16,
@@ -494,10 +501,10 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
         self.irq_enable = false;
         self.timer_period = 0;
         self.timer_counter = 0;
-        self.loop_flag = false;
+        self.reload = Reload::None;
         self.output_level = 0;
         self.sample_address = 0;
-        self.current_address = 0;
+        self.current_address = None;
         self.sample_length = 0;
         self.sample_buffer = None;
         self.bytes_remaining = 0;
@@ -521,10 +528,10 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             irq_enable: false,
             timer_period: 0,
             timer_counter: 0,
-            loop_flag: false,
+            reload: Reload::None,
             output_level: 0,
             sample_address: 0,
-            current_address: 0,
+            current_address: None,
             sample_length: 0,
             sample_buffer: None,
             bytes_remaining: 0,
@@ -573,61 +580,84 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     }
 
     fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
-        self.sample_buffer = Some(self.bus.borrow().read_byte(self.current_address)?);
-        self.bytes_remaining -= 1;
-        self.current_address = if self.current_address == 0xFFFF { 0x8000 } else { self.current_address + 1 };
+        match self.current_address {
+            Some(addr) => {
+                self.sample_buffer = Some(self.bus.borrow().read_byte(addr)?);
+                self.bytes_remaining -= 1;
+                self.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
+            },
+            None => {
+                return Err(MemoryError::IllegalState("dmc dma current address is not set".to_string()))
+            }
+        }
 
         Ok(0)
     }
 
-    fn reload_sample_values(&mut self) {
-        self.current_address = self.sample_address;
+    fn reload_sample_window(&mut self) {
+        self.current_address = Some(self.sample_address);
         self.bytes_remaining = self.sample_length;
     }
 
-    fn memory_reader(&mut self) -> Result<(), ApuError> {
-        if  self.bytes_remaining > 0 && self.sample_buffer.is_none() {
+    fn cond_dma_prefetch(&mut self) -> Result<(), ApuError> {
+        if self.bytes_remaining > 0 && self.sample_buffer.is_none()  {
             self.dma_read_and_update_sample_buffer_and_counter()?;
-        } else if self.bytes_remaining == 0 {
-            if self.loop_flag == true {
-                self.reload_sample_values()
-            } else if self.irq_enable == true {
-                self.interrupt()?;
-            }
+            //self.silenced = false;
         }
 
         Ok(())
     }
 
-    fn output_counter(&mut self) -> Result<(), ApuError> {
+    fn refill_or_underflow(&mut self) -> Result<(), ApuError> {
         if self.bits_remaining == 0 {
-            if self.sample_buffer.is_none() {
-                self.silenced = true;
-            } else {
-                self.silenced = false;
-                self.shift_register = self.sample_buffer.take().unwrap();
+            if let Some(sample_buffer) = self.sample_buffer.take() {
+                self.shift_register = sample_buffer;
                 self.bits_remaining = 8;
+                self.silenced = false;
+            } else {
+                self.silenced = true;
+                if self.bytes_remaining == 0 {
+                    match self.reload {
+                        Reload::Loop => {
+                            self.reload_sample_window()
+                        },
+                        Reload::Once => {
+                            self.reload_sample_window();
+                            self.reload = Reload::None;
+                        },
+                        _ => {
+                            if self.irq_enable {
+                                self.interrupt()?;
+                            }
+                        }
+                    }
+                }
             }
         }
-
         Ok(())
     }
 
-    fn update_level(&mut self) {
-        if self.silenced == false {
-            let bit_0 = self.shift_register & 0x01;
+    fn update_output_level(&mut self) {
+        let bit_0 = self.shift_register & 0x01;
 
-            if bit_0 == 1 && self.output_level <= 125 {
-                self.output_level += 2;
-            } else if bit_0 == 0 && self.output_level >= 2 {
-                self.output_level -= 2;
-            }
-
-            self.shift_register >>= 1;
-            if self.bits_remaining > 0 {
-                self.bits_remaining -= 1;
-            }
+        if bit_0 == 1 && self.output_level <= 125 {
+            self.output_level += 2;
+        } else if bit_0 == 0 && self.output_level >= 2 {
+            self.output_level -= 2;
         }
+
+        self.shift_register >>= 1;
+    }
+
+    fn conditional_send_interrupt(&mut self) -> Result<(), ApuError> {
+        if self.bits_remaining == 0 &&
+            self.sample_buffer.is_none() &&
+            self.bytes_remaining == 0 &&
+            self.irq_enable == true &&
+            self.reload != Reload::Loop {
+            self.interrupt()?;
+        }
+        Ok(())
     }
 }
 
@@ -942,11 +972,14 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
 
         if dmc.irq_enable == false {
             let _ = dmc.clear_interrupt();
-        } else {
-            let _ = dmc.interrupt();
         }
 
-        dmc.loop_flag = (value & 0x40) != 0;
+        if (value & 0x40) != 0 {
+            dmc.reload = Reload::Loop
+        } else {
+            dmc.reload = Reload::None
+        }
+
         dmc.timer_period = Dmc::<U, V>::period(value & 0x0F);
 
         Ok(())
@@ -990,9 +1023,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         let noise = self.noise.length_counter.counter > 0;
         let dmc = self.dmc.bytes_remaining > 0;
         let frame_irq = self.frame_counter.inhibit_irq.get();
-        let dmc_irq = self.dmc.irq_enable
-            && self.dmc.is_asserted_irq()
-            .map_err(|_| MemoryError::IllegalState("could not get irq line status for DMC channel".to_string()))?;
+        let dmc_irq = self.dmc.is_asserted_irq().map_err(
+            |_| MemoryError::IllegalState("could not get irq line status for DMC channel".to_string())
+        )?;
 
         let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
 
@@ -1002,6 +1035,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         status |= (!frame_irq as u8) << 6;
         status |= (dmc_irq as u8) << 7;
 
+        //println!("DMC IRQ ASSERTED: 0x{:02X}", (dmc_irq as u8) << 7);
         /***
          * should clear a real irq_flag
          */
@@ -1035,7 +1069,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
 
         if dmc_bit == true && self.dmc.bytes_remaining == 0  {
-            self.dmc.reload_sample_values();
+            self.dmc.reload = Reload::Once;
         } else if dmc_bit == false {
             self.dmc.sample_buffer = None;
             self.dmc.bytes_remaining = 0;
@@ -1153,10 +1187,23 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
     fn clock_dmc_timer(&mut self) -> Result<(), ApuError> {
         let dmc = &mut self.dmc;
 
+        // initial sample load
+        if dmc.current_address.is_none() && dmc.bytes_remaining > 0 {
+            println!("initial fill of sample buffer");
+            dmc.reload_sample_window();
+        }
+
+        // dma prefetch
+        dmc.cond_dma_prefetch()?;
+
         if dmc.timer_counter == 0 {
-            dmc.memory_reader()?;
-            dmc.output_counter()?;
-            dmc.update_level();
+            dmc.refill_or_underflow()?;
+
+            if dmc.bits_remaining > 0 {
+                dmc.update_output_level();
+                dmc.bits_remaining -= 1;
+            }
+
             dmc.timer_counter = dmc.timer_period;
         } else {
             dmc.timer_counter -= 1;
