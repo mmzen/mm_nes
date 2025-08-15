@@ -154,10 +154,6 @@ impl Registers {
         self.pc = pc;
         self.is_pc_dirty = true;
     }
-
-    fn increment_pc(&mut self, n: u16) {
-        self.pc += n;
-    }
 }
 
 pub const APU_FRAME_COUNTER_IRQ: u8 = 0x01;
@@ -295,11 +291,13 @@ impl CPU for Cpu6502 {
         let mut cycles = start_cycle;
         let cycles_threshold = start_cycle + credits;
 
-        //debug!("CPU: running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
-
-        let start = Instant::now();
-        let previous_instructions_executed = self.instructions_executed;
-        let previous_cycles = cycles;
+        /***
+         * debug!("CPU: running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
+         *
+         * let start = Instant::now();
+         * let previous_instructions_executed = self.instructions_executed;
+         * let previous_cycles = cycles;
+         ***/
 
         loop {
             //debug!("CPU: program counter: 0x{:04X}", self.registers.pc);
@@ -329,18 +327,20 @@ impl CPU for Cpu6502 {
             }
         }
 
-        let duration = Instant::now() - start;
-        let duration_micro_sec = duration.as_micros();
-        let instruction_executed = self.instructions_executed - previous_instructions_executed;
-        let instructions_per_sec = instruction_executed as f64 / duration.as_secs_f64();
-        let cycles_consumed = cycles - previous_cycles;
-        let cycle_per_sec = cycles_consumed as f64 / duration.as_secs_f64();
-
-        //debug!("CPU: executed {} instructions in {} μs ({:.0} / sec)",
-        //    instruction_executed, duration_micro_sec, instructions_per_sec);
-
-        //debug!("CPU: {} cycles in {} μs ({:.0} / sec)",
-        //    cycles_consumed, duration_micro_sec, cycle_per_sec);
+        /***
+         * let duration = Instant::now() - start;
+         * let duration_micro_sec = duration.as_micros();
+         * let instruction_executed = self.instructions_executed - previous_instructions_executed;
+         * let instructions_per_sec = instruction_executed as f64 / duration.as_secs_f64();
+         * let cycles_consumed = cycles - previous_cycles;
+         * let cycle_per_sec = cycles_consumed as f64 / duration.as_secs_f64();
+         *
+         * debug!("CPU: executed {} instructions in {} μs ({:.0} / sec)",
+         *    instruction_executed, duration_micro_sec, instructions_per_sec);
+         *
+         * debug!("CPU: {} cycles in {} μs ({:.0} / sec)",
+         *    cycles_consumed, duration_micro_sec, cycle_per_sec);
+         ***/
 
         Ok(cycles)
     }
@@ -574,10 +574,7 @@ impl Cpu6502 {
     }
 
     fn decode_instruction<'a>(byte: u8) -> Result<&'a Instruction, CpuError> {
-        let aaa = (byte & 0b1110_0000) >> 2;
-        let cc = byte & 0b0000_0011;
-        let opcode = aaa | cc;
-
+        //let opcode = aaa | cc;
         //debug!("CPU: decoded instruction: 0x{:02X}: opcode: 0x{:02X}", byte, opcode);
 
         let instruction = &INSTRUCTION_TABLE[byte as usize];
@@ -736,11 +733,6 @@ impl Cpu6502 {
     #[cfg(test)]
     pub fn clear_internal_interrupt_value(&mut self) {
         self.interrupt.0 = 0;
-    }
-
-    #[cfg(test)]
-    pub fn is_nmi_pending(&self) -> bool {
-        self.is_asserted_nmi().unwrap()
     }
 }
 

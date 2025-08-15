@@ -393,7 +393,7 @@ impl Noise {
     }
 
     fn period(value: u8) -> u16 {
-        NOISE_PERIOD_DURATIONS[value as usize] / 2
+        NOISE_PERIOD_DURATIONS[value as usize]
     }
 }
 
@@ -554,7 +554,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     }
 
     fn period(value: u8) -> u16 {
-        DMC_PERIODS[value as usize] / 2
+        DMC_PERIODS[value as usize]
     }
 
     fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
@@ -1004,7 +1004,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
 
         let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
 
-        status |= (!frame_irq as u8) << 6;
+        status |= (frame_irq as u8) << 6;
         status |= (dmc_irq as u8) << 7;
 
         self.frame_counter.clear_interrupt().map_err(|e|
@@ -1062,8 +1062,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             false => FrameCounterMode::FourStep,
         };
 
+        self.frame_counter.inhibit_irq.set(inhibit_irq);
+
         if inhibit_irq {
-            self.frame_counter.inhibit_irq.set((value & 0x40) != 0);
             self.frame_counter.clear_interrupt().map_err(|e|
                 MemoryError::IllegalState(e.to_string()))?
         }
@@ -1185,11 +1186,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
 
         Ok(())
     }
-
-    fn convert_cpu_cycles_to_apu_cycles(cpu_cycle: u32) -> u32 {
-        cpu_cycle / 2
-    }
-
 
     fn tick_sweep_units(&mut self) {
 
@@ -1343,20 +1339,29 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
      *
      ***/
     fn run(&mut self, _: u32, credits: u32) -> Result<u32, ApuError> {
-        let apu_credits = ApuRp2A03::<T, U, V>::convert_cpu_cycles_to_apu_cycles(credits);
 
-        for _ in 0..apu_credits {
-            self.clock_pulse_timers();
-            self.clock_triangle_timer();
-            self.clock_noise_timer();
-            self.clock_dmc_timer()?; // should be clocked every CPU cycle and not APU cycle
-            self.clock_frame_sequencer(1)?;
+        for counter in 0..credits {
 
-            self.apu_cycles_acc += 1.0;
+            /***
+             * DMC channel is clocked at the CPU clock rate
+             */
+            self.clock_dmc_timer()?;
 
-            while self.apu_cycles_acc >= APU_CYCLES_PER_SAMPLE {
-                self.clock_mixer();
-                self.apu_cycles_acc -= APU_CYCLES_PER_SAMPLE;
+            /***
+             * other channels are the frame counter are clocked at the APU clock rate
+             */
+            if counter % 2 == 0 {
+                self.clock_pulse_timers();
+                self.clock_triangle_timer();
+                self.clock_noise_timer();
+                self.clock_frame_sequencer(1)?;
+
+                self.apu_cycles_acc += 1.0;
+
+                while self.apu_cycles_acc >= APU_CYCLES_PER_SAMPLE {
+                    self.clock_mixer();
+                    self.apu_cycles_acc -= APU_CYCLES_PER_SAMPLE;
+                }
             }
         }
 
