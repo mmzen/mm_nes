@@ -202,10 +202,7 @@ pub struct Cpu6502 {
 
 impl Interruptible for Cpu6502 {
     fn signal_irq(&mut self, irq_source: u8) -> Result<(), CpuError> {
-        if self.registers.get_status(StatusFlag::InterruptDisable) == false {
-            self.interrupt.set(irq_source);
-        }
-
+        self.interrupt.set(irq_source);
         Ok(())
     }
 
@@ -213,7 +210,6 @@ impl Interruptible for Cpu6502 {
         if self.interrupt.is_set(irq_source) {
             self.interrupt.unset(irq_source);
         }
-
         Ok(())
     }
 
@@ -251,7 +247,7 @@ impl CPU for Cpu6502 {
         self.registers.set_status(StatusFlag::InterruptDisable, true);
         self.registers.set_status(StatusFlag::Unused, true);
         self.registers.sp = 0xFD;
-        self.registers.pc = RESET_VECTOR;
+        self.registers.pc = RESET_VECTOR; // XXX incorrect, RESET_VECTOR contains the reset vector but is not the reset vector
         Ok(())
     }
 
@@ -389,9 +385,8 @@ impl Cpu6502 {
         if self.is_asserted_nmi()? {
             self.nmi()?;
             self.clear_nmi()?;
-        } else if self.is_asserted_irq()? {
+        } else if self.is_asserted_irq()? && !self.registers.get_status(StatusFlag::InterruptDisable) {
             self.irq()?;
-            // self.clear_irq(APU_DMC_IRQ)?; //  XXX should not be here
         }
 
         Ok(())
@@ -734,13 +729,18 @@ impl Cpu6502 {
     }
 
     #[cfg(test)]
-    pub fn is_nmi_pending(&self) -> bool {
-        self.is_asserted_nmi().unwrap()
+    pub fn get_internal_interrupt_value(&self) -> u8 {
+        self.interrupt.0
     }
 
     #[cfg(test)]
-    pub fn is_irq_pending(&self) -> bool {
-        self.is_asserted_irq().unwrap()
+    pub fn clear_internal_interrupt_value(&mut self) {
+        self.interrupt.0 = 0;
+    }
+
+    #[cfg(test)]
+    pub fn is_nmi_pending(&self) -> bool {
+        self.is_asserted_nmi().unwrap()
     }
 }
 
@@ -1023,10 +1023,11 @@ impl Instruction {
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
 
-        let addr = if cpu.is_asserted_nmi()? == true {
+        // XXX not sure about this
+        let addr = if cpu.is_asserted_nmi()? {
             cpu.clear_nmi()?;
             cpu.bus.borrow().read_word(NMI_VECTOR)?
-        } else if cpu.is_asserted_irq()? == true {
+        } else if cpu.is_asserted_irq()? && !cpu.registers.get_status(StatusFlag::InterruptDisable) {
             cpu.bus.borrow().read_word(IRQ_VECTOR)?
         } else {
             cpu.bus.borrow().read_word(BRK_VECTOR)?

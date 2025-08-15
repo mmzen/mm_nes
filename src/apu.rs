@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::cpu::CpuError;
+use crate::irq_source::IrqError;
 use crate::memory::MemoryError;
 
 #[derive(Default, Debug, Clone)]
@@ -28,7 +29,8 @@ impl PartialEq for ApuType {
 #[derive(Debug)]
 pub enum ApuError {
     CpuError(CpuError),
-    MemoryError(MemoryError)
+    MemoryError(MemoryError),
+    IrqError(IrqError),
 }
 
 impl From<CpuError> for ApuError { 
@@ -43,11 +45,19 @@ impl From<MemoryError> for ApuError {
     }
 }
 
+impl From<IrqError> for ApuError {
+    fn from(error: IrqError) -> Self {
+        ApuError::IrqError(error)
+    }
+}
+
+
 impl Display for ApuError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             ApuError::MemoryError(e) => { write!(f, "memory error: {}", e) },
-            ApuError::CpuError(e) => { write!(f, "cpu error: {}", e) }
+            ApuError::CpuError(e) => { write!(f, "cpu error: {}", e) },
+            ApuError::IrqError(e) => { write!(f, "irq error: {}", e) }
         }
     }
 }

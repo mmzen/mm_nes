@@ -9,6 +9,7 @@ use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cpu::CPU;
 use crate::cpu_6502::{APU_DMC_IRQ, APU_FRAME_COUNTER_IRQ};
+use crate::irq_source::IrqSource;
 use crate::memory::{Memory, MemoryError};
 use crate::sound_playback::SoundPlayback;
 
@@ -473,7 +474,6 @@ const DMC_PERIODS: [u16; 16] = [
 #[derive(Debug, PartialEq)]
 enum Reload {
     None,
-    Once,
     Loop,
 }
 
@@ -522,6 +522,16 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
     }
 }
 
+impl<U: CPU + ?Sized, V: Bus + ?Sized> IrqSource<U> for Dmc<U, V> {
+    fn cpu(&self) -> *mut U {
+        self.cpu.as_ptr()
+    }
+
+    fn irq_mask(&self) -> u8 {
+        APU_DMC_IRQ
+    }
+}
+
 impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     fn new(cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
         Dmc {
@@ -545,38 +555,6 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
 
     fn period(value: u8) -> u16 {
         DMC_PERIODS[value as usize] / 2
-    }
-
-    fn interrupt(&mut self) -> Result<(), ApuError> {
-        debug!("APU: signaling interrupt from dmc");
-
-        /***
-         * unsafe code is needed as clear_interrupt can be called
-         * from a register write method, directly calling by the CPU,
-         * and already having a mutable reference to itself.
-         ***/
-        let cpu = self.cpu.as_ptr();
-        unsafe { &mut *cpu }.signal_irq(APU_DMC_IRQ)?;
-        Ok(())
-    }
-
-    fn clear_interrupt(&mut self) -> Result<(), ApuError> {
-        debug!("APU: clearing interrupt line from dmc");
-
-        /***
-         * unsafe code is needed as clear_interrupt can be called
-         * from a register write method, directly calling by the CPU,
-         * and already having a mutable reference to itself.
-         ***/
-        let cpu = self.cpu.as_ptr();
-        unsafe { &mut *cpu }.clear_irq(APU_DMC_IRQ)?;
-        Ok(())
-    }
-
-    fn is_asserted_irq(&self) -> Result<bool, ApuError> {
-        let cpu = self.cpu.as_ptr();
-        let irq_line_asserted = unsafe { &mut *cpu }.is_asserted_irq_by_source(APU_DMC_IRQ)?;
-        Ok(irq_line_asserted)
     }
 
     fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
@@ -613,19 +591,17 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             if let Some(sample_buffer) = self.sample_buffer.take() {
                 self.shift_register = sample_buffer;
                 self.bits_remaining = 8;
+
                 self.silenced = false;
             } else {
                 self.silenced = true;
+
                 if self.bytes_remaining == 0 {
                     match self.reload {
                         Reload::Loop => {
                             self.reload_sample_window()
                         },
-                        Reload::Once => {
-                            self.reload_sample_window();
-                            self.reload = Reload::None;
-                        },
-                        _ => {
+                        Reload::None => {
                             if self.irq_enable {
                                 self.interrupt()?;
                             }
@@ -647,17 +623,6 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         }
 
         self.shift_register >>= 1;
-    }
-
-    fn conditional_send_interrupt(&mut self) -> Result<(), ApuError> {
-        if self.bits_remaining == 0 &&
-            self.sample_buffer.is_none() &&
-            self.bytes_remaining == 0 &&
-            self.irq_enable == true &&
-            self.reload != Reload::Loop {
-            self.interrupt()?;
-        }
-        Ok(())
     }
 }
 
@@ -698,6 +663,16 @@ struct FrameCounter<U: CPU + ?Sized> {
     cpu: Rc<RefCell<U>>
 }
 
+impl<U: CPU + ?Sized> IrqSource<U> for FrameCounter<U> {
+    fn cpu(&self) -> *mut U {
+        self.cpu.as_ptr()
+    }
+
+    fn irq_mask(&self) -> u8 {
+        APU_FRAME_COUNTER_IRQ
+    }
+}
+
 impl<U: CPU + ?Sized> FrameCounter<U> {
     fn new(cpu: Rc<RefCell<U>>) -> Self {
         FrameCounter {
@@ -721,12 +696,6 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
             FrameCounterMode::FourStep => (&FRAME_COUNTER_4_STEPS_EVENTS, &FRAME_COUNTER_4_STEPS_SEQUENCES),
             FrameCounterMode::FiveStep => (&FRAME_COUNTER_5_STEPS_EVENTS, &FRAME_COUNTER_5_STEPS_SEQUENCES),
         }
-    }
-
-    fn interrupt(&mut self) -> Result<(), ApuError> {
-        debug!("APU: signaling interrupt from frame counter");
-        self.cpu.borrow_mut().signal_irq(APU_FRAME_COUNTER_IRQ)?;
-        Ok(())
     }
 }
 
@@ -763,7 +732,8 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, U, V> {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         info!("initializing APU");
-        let _ = self.reset();
+        self.reset().map_err(|e|
+            MemoryError::IllegalState(format!("reset failed: {}", e.to_string())))?;
         Ok(APU_EXTERNAL_MEMORY_SIZE)
     }
 
@@ -971,7 +941,8 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         dmc.irq_enable = (value & 0x80) != 0;
 
         if dmc.irq_enable == false {
-            let _ = dmc.clear_interrupt();
+            dmc.clear_interrupt().map_err(|e|
+                MemoryError::IllegalState(e.to_string()))?
         }
 
         if (value & 0x40) != 0 {
@@ -1022,24 +993,22 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         let triangle = self.triangle.length_counter.counter > 0;
         let noise = self.noise.length_counter.counter > 0;
         let dmc = self.dmc.bytes_remaining > 0;
-        let frame_irq = self.frame_counter.inhibit_irq.get();
+
+        let frame_irq = self.frame_counter.is_asserted_irq().map_err(
+            |_| MemoryError::IllegalState("could not get irq line status for frame counter channel".to_string())
+        )?;
+
         let dmc_irq = self.dmc.is_asserted_irq().map_err(
             |_| MemoryError::IllegalState("could not get irq line status for DMC channel".to_string())
         )?;
 
         let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
 
-        /***
-         * wrong, should keep a real irq flag
-         */
         status |= (!frame_irq as u8) << 6;
         status |= (dmc_irq as u8) << 7;
 
-        //println!("DMC IRQ ASSERTED: 0x{:02X}", (dmc_irq as u8) << 7);
-        /***
-         * should clear a real irq_flag
-         */
-        self.frame_counter.inhibit_irq.set(true);
+        self.frame_counter.clear_interrupt().map_err(|e|
+            MemoryError::IllegalState(e.to_string()))?;
 
         Ok(status)
     }
@@ -1068,25 +1037,36 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             self.noise.length_counter.counter = 0;
         }
 
-        if dmc_bit == true && self.dmc.bytes_remaining == 0  {
-            self.dmc.reload = Reload::Once;
-        } else if dmc_bit == false {
+        if dmc_bit == true {
+            if self.dmc.bytes_remaining == 0 {
+                self.dmc.reload_sample_window();
+            }
+        } else {
             self.dmc.sample_buffer = None;
             self.dmc.bytes_remaining = 0;
         }
 
-        let _ = self.dmc.clear_interrupt();
+        self.dmc.clear_interrupt().map_err(|e|
+            MemoryError::IllegalState(e.to_string()))?;
 
         Ok(())
     }
 
+    /***
+     * 0x4017 - frame counter
+     */
     fn write_frame_counter(&mut self, value: u8) -> Result<(), MemoryError> {
+        let inhibit_irq = (value & 0x40) != 0;
         self.frame_counter.mode = match (value & 0x80) != 0 {
             true => FrameCounterMode::FiveStep,
             false => FrameCounterMode::FourStep,
         };
 
-        self.frame_counter.inhibit_irq.set((value & 0x40) != 0);
+        if inhibit_irq {
+            self.frame_counter.inhibit_irq.set((value & 0x40) != 0);
+            self.frame_counter.clear_interrupt().map_err(|e|
+                MemoryError::IllegalState(e.to_string()))?
+        }
 
         self.frame_counter.next_step = 0;
         self.frame_counter.apu_cycle = 0;
@@ -1186,12 +1166,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
 
     fn clock_dmc_timer(&mut self) -> Result<(), ApuError> {
         let dmc = &mut self.dmc;
-
-        // initial sample load
-        if dmc.current_address.is_none() && dmc.bytes_remaining > 0 {
-            println!("initial fill of sample buffer");
-            dmc.reload_sample_window();
-        }
 
         // dma prefetch
         dmc.cond_dma_prefetch()?;

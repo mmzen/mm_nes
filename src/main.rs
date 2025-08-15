@@ -49,6 +49,7 @@ mod sound_playback;
 mod sound_playback_sdl2_callback;
 mod sound_playback_sdl2_queue;
 mod mapper;
+mod irq_source;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
