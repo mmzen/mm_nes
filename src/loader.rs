@@ -1,26 +1,27 @@
-use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Error;
 use std::path::PathBuf;
-use std::rc::Rc;
-use crate::cartridge::Cartridge;
+use crate::cartridge::{Cartridge, CartridgeError};
+use crate::ines_loader::INesLoader;
 use crate::memory::MemoryError;
 
 #[derive(Default, Debug, Clone)]
 pub enum LoaderType {
     #[default]
-    INESV1
+    INESV2
 }
 
 pub trait Loader: Debug  {
-    fn load(&mut self, path: &PathBuf) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError>;
+    fn from_file(path: PathBuf) -> Result<INesLoader, LoaderError>;
+    fn build_cartridge(self) -> Result<Box<dyn Cartridge>, LoaderError>;
 }
 
 #[derive(Debug)]
 pub enum LoaderError {
     IoError(Error),
     InvalidRomFormat,
-    MemoryError(MemoryError)
+    MemoryError(MemoryError),
+    CartridgeError(CartridgeError)
 }
 
 impl From<Error> for LoaderError {
@@ -35,6 +36,11 @@ impl From<MemoryError> for LoaderError {
     }
 }
 
+impl From<CartridgeError> for LoaderError {
+    fn from(error: CartridgeError) -> Self {
+        LoaderError::CartridgeError(error)
+    }
+}
 
 impl Display for LoaderError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -42,6 +48,7 @@ impl Display for LoaderError {
             LoaderError::IoError(e) => { write!(f, "i/o error {}", e) },
             LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format") },
             LoaderError::MemoryError(e) => { write!(f, "memory error: {}", e) }
+            LoaderError::CartridgeError(e) => { write!(f, "cartridge error: {}", e) }
         }
     }
 }

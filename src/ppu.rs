@@ -7,10 +7,19 @@ use crate::cpu::CpuError;
 use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum PpuNameTableMirroring {
     Vertical,
     Horizontal
+}
+
+impl Display for PpuNameTableMirroring {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            PpuNameTableMirroring::Vertical => write!(f, "vertical mirroring"),
+            PpuNameTableMirroring::Horizontal => write!(f, "horizontal mirroring")
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]

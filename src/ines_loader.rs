@@ -1,127 +1,570 @@
-use std::cell::RefCell;
+use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::PathBuf;
-use std::rc::Rc;
-use log::{debug, info, warn};
+use log::info;
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::mapper::NesMapper;
-use crate::nrom_cartridge::NROMCartridge;
+use crate::nrom_cartridge::NromCartridge;
 use crate::ppu::PpuNameTableMirroring;
 
 const HEADER_SIZE: usize = 16;
-const TRAINER_BIT_MASK: u8 = 0b00000100;
-const PRG_ROM_BLOCK_UNIT: usize = 16384;
-const CHR_ROM_BLOCK_UNIT: usize = 8192;
+
+pub trait FromINes: Debug {
+    fn from_ines(file: File, header: INesRomHeader) -> Result<impl Cartridge, LoaderError>
+    where
+        Self: Sized;
+}
 
 #[derive(Debug)]
-pub struct INesLoader;
+pub struct INesLoader {
+    header: INesRomHeader,
+    file: File
+}
 
 impl Loader for INesLoader {
-    fn load(&mut self, path: &PathBuf) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
+
+    fn from_file(path: PathBuf) -> Result<INesLoader, LoaderError> {
         let mut file = File::open(path)?;
-        let header = self.load_header(&mut file)?;
+        let header = INesLoader::load_header(&mut file)?;
 
-        let prg_addr= if header.flags_6 & TRAINER_BIT_MASK != 0 {
-            HEADER_SIZE + 512
-        } else {
-            HEADER_SIZE
+        let loader = INesLoader {
+            header,
+            file
         };
 
-        let prg_rom_size = header.prg_rom as usize * PRG_ROM_BLOCK_UNIT;
-        let chr_rom_size = if header.chr_rom == 0 {
-            warn!("ROM has no 0 bytes chr rom: forcing to 8 KB");
-            8192
-        } else {
-            header.chr_rom as usize * CHR_ROM_BLOCK_UNIT
-        };
+        Ok(loader)
+    }
 
-        let mirroring = if header.flags_6 & 0x01 == 0 { PpuNameTableMirroring::Horizontal } else { PpuNameTableMirroring::Vertical };
-
-        let chr_addr = prg_addr + prg_rom_size;
-
-        debug!("loader: prg rom data starting at offset 0x{:04x}, {} bytes", prg_addr, prg_rom_size);
-        debug!("loader: chr rom data starting at offset 0x{:04x}, {} bytes", chr_addr, chr_rom_size);
-        debug!("loader: name tables mirroring: {:?}", mirroring);
-        debug!("loader: mapper: {}", header.flags_6);
-
-        //let mapper = NesMapper::from_id(header.flags_6);
-        //info!("loader: mapper detected ({}): {}, id: {}, supported: {}", header.flags_6, mapper.name(), mapper.id(), mapper.is_supported());
-
-        File::seek(&mut file, SeekFrom::Start(prg_addr as u64))?;
-        let cartridge = self.build_cartridge(file, prg_rom_size, chr_rom_size, mirroring)?;
-
-        Ok(cartridge)
+    fn build_cartridge(self) -> Result<Box<dyn Cartridge>, LoaderError> {
+        info!("building cartridge...");
+        let cartridge = NromCartridge::from_ines(self.file, self.header)?;
+        Ok(Box::new(cartridge))
     }
 }
 
-impl  INesLoader  {
+impl INesLoader {
 
-    fn load_header(&mut self, file: &mut File) -> Result<INesRomHeader, LoaderError> {
+    fn load_header(file: &mut File) -> Result<INesRomHeader, LoaderError> {
         let mut buffer = vec![0u8; HEADER_SIZE];
         file.read_exact(&mut buffer)?;
 
-        let header = INesRomHeader::from_bytes(&buffer);
-
-        if header.preamble != [0x4E, 0x45, 0x53, 0x1A] {
-            Err(LoaderError::InvalidRomFormat)
-        } else {
-            debug!("iNES ROM detected");
-
-            if header.flags_7 & 0x0C == 0x08 {
-                debug!("ROM format v2.0 detected: 0x{:02X}", header.flags_7 & 0x0C);
-            } else {
-                debug!("ROM format v1.0 detected: 0x{:02X}", header.flags_7 & 0x0C);
-            }
-
-            debug!("ROM header: {:?}", header);
-            Ok(header)
-        }
-    }
-
-    fn build_cartridge(&self, file: File, prg_rom_size: usize, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
-        debug!("creating cartridge");
-
-        let cartridge = NROMCartridge::new(file.bytes(), prg_rom_size, chr_rom_size, mirroring)?;
-        Ok(Rc::new(RefCell::new(cartridge)))
-    }
-
-    pub fn new() -> Box<INesLoader> {
-        let loader = INesLoader {
-        };
-
-        Box::new(loader)
+        INesRomHeader::from_bytes(&buffer)
     }
 }
 
-#[repr(C, packed)]
+#[derive(Debug, PartialEq, Clone)]
+pub enum ConsoleType {
+    NesFamicom,
+    VsSystem,
+    PlayChoice10,
+    Famiclone,
+    NesFamicomWithEPSM,
+    VrTechVT01,
+    VrTechVT02,
+    VrTechVT03,
+    VrTechVT09,
+    VrTechVT32,
+    VrTechVT369,
+    UmcUm6578,
+    FamicomNetWorkSystem,
+    Unknown,
+}
+
+impl Display for ConsoleType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConsoleType::NesFamicom => write!(f, "NES Family Computer"),
+            ConsoleType::VsSystem => write!(f, "Visual Studio System"),
+            ConsoleType::PlayChoice10 => write!(f, "NES Family Computer PlayChoice 10"),
+            ConsoleType::Famiclone => write!(f, "Famicom Clone"),
+            ConsoleType::NesFamicomWithEPSM => write!(f, "NES Family Computer with EPSM"),
+            ConsoleType::VrTechVT01 => write!(f, "NES Family Computer (VR-Tech VT01)"),
+            ConsoleType::VrTechVT02 => write!(f, "NES Family Computer (VR-Tech VT02)"),
+            ConsoleType::VrTechVT03 => write!(f, "NES Family Computer (VR-Tech VT03)"),
+            ConsoleType::VrTechVT09 => write!(f, "NES Family Computer (VR-Tech VT09)"),
+            ConsoleType::VrTechVT32 => write!(f, "NES Family Computer (VR-Tech VT32)"),
+            ConsoleType::VrTechVT369 => write!(f, "NES Family Computer (VR-Tech VT369)"),
+            ConsoleType::UmcUm6578 => write!(f, "NES Family Computer (Umc Um6578)"),
+            ConsoleType::FamicomNetWorkSystem => write!(f, "Famicom Network System"),
+            ConsoleType::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Region {
+    NTSC,
+    PAL,
+    Multiple,
+    Dendy,
+}
+
+impl Display for Region {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Region::NTSC => write!(f, "NTSC"),
+            Region::PAL => write!(f, "PAL"),
+            Region::Multiple => write!(f, "Multiple"),
+            Region::Dendy => write!(f, "Dendy"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum ExpansionDevice {
+    Unspecified,
+    StandardController,
+    Zapper,
+    TwoZapper,
+    Other,
+}
+
+impl Display for ExpansionDevice {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExpansionDevice::Unspecified => write!(f, "Unspecified"),
+            ExpansionDevice::StandardController => write!(f, "Standard controller"),
+            ExpansionDevice::Zapper => write!(f, "Zapper"),
+            ExpansionDevice::TwoZapper => write!(f, "Two Zapper"),
+            ExpansionDevice::Other => write!(f, "Other"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum VsPpuType {
+    Rx2C03Variant,
+    RP2C04_0001,
+    RP2C04_0002,
+    RP2C04_0003,
+    RP2C04_0004,
+    RC2C05_0001,
+    RC2C05_0002,
+    RC2C05_0003,
+    RC2C05_0004,
+    Unknown,
+    None,
+}
+
+impl Display for VsPpuType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VsPpuType::Rx2C03Variant => write!(f, "Rx2C03 variant"),
+            VsPpuType::RP2C04_0001 => write!(f, "RP2C04_0001"),
+            VsPpuType::RP2C04_0002 => write!(f, "RP2C04_0002"),
+            VsPpuType::RP2C04_0003 => write!(f, "RP2C04_0003"),
+            VsPpuType::RP2C04_0004 => write!(f, "RP2C04_0004"),
+            VsPpuType::RC2C05_0001 => write!(f, "RC2C05_0001"),
+            VsPpuType::RC2C05_0002 => write!(f, "RC2C05_0002"),
+            VsPpuType::RC2C05_0003 => write!(f, "RC2C05_0003"),
+            VsPpuType::RC2C05_0004 => write!(f, "RC2C05_0004"),
+            VsPpuType::Unknown => write!(f, "Unknown"),
+            VsPpuType::None => write!(f, "None"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum VsHardwareType {
+    VsUnisystem,
+    VsUnisystemRbiBaseballProtection,
+    VsUnisystemTKOBoxingProtection,
+    VsUnisystemSuperXeviousProtection,
+    VsUnisystemIceClimberProtection,
+    VsDualSystem,
+    VsDualSystemRaidOnBungelingBayProtection,
+    Unknown,
+    None,
+}
+
+impl Display for VsHardwareType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VsHardwareType::VsUnisystem => write!(f, "Vs Unisystem"),
+            VsHardwareType::VsUnisystemRbiBaseballProtection => write!(f, "Vs Unisystem RBI Baseball Protection"),
+            VsHardwareType::VsUnisystemTKOBoxingProtection => write!(f, "Vs Unisystem TKO Boxing Protection"),
+            VsHardwareType::VsUnisystemSuperXeviousProtection => write!(f, "Vs Unisystem Super Xevious Protection"),
+            VsHardwareType::VsUnisystemIceClimberProtection => write!(f, "Vs Unisystem Ice Climber Protection"),
+            VsHardwareType::VsDualSystem => write!(f, "Vs Dual System"),
+            VsHardwareType::VsDualSystemRaidOnBungelingBayProtection => write!(f, "Vs Dual System Raid on Bungeling Bay Protection"),
+            VsHardwareType::Unknown => write!(f, "Unknown"),
+            VsHardwareType::None => write!(f, "None"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum RomArea {
+    PrgRom,
+    ChrRom,
+    PrgRam,
+    PrgNvRam,
+    ChrRam,
+    ChrNvRam,
+}
+
+impl Display for RomArea {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RomArea::PrgRom => write!(f, "prg_rom"),
+            RomArea::ChrRom => write!(f, "chr_rom"),
+            RomArea::PrgRam => write!(f, "prg_ram"),
+            RomArea::PrgNvRam => write!(f, "prg_nvram"),
+            RomArea::ChrRam => write!(f, "chr_ram"),
+            RomArea::ChrNvRam => write!(f, "chr_nvram"),
+        }
+    }
+}
+
 #[derive(Debug)]
-struct INesRomHeader {
-    preamble: [u8; 4],
-    prg_rom: u8,
-    chr_rom: u8,
-    flags_6: u8,
-    flags_7: u8,
-    flags_8: u8,
-    flags_9: u8,
-    flags_10: u8,
-    _reserved: [u8; 5],
+pub struct INesRomHeader {
+    pub prg_rom_size: usize,
+    pub chr_rom_size: usize,
+    pub prg_ram_size: usize,
+    pub prg_nvram_size: usize,
+    pub chr_ram_size: usize,
+    pub chr_nvram_size: usize,
+    pub nametables_layout: PpuNameTableMirroring,
+    pub battery: bool,
+    pub trainer: bool,
+    pub alternative_nametables: bool,
+    pub console_type: ConsoleType,
+    pub ines2: bool,
+    pub mapper: u16,
+    pub sub_mapper: u8,
+    pub region: Region,
+    pub vs_ppu_type: VsPpuType,
+    pub vs_hardware_type: VsHardwareType,
+    pub misc_rom: u16,
+    pub expansion_device: ExpansionDevice
 }
 
 impl INesRomHeader {
-    fn from_bytes(bytes: &[u8]) -> INesRomHeader {
-
-        INesRomHeader {
-            preamble: [bytes[0], bytes[1], bytes[2], bytes[3]],
-            prg_rom: bytes[4],
-            chr_rom: bytes[5],
-            flags_6: bytes[6],
-            flags_7: bytes[7],
-            flags_8: bytes[8],
-            flags_9: bytes[9],
-            flags_10: bytes[10],
-            _reserved: [bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]]
+    pub fn prg_addr(&self) -> u64 {
+        if self.trainer == true {
+            (HEADER_SIZE + 512) as u64
+        } else {
+            HEADER_SIZE as u64
         }
+    }
+
+    pub fn chr_addr(&self) -> u64 {
+        self.prg_addr() + self.prg_rom_size as u64
+    }
+
+    fn verify_raw_header_size(bytes: &[u8]) -> Result<(), LoaderError> {
+        if bytes.len() < HEADER_SIZE {
+            Err(LoaderError::InvalidRomFormat)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn build_preamble(bytes: &[u8]) -> [u8; 4] {
+        let mut preamble = [0u8; 4];
+        preamble.copy_from_slice(&bytes[0..4]);
+        preamble
+    }
+
+    fn verify_preamble(preamble: &[u8; 4]) -> Result<(), LoaderError> {
+        if *preamble != [0x4E, 0x45, 0x53, 0x1A] {
+            Err(LoaderError::InvalidRomFormat)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn build_rom_from_msb_and_lsb_ines2(bytes: &[u8], area: RomArea) -> usize {
+        let (byte0, byte1, mask, shift, unit) = match area {
+            RomArea::PrgRom => (bytes[4], bytes[9], 0x0F, 0, 16 * 1024),
+            RomArea::ChrRom => (bytes[5], bytes[9], 0xF0, 4, 8 * 1024),
+            _=> { panic!("invalid rom area: {:?}", area) }
+        };
+
+        let result: usize = if byte1 == 0x0F {
+            let mul = (byte0 & 0x03) * 2 + 1;
+            let exp = (byte0 & !0x03) >> 3;
+            (2u16.pow(exp as u32) * (mul as u16)) as usize
+        } else {
+            let lsb = byte0 as u16;
+            let msb = ((byte1 & mask) as u16) << (8 - shift);
+            (msb | lsb) as usize * unit
+        };
+
+        info!("area: {}, size: {} bytes", area, result);
+        result
+    }
+
+    fn build_rom_from_msb_and_lsb_ines1(bytes: &[u8], area: RomArea) -> usize {
+        let result = match area {
+            RomArea::PrgRom => (bytes[4] as usize) * 16 * 1024,
+            RomArea::ChrRom => (bytes[5] as usize) * 8 * 1024,
+            _=> { panic!("invalid rom area: {:?}", area) }
+        };
+
+        info!("area: {}, size: {} bytes", area, result);
+        result
+    }
+
+    fn build_prg_rom_size(bytes: &[u8], ines2: bool) -> usize {
+        if ines2 == true {
+            INesRomHeader::build_rom_from_msb_and_lsb_ines2(bytes, RomArea::PrgRom)
+        } else {
+            INesRomHeader::build_rom_from_msb_and_lsb_ines1(bytes, RomArea::PrgRom)
+        }
+    }
+
+    fn build_chr_rom_size(bytes: &[u8], ines2: bool) -> usize {
+        if ines2 == true {
+            INesRomHeader::build_rom_from_msb_and_lsb_ines2(bytes, RomArea::ChrRom)
+        } else {
+            INesRomHeader::build_rom_from_msb_and_lsb_ines1(bytes, RomArea::ChrRom)
+        }
+    }
+
+    fn build_ram_size(bytes: &[u8], area: RomArea) -> usize {
+        let (byte, mask, shift) = match area {
+            RomArea::PrgRam => (bytes[10], 0x0F, 0),
+            RomArea::PrgNvRam => (bytes[10], 0xF0, 4),
+            RomArea::ChrRam => (bytes[11], 0x0F, 0),
+            RomArea::ChrNvRam => (bytes[11], 0xF0, 4),
+            _=> { panic!("invalid rom area: {:?}", area) }
+        };
+
+        let shift_count = (byte & mask) >> shift;
+
+        let result = if shift_count > 0 {
+            0x40 << shift_count
+        } else {
+            0
+        };
+
+        info!("area: {}, size: {} bytes", area, result);
+        result
+    }
+
+    fn build_prg_ram_size(bytes: &[u8]) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::PrgRam)
+    }
+
+    fn build_prg_nvram_size(bytes: &[u8]) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::PrgNvRam)
+    }
+
+    fn build_chr_ram_size(bytes: &[u8]) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::ChrRam)
+    }
+
+    fn build_chr_nvram_size(bytes: &[u8]) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::ChrNvRam)
+    }
+
+    fn build_nametables_layout(bytes: &[u8]) -> PpuNameTableMirroring {
+        let result = if bytes[6] & 0x01 == 0 {
+            PpuNameTableMirroring::Horizontal
+        } else {
+            PpuNameTableMirroring::Vertical
+        };
+
+        info!("nametables_layout: {}", result);
+        result
+    }
+
+    fn build_battery(bytes: &[u8]) -> bool {
+        let result= bytes[6] & 0x02 != 0;
+        info!("battery: {}", result);
+        result
+    }
+
+    fn build_trainer(bytes: &[u8]) -> bool {
+        let result = bytes[6] & 0x04 != 0;
+        info!("trainer: {}", result);
+        result
+    }
+
+    fn build_alternative_nametables(bytes: &[u8]) -> bool {
+        let result = bytes[6] & 0x08 != 0;
+        info!("alternative_nametables: {}", result);
+        result
+    }
+
+    fn build_console_type(bytes: &[u8]) -> ConsoleType {
+        let value = if (bytes[7] & 0x03) == 0x03 {
+            bytes[13] & 0x0F
+        } else {
+            bytes[7] & 0x03
+        } ;
+
+        let result = match value {
+            0 => ConsoleType::NesFamicom,
+            1 => ConsoleType::VsSystem,
+            2 => ConsoleType::PlayChoice10,
+            3 => ConsoleType::Famiclone,
+            4 => ConsoleType::NesFamicomWithEPSM,
+            5 => ConsoleType::VrTechVT01,
+            6 => ConsoleType::VrTechVT02,
+            7 => ConsoleType::VrTechVT03,
+            8 => ConsoleType::VrTechVT09,
+            9 => ConsoleType::VrTechVT32,
+            10 => ConsoleType::VrTechVT369,
+            11 => ConsoleType::UmcUm6578,
+            12 => ConsoleType::FamicomNetWorkSystem,
+            _ => ConsoleType::Unknown,
+        };
+
+        info!("console_type: {}", result);
+        result
+    }
+
+    fn build_ines2_identifier(bytes: &[u8]) -> bool {
+        let result = bytes[7] & 0x08 != 0;
+        info!("ines2: {}", result);
+        result
+    }
+
+    fn build_mapper(bytes: &[u8]) -> u16 {
+        let d3_d0: u16 = (bytes[6] & 0xF0) as u16;
+        let d7_d4: u16 = (bytes[7] & 0xF0) as u16;
+        let d11_d8: u16 = (bytes[8] & 0x0F) as u16;
+
+        let result = d3_d0 | (d7_d4 << 4) | (d11_d8 << 8);
+        info!("mapper: {} ({})", result, NesMapper::from_id(result).name());
+        result
+    }
+
+    fn build_sub_mapper(bytes: &[u8]) -> u8 {
+        let result = (bytes[8] & 0xF0) >> 4;
+        info!("sub_mapper: {}", result);
+        result
+    }
+
+    fn build_region(bytes: &[u8]) -> Region {
+        let result = match bytes[12] & 0x03 {
+            0 => Region::NTSC,
+            1 => Region::PAL,
+            2 => Region::Multiple,
+            3 => Region::Dendy,
+            _ => unreachable!()
+        };
+
+        info!("region: {}", result);
+        result
+    }
+
+    fn build_vs_ppu_type(bytes: &[u8]) -> VsPpuType {
+        let result = if bytes[3] & 0x03 != 0x01 {
+            VsPpuType::None
+        } else {
+            match bytes[13] & 0x0F {
+                0x00 => VsPpuType::Rx2C03Variant,
+                0x02 => VsPpuType::RP2C04_0001,
+                0x03 => VsPpuType::RP2C04_0002,
+                0x04 => VsPpuType::RP2C04_0003,
+                0x05 => VsPpuType::RP2C04_0004,
+                0x08 => VsPpuType::RC2C05_0001,
+                0x09 => VsPpuType::RC2C05_0002,
+                0x0A => VsPpuType::RC2C05_0003,
+                0x0B => VsPpuType::RC2C05_0004,
+                _ => VsPpuType::Unknown,
+            }
+        };
+
+        info!("vs_ppu_type: {}", result);
+        result
+    }
+
+    fn build_vs_hardware_type(bytes: &[u8]) -> VsHardwareType {
+        let result = if bytes[3] & 0x03 != 0x01 {
+            VsHardwareType::None
+        } else {
+            match (bytes[13] & 0xF0) >> 4 {
+                0x00 => VsHardwareType::VsUnisystem,
+                0x01 => VsHardwareType::VsUnisystemRbiBaseballProtection,
+                0x02 => VsHardwareType::VsUnisystemTKOBoxingProtection,
+                0x03 => VsHardwareType::VsUnisystemSuperXeviousProtection,
+                0x04 => VsHardwareType::VsUnisystemIceClimberProtection,
+                0x05 => VsHardwareType::VsDualSystem,
+                0x06 => VsHardwareType::VsDualSystemRaidOnBungelingBayProtection,
+                _ => VsHardwareType::Unknown,
+            }
+        };
+
+        info!("vs_hardware_type: {}", result);
+        result
+    }
+
+    fn build_misc_rom(_: &[u8]) -> u16 {
+        let result = 0;
+        info!("misc_rom: {}", result);
+        result
+    }
+
+    fn build_expansion_device(bytes: &[u8]) -> ExpansionDevice {
+        let result = match bytes[15] & 0x3F {
+            0x00 => ExpansionDevice::Unspecified,
+            0x01 => ExpansionDevice::StandardController,
+            0x08 => ExpansionDevice::Zapper,
+            0x09 => ExpansionDevice::TwoZapper,
+            _ => ExpansionDevice::Other
+        };
+
+        info!("expansion_device: {}", result);
+        result
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<INesRomHeader, LoaderError> {
+        INesRomHeader::verify_raw_header_size(&bytes)?;
+
+        let preamble = INesRomHeader::build_preamble(&bytes);
+        INesRomHeader::verify_preamble(&preamble)?;
+
+        let ines2 = INesRomHeader::build_ines2_identifier(&bytes);
+        let prg_rom_size = INesRomHeader::build_prg_rom_size(&bytes, ines2);
+        let chr_rom_size = INesRomHeader::build_chr_rom_size(&bytes, ines2);
+        let prg_ram_size = INesRomHeader::build_prg_ram_size(&bytes);
+        let prg_nvram_size = INesRomHeader::build_prg_nvram_size(&bytes);
+        let chr_ram_size = INesRomHeader::build_chr_ram_size(&bytes);
+        let chr_nvram_size = INesRomHeader::build_chr_nvram_size(&bytes);
+        let nametables_layout = INesRomHeader::build_nametables_layout(&bytes);
+        let battery = INesRomHeader::build_battery(&bytes);
+        let trainer = INesRomHeader::build_trainer(&bytes);
+        let alternative_nametables = INesRomHeader::build_alternative_nametables(&bytes);
+        let console_type = INesRomHeader::build_console_type(&bytes);
+        let mapper = INesRomHeader::build_mapper(&bytes);
+        let sub_mapper = INesRomHeader::build_sub_mapper(&bytes);
+        let region = INesRomHeader::build_region(&bytes);
+        let vs_ppu_type = INesRomHeader::build_vs_ppu_type(&bytes);
+        let vs_hardware_type = INesRomHeader::build_vs_hardware_type(&bytes);
+        let misc_rom = INesRomHeader::build_misc_rom(&bytes);
+        let expansion_device = INesRomHeader::build_expansion_device(&bytes);
+
+        let headers = INesRomHeader {
+            prg_rom_size,
+            chr_rom_size,
+            prg_ram_size,
+            prg_nvram_size,
+            chr_ram_size,
+            chr_nvram_size,
+            nametables_layout,
+            battery,
+            trainer,
+            alternative_nametables,
+            console_type,
+            ines2,
+            mapper,
+            sub_mapper,
+            region,
+            vs_ppu_type,
+            vs_hardware_type,
+            misc_rom,
+            expansion_device,
+        };
+
+        info!("prg addr: 0x{:04X}", headers.prg_addr());
+        info!("chr addr: 0x{:04X}", headers.chr_addr());
+
+        Ok(headers)
     }
 }

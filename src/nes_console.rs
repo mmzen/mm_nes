@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::{debug, info, trace};
+use log::{debug, info};
 use sdl2::Sdl;
 use crate::apu::{ApuError, ApuType, APU};
 use crate::apu_rp2a03::ApuRp2A03;
@@ -13,7 +13,7 @@ use crate::cartridge::Cartridge;
 use crate::controller::ControllerType;
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
-use crate::dma::{ApuDmaType, PpuDmaType};
+use crate::dma::PpuDmaType;
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::input::InputError;
@@ -26,7 +26,6 @@ use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
 use crate::sound_playback::SoundPlaybackError;
-use crate::sound_playback_sdl2_callback::SoundPlaybackSDL2Callback;
 use crate::sound_playback_sdl2_queue::SoundPlaybackSDL2Queue;
 use crate::standard_controller::StandardController;
 use crate::util::measure_exec_time;
@@ -199,7 +198,7 @@ pub struct NESConsoleBuilder {
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
     entry_point: Option<u16>,
-    cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
+    cartridge: Option<Box<dyn Cartridge>>,
 }
 
 impl NESConsoleBuilder {
@@ -362,7 +361,7 @@ impl NESConsoleBuilder {
     }
 
     fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl,
-                        bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
+                        bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
@@ -381,13 +380,13 @@ impl NESConsoleBuilder {
         Ok(apu)
     }
 
-    fn build_cartridge_device(&self) -> Result<Rc<RefCell<dyn Cartridge>>, NESConsoleError> {
+    fn build_cartridge_device(&self) -> Result<Box<dyn Cartridge>, NESConsoleError> {
         debug!("creating cartridge");
 
         if let Some(ref rom_file) = self.rom_file {
-            let rom_path = PathBuf::from(rom_file);
-            let mut loader = self.build_loader()?;
-            let cartridge = loader.load(&rom_path)?;
+            let path = PathBuf::from(rom_file);
+            let loader = self.build_loader(path)?;
+            let cartridge = loader.build_cartridge()?;
 
             Ok(cartridge)
         } else {
@@ -402,7 +401,7 @@ impl NESConsoleBuilder {
         match device_type {
             BusDeviceType::CARTRIDGE(_) => {
                 let cartridge = self.build_cartridge_device()?;
-                bus.borrow_mut().add_device(cartridge.borrow().get_prg_rom())?;
+                bus.borrow_mut().add_device(cartridge.get_prg_rom())?;
                 self.cartridge = Some(cartridge);
             },
 
@@ -415,13 +414,13 @@ impl NESConsoleBuilder {
                 let chr_rom = self
                     .cartridge
                     .as_ref()
-                    .map(|cartridge| cartridge.borrow().get_chr_rom())
+                    .map(|cartridge| cartridge.get_chr_rom())
                     .ok_or(NESConsoleError::BuilderError("no cartridge to load".to_string()))?;
 
                 let mirroring = self
                     .cartridge
                     .as_ref()
-                    .map(|cartridge| cartridge.borrow().get_mirroring())
+                    .map(|cartridge| cartridge.get_mirroring())
                     .ok_or(NESConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
                 let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu)?;
@@ -445,15 +444,15 @@ impl NESConsoleBuilder {
         Ok(())
     }
 
-    fn build_loader(&self) -> Result<Box<dyn Loader>, NESConsoleError> {
+    fn build_loader(&self, path: PathBuf) -> Result<impl Loader, NESConsoleError> {
         debug!("creating loader: {:?}", self.loader_type.clone().unwrap());
 
         match self.loader_type {
             None => {
                 Err(NESConsoleError::BuilderError("loader not set".to_string()))
             },
-            Some(LoaderType::INESV1) => {
-                Ok(INesLoader::new())
+            Some(LoaderType::INESV2) => {
+                Ok(INesLoader::from_file(path)?)
             }
         }
     }

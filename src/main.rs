@@ -9,7 +9,7 @@ use crate::bus_device::BusDeviceType::{APU, CARTRIDGE, CONTROLLER, PPU, WRAM};
 use crate::cartridge::CartridgeType::NROM;
 use crate::controller::ControllerType::StandardController;
 use crate::cpu::CpuType::NES6502;
-use crate::loader::LoaderType::INESV1;
+use crate::loader::LoaderType::INESV2;
 use crate::memory::MemoryType::NESMemory;
 use crate::nes_console::{NESConsoleBuilder, NESConsoleError};
 use crate::ppu::PpuType::NES2C02;
@@ -137,7 +137,7 @@ fn main() -> Result<(), NESConsoleError> {
         .with_bus_device_type(APU(RP2A03))
         .with_bus_device_type(PPU(NES2C02))
         .with_bus_device_type(CONTROLLER(StandardController))
-        .with_loader_type(INESV1)
+        .with_loader_type(INESV2)
         .with_rom_file(args.rom_file)
         .with_entry_point(args.pc)
         .build()?;

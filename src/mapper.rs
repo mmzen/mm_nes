@@ -43,11 +43,11 @@ pub enum NesMapper {
     TQROM,         // 119 (MMC3 + CHR-RAM/ROM mix)
 
     // Catch-all for everything else (0..=1023 or beyond for NES 2.0):
-    Unknown(u8),
+    Unknown(u16),
 }
 
 impl NesMapper {
-    pub const fn id(self) -> u8 {
+    pub const fn id(self) -> u16 {
         match self {
             NesMapper::NROM           => 0,
             NesMapper::MMC1           => 1,
@@ -132,7 +132,7 @@ impl NesMapper {
         }
     }
 
-    pub const fn from_id(id: u8) -> Self {
+    pub const fn from_id(id: u16) -> Self {
         match id {
             0 => NesMapper::NROM,
             1 => NesMapper::MMC1,
