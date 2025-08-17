@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::io::Error;
+use std::fs::File;
+use std::io::{BufReader, Error, Read};
 use std::rc::Rc;
 use crate::bus_device::BusDevice;
-use crate::memory::MemoryError;
+use crate::memory::{Memory, MemoryError};
 use crate::ppu::PpuNameTableMirroring;
 
 
@@ -40,13 +41,15 @@ pub enum CartridgeType {
     #[default]
     NESCARTRIDGE,
     NROM,
+    UNROM
 }
 
 impl Display for CartridgeType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             CartridgeType::NESCARTRIDGE => { write!(f, "cartridge type: NESCARTRIDGE") },
-            CartridgeType::NROM => { write!(f, "cartridge type: NROM128") }
+            CartridgeType::NROM => { write!(f, "cartridge type: NROM") }
+            CartridgeType::UNROM => { write!(f, "cartridge type: UNROM") }
         }
     }
 }
@@ -63,6 +66,19 @@ impl PartialEq for CartridgeType {
 
 pub trait Cartridge: BusDevice {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
-    fn get_prg_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
     fn get_mirroring(&self) -> PpuNameTableMirroring;
+}
+
+/***
+ * helper functions
+ ***/
+pub fn write_rom_data(rom: &mut dyn Memory, size: usize, data: &mut BufReader<File>) -> Result<(), CartridgeError> {
+    let mut buf = vec![0u8; size];
+    data.read_exact(&mut buf)?;
+
+    for (i, &byte) in buf.iter().enumerate() {
+        rom.write_byte(i as u16, byte)?;
+    }
+
+    Ok(())
 }

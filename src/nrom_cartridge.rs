@@ -5,6 +5,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::rc::Rc;
 use log::{debug, info, warn};
 use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError};
 use crate::cartridge::CartridgeType::NROM;
 use crate::ines_loader::{FromINes, INesRomHeader};
@@ -27,25 +28,6 @@ pub struct NromCartridge {
 }
 
 impl NromCartridge {
-    fn fix_chr_rom_size(chr_rom_size: usize) -> usize {
-        if chr_rom_size == 0 {
-            warn!("NROM has no 0 bytes chr rom: forcing to 8 KB");
-            8192
-        } else {
-            chr_rom_size
-        }
-    }
-
-    fn write_rom_data(rom: &mut dyn Memory, size: usize, data: &mut BufReader<File>) -> Result<(), CartridgeError> {
-        let mut buf = vec![0u8; size];
-        data.read_exact(&mut buf)?;
-
-        for (i, &byte) in buf.iter().enumerate() {
-            rom.write_byte(i as u16, byte)?;
-        }
-
-        Ok(())
-    }
 
     pub fn new(mut data: BufReader<File>,
                   prg_rom_addr: u64, prg_rom_size: usize,
@@ -56,11 +38,11 @@ impl NromCartridge {
 
         debug!("NROM: loading prg_rom data ({} KB)...", prg_rom_size / 1024);
         data.seek(SeekFrom::Start(prg_rom_addr))?;
-        NromCartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
+        cartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
 
         debug!("NROM: loading chr_rom data ({} KB)...", chr_rom_size / 1024);
         data.seek(SeekFrom::Start(chr_rom_addr))?;
-        NromCartridge::write_rom_data(&mut chr_rom, chr_rom_size, &mut data)?;
+        cartridge::write_rom_data(&mut chr_rom, chr_rom_size, &mut data)?;
 
         let cartridge = NromCartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
@@ -78,17 +60,15 @@ impl NromCartridge {
              chr_rom_addr: u64, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, LoaderError> {
         info!("creating NROM cartridge");
 
-        let fixed_chr_rom_size = NromCartridge::fix_chr_rom_size(chr_rom_size);
-        info!("fixed chr rom size: {} KB (was: {} KB)", fixed_chr_rom_size / 1024, chr_rom_size / 1024);
-
         let reader = BufReader::new(file);
-        let cartridge = NromCartridge::new(reader, prg_rom_addr, prg_rom_size, chr_rom_addr, fixed_chr_rom_size, mirroring)?;
+        let cartridge = NromCartridge::new(reader, prg_rom_addr, prg_rom_size, chr_rom_addr, chr_rom_size, mirroring)?;
         Ok(cartridge)
     }
 }
 
 impl FromINes for NromCartridge {
-    fn from_ines(file: File, header: INesRomHeader) -> Result<impl Cartridge, LoaderError>
+    #[allow(refining_impl_trait)]
+    fn from_ines(file: File, header: INesRomHeader) -> Result<NromCartridge, LoaderError>
     where
         Self: Sized
     {
@@ -142,7 +122,7 @@ impl Memory for NromCartridge {
 
 impl BusDevice for NromCartridge {
     fn get_name(&self) -> String {
-        format!("MAPPER_NAME-{}", self.prg_rom_size)
+        format!("{}-{}", MAPPER_NAME, self.prg_rom_size)
     }
 
     fn get_device_type(&self) -> BusDeviceType {
@@ -161,10 +141,6 @@ impl BusDevice for NromCartridge {
 impl Cartridge for NromCartridge {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>> {
         self.chr_rom.clone()
-    }
-
-    fn get_prg_rom(&self) -> Rc<RefCell<dyn BusDevice>> {
-        self.prg_rom.clone()
     }
 
     fn get_mirroring(&self) -> PpuNameTableMirroring {

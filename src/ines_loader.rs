@@ -1,13 +1,16 @@
+use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
-use log::info;
+use std::rc::Rc;
+use log::{info, warn};
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::mapper::NesMapper;
 use crate::nrom_cartridge::NromCartridge;
 use crate::ppu::PpuNameTableMirroring;
+use crate::unrom_cartridge::UnromCartridge;
 
 const HEADER_SIZE: usize = 16;
 
@@ -37,10 +40,16 @@ impl Loader for INesLoader {
         Ok(loader)
     }
 
-    fn build_cartridge(self) -> Result<Box<dyn Cartridge>, LoaderError> {
+    fn build_cartridge(self) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError> {
         info!("building cartridge...");
-        let cartridge = NromCartridge::from_ines(self.file, self.header)?;
-        Ok(Box::new(cartridge))
+
+        let cartridge: Rc<RefCell<dyn Cartridge>> = match self.header.mapper {
+            NesMapper::NROM => Rc::new(RefCell::new(NromCartridge::from_ines(self.file, self.header)?)),
+            NesMapper::UxROM => Rc::new(RefCell::new(UnromCartridge::from_ines(self.file, self.header)?)),
+            _ => Err(LoaderError::UnsupportedMapper(self.header.mapper.name().to_string()))?
+        };
+
+        Ok(cartridge)
     }
 }
 
@@ -232,7 +241,7 @@ pub struct INesRomHeader {
     pub alternative_nametables: bool,
     pub console_type: ConsoleType,
     pub ines2: bool,
-    pub mapper: u16,
+    pub mapper: NesMapper,
     pub sub_mapper: u8,
     pub region: Region,
     pub vs_ppu_type: VsPpuType,
@@ -300,7 +309,15 @@ impl INesRomHeader {
     fn build_rom_from_msb_and_lsb_ines1(bytes: &[u8], area: RomArea) -> usize {
         let result = match area {
             RomArea::PrgRom => (bytes[4] as usize) * 16 * 1024,
-            RomArea::ChrRom => (bytes[5] as usize) * 8 * 1024,
+            RomArea::ChrRom => {
+                // if chr_rom is 0, then force to 8 KB, it should probably be chr_ram
+                if bytes[5] == 0 {
+                    warn!("LOADER: chr_rom size is 0, forcing to 8 KB");
+                    8192
+                } else {
+                    (bytes[5] as usize) * 8 * 1024
+                }
+            },
             _=> { panic!("invalid rom area: {:?}", area) }
         };
 
@@ -424,13 +441,20 @@ impl INesRomHeader {
         result
     }
 
-    fn build_mapper(bytes: &[u8]) -> u16 {
+    fn build_mapper(bytes: &[u8], ines2: bool) -> NesMapper {
         let d3_d0: u16 = (bytes[6] & 0xF0) as u16;
         let d7_d4: u16 = (bytes[7] & 0xF0) as u16;
         let d11_d8: u16 = (bytes[8] & 0x0F) as u16;
 
-        let result = d3_d0 | (d7_d4 << 4) | (d11_d8 << 8);
-        info!("mapper: {} ({})", result, NesMapper::from_id(result).name());
+        let result0 = if ines2 == true  {
+            (d3_d0 >> 4) | (d7_d4 << 4) | (d11_d8 << 8)
+        } else {
+            (d3_d0 >> 4) | (d7_d4 << 4)
+        };
+
+        let result = NesMapper::from_id(result0);
+        info!("mapper: {} ({})", result.name(), result0);
+
         result
     }
 
@@ -532,7 +556,7 @@ impl INesRomHeader {
         let trainer = INesRomHeader::build_trainer(&bytes);
         let alternative_nametables = INesRomHeader::build_alternative_nametables(&bytes);
         let console_type = INesRomHeader::build_console_type(&bytes);
-        let mapper = INesRomHeader::build_mapper(&bytes);
+        let mapper = INesRomHeader::build_mapper(&bytes, ines2);
         let sub_mapper = INesRomHeader::build_sub_mapper(&bytes);
         let region = INesRomHeader::build_region(&bytes);
         let vs_ppu_type = INesRomHeader::build_vs_ppu_type(&bytes);

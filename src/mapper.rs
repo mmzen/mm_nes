@@ -3,7 +3,6 @@
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum NesMapper {
-    // Well-known, widely used mappers:
     NROM,          // 0
     MMC1,          // 1  (SxROM)
     UxROM,         // 2  (UNROM/UOROM)
@@ -16,8 +15,6 @@ pub enum NesMapper {
     MMC4,          // 10
     ColorDreams,   // 11
     CPROM,         // 13
-
-    // Bandai / Namco / Konami / Sunsoft / Taito, common discrete mappers:
     BandaiFCG,     // 16 (Bandai CFG)
     BNROM,         // 34 (NINA-001/BNROM)
     GxROM,         // 66 (GNROM/MHROM)
@@ -37,12 +34,8 @@ pub enum NesMapper {
     VRC6,          // 24
     Taito_TC0190,  // 33 (Taito TC0190/TC0350)
     Taito_X1_005,  // 80 (optional if you use it)
-
-    // MMC3-family board
     TxSROM,        // 118 (MMC3 variant with CHR-RAM banking)
     TQROM,         // 119 (MMC3 + CHR-RAM/ROM mix)
-
-    // Catch-all for everything else (0..=1023 or beyond for NES 2.0):
     Unknown(u16),
 }
 

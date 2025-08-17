@@ -198,7 +198,7 @@ pub struct NESConsoleBuilder {
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
     entry_point: Option<u16>,
-    cartridge: Option<Box<dyn Cartridge>>,
+    cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
 }
 
 impl NESConsoleBuilder {
@@ -380,7 +380,7 @@ impl NESConsoleBuilder {
         Ok(apu)
     }
 
-    fn build_cartridge_device(&self) -> Result<Box<dyn Cartridge>, NESConsoleError> {
+    fn build_cartridge_device(&self) -> Result<Rc<RefCell<dyn Cartridge>>, NESConsoleError> {
         debug!("creating cartridge");
 
         if let Some(ref rom_file) = self.rom_file {
@@ -401,8 +401,8 @@ impl NESConsoleBuilder {
         match device_type {
             BusDeviceType::CARTRIDGE(_) => {
                 let cartridge = self.build_cartridge_device()?;
-                bus.borrow_mut().add_device(cartridge.get_prg_rom())?;
-                self.cartridge = Some(cartridge);
+                bus.borrow_mut().add_device(cartridge.clone())?;
+                self.cartridge = Some(cartridge.clone());
             },
 
             BusDeviceType::WRAM(memory_type) => {
@@ -414,13 +414,13 @@ impl NESConsoleBuilder {
                 let chr_rom = self
                     .cartridge
                     .as_ref()
-                    .map(|cartridge| cartridge.get_chr_rom())
+                    .map(|cartridge| cartridge.borrow().get_chr_rom())
                     .ok_or(NESConsoleError::BuilderError("no cartridge to load".to_string()))?;
 
                 let mirroring = self
                     .cartridge
                     .as_ref()
-                    .map(|cartridge| cartridge.get_mirroring())
+                    .map(|cartridge| cartridge.borrow().get_mirroring())
                     .ok_or(NESConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
                 let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu)?;

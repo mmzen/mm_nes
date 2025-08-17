@@ -1,6 +1,8 @@
+use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Error;
 use std::path::PathBuf;
+use std::rc::Rc;
 use crate::cartridge::{Cartridge, CartridgeError};
 use crate::ines_loader::INesLoader;
 use crate::memory::MemoryError;
@@ -13,7 +15,7 @@ pub enum LoaderType {
 
 pub trait Loader: Debug  {
     fn from_file(path: PathBuf) -> Result<INesLoader, LoaderError>;
-    fn build_cartridge(self) -> Result<Box<dyn Cartridge>, LoaderError>;
+    fn build_cartridge(self) -> Result<Rc<RefCell<dyn Cartridge>>, LoaderError>;
 }
 
 #[derive(Debug)]
@@ -21,7 +23,8 @@ pub enum LoaderError {
     IoError(Error),
     InvalidRomFormat,
     MemoryError(MemoryError),
-    CartridgeError(CartridgeError)
+    CartridgeError(CartridgeError),
+    UnsupportedMapper(String)
 }
 
 impl From<Error> for LoaderError {
@@ -49,6 +52,7 @@ impl Display for LoaderError {
             LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format") },
             LoaderError::MemoryError(e) => { write!(f, "memory error: {}", e) }
             LoaderError::CartridgeError(e) => { write!(f, "cartridge error: {}", e) }
+            LoaderError::UnsupportedMapper(s) => { write!(f, "unsupported mapper: {}", s) }
         }
     }
 }
