@@ -251,7 +251,7 @@ pub struct INesRomHeader {
 }
 
 impl INesRomHeader {
-    pub fn prg_addr(&self) -> u64 {
+    pub fn prg_offset(&self) -> u64 {
         if self.trainer == true {
             (HEADER_SIZE + 512) as u64
         } else {
@@ -259,8 +259,12 @@ impl INesRomHeader {
         }
     }
 
-    pub fn chr_addr(&self) -> u64 {
-        self.prg_addr() + self.prg_rom_size as u64
+    pub fn chr_offset(&self) -> Option<u64> {
+        if self.chr_rom_size == 0 {
+            None
+        } else {
+            Some(self.prg_offset() + self.prg_rom_size as u64)
+        }
     }
 
     fn verify_raw_header_size(bytes: &[u8]) -> Result<(), LoaderError> {
@@ -295,7 +299,7 @@ impl INesRomHeader {
         let result: usize = if byte1 == 0x0F {
             let mul = (byte0 & 0x03) * 2 + 1;
             let exp = (byte0 & !0x03) >> 3;
-            (2u16.pow(exp as u32) * (mul as u16)) as usize
+            (2u16.pow(exp as u32) * (mul as u16)) as usize // XXX padding should be added is non-aligned
         } else {
             let lsb = byte0 as u16;
             let msb = ((byte1 & mask) as u16) << (8 - shift);
@@ -309,15 +313,7 @@ impl INesRomHeader {
     fn build_rom_from_msb_and_lsb_ines1(bytes: &[u8], area: RomArea) -> usize {
         let result = match area {
             RomArea::PrgRom => (bytes[4] as usize) * 16 * 1024,
-            RomArea::ChrRom => {
-                // if chr_rom is 0, then force to 8 KB, it should probably be chr_ram
-                if bytes[5] == 0 {
-                    warn!("LOADER: chr_rom size is 0, forcing to 8 KB");
-                    8192
-                } else {
-                    (bytes[5] as usize) * 8 * 1024
-                }
-            },
+            RomArea::ChrRom => (bytes[5] as usize) * 8 * 1024,
             _=> { panic!("invalid rom area: {:?}", area) }
         };
 
@@ -341,11 +337,25 @@ impl INesRomHeader {
         }
     }
 
-    fn build_ram_size(bytes: &[u8], area: RomArea) -> usize {
+    /***
+     * XXX
+     * specific cases to handle between ines1 and ines2
+     */
+    fn build_ram_size(bytes: &[u8], area: RomArea, ines2: bool) -> usize {
         let (byte, mask, shift) = match area {
             RomArea::PrgRam => (bytes[10], 0x0F, 0),
             RomArea::PrgNvRam => (bytes[10], 0xF0, 4),
-            RomArea::ChrRam => (bytes[11], 0x0F, 0),
+            RomArea::ChrRam => {
+                if ines2 == true {
+                    (bytes[11], 0x0F, 0)
+                } else {
+                    if bytes[5] == 0 {
+                        (0x07, 0xFF, 0) // will eventually compute as 8192
+                    } else {
+                        (0, 0, 0)
+                    }
+                }
+            },
             RomArea::ChrNvRam => (bytes[11], 0xF0, 4),
             _=> { panic!("invalid rom area: {:?}", area) }
         };
@@ -362,20 +372,20 @@ impl INesRomHeader {
         result
     }
 
-    fn build_prg_ram_size(bytes: &[u8]) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::PrgRam)
+    fn build_prg_ram_size(bytes: &[u8], ines2: bool) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::PrgRam, ines2)
     }
 
-    fn build_prg_nvram_size(bytes: &[u8]) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::PrgNvRam)
+    fn build_prg_nvram_size(bytes: &[u8], ines2: bool) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::PrgNvRam, ines2)
     }
 
-    fn build_chr_ram_size(bytes: &[u8]) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::ChrRam)
+    fn build_chr_ram_size(bytes: &[u8], ines2: bool) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::ChrRam, ines2)
     }
 
-    fn build_chr_nvram_size(bytes: &[u8]) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::ChrNvRam)
+    fn build_chr_nvram_size(bytes: &[u8], ines2: bool) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::ChrNvRam, ines2)
     }
 
     fn build_nametables_layout(bytes: &[u8]) -> PpuNameTableMirroring {
@@ -547,10 +557,10 @@ impl INesRomHeader {
         let ines2 = INesRomHeader::build_ines2_identifier(&bytes);
         let prg_rom_size = INesRomHeader::build_prg_rom_size(&bytes, ines2);
         let chr_rom_size = INesRomHeader::build_chr_rom_size(&bytes, ines2);
-        let prg_ram_size = INesRomHeader::build_prg_ram_size(&bytes);
-        let prg_nvram_size = INesRomHeader::build_prg_nvram_size(&bytes);
-        let chr_ram_size = INesRomHeader::build_chr_ram_size(&bytes);
-        let chr_nvram_size = INesRomHeader::build_chr_nvram_size(&bytes);
+        let prg_ram_size = INesRomHeader::build_prg_ram_size(&bytes, ines2);
+        let prg_nvram_size = INesRomHeader::build_prg_nvram_size(&bytes, ines2);
+        let chr_ram_size = INesRomHeader::build_chr_ram_size(&bytes, ines2);
+        let chr_nvram_size = INesRomHeader::build_chr_nvram_size(&bytes, ines2);
         let nametables_layout = INesRomHeader::build_nametables_layout(&bytes);
         let battery = INesRomHeader::build_battery(&bytes);
         let trainer = INesRomHeader::build_trainer(&bytes);
@@ -586,8 +596,13 @@ impl INesRomHeader {
             expansion_device,
         };
 
-        info!("prg addr: 0x{:04X}", headers.prg_addr());
-        info!("chr addr: 0x{:04X}", headers.chr_addr());
+        info!("prg offset: 0x{:04X} (+{} bytes)", headers.prg_offset(), headers.prg_offset());
+
+        let chr_offset = headers.chr_offset();
+        match chr_offset {
+            Some(offset) => info!("chr offset: 0x{:04X} (+{} bytes)", offset, offset),
+            None => info!("chr offset: no chr data"),
+        }
 
         Ok(headers)
     }

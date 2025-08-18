@@ -51,7 +51,7 @@ impl Error for CpuError {}
 impl Display for CpuError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            CpuError::MemoryError(error) => write!(f, "memory error: {}", error),
+            CpuError::MemoryError(error) => write!(f, "-> memory error: {}", error),
             CpuError::StackOverflow(addr) => { write!(f, "stack overflow 0x{:04X}", addr) },
             CpuError::StackUnderflow(addr) => { write!(f, "stack underflow 0x{:04X}", addr) },
             CpuError::InvalidOperand(s) => { write!(f, "missing or invalid operand: {}", s) },

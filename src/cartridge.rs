@@ -13,6 +13,7 @@ use crate::ppu::PpuNameTableMirroring;
 pub enum CartridgeError {
     LoadingError(String),
     MemoryError(MemoryError),
+    Unsupported(String)
 }
 
 impl From<Error> for CartridgeError {
@@ -30,8 +31,9 @@ impl From<MemoryError> for CartridgeError {
 impl Display for CartridgeError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            CartridgeError::LoadingError(s) => { write!(f, "loading error {}", s) }
-            CartridgeError::MemoryError(e) => { write!(f, "memory error {}", e) }
+            CartridgeError::LoadingError(s) => { write!(f, "loading error: {}", s) }
+            CartridgeError::MemoryError(e) => { write!(f, "-> memory error: {}", e) }
+            CartridgeError::Unsupported(s) => { write!(f, "unsupported: {}", s) }
         }
     }
 }
@@ -81,4 +83,15 @@ pub fn write_rom_data(rom: &mut dyn Memory, size: usize, data: &mut BufReader<Fi
     }
 
     Ok(())
+}
+
+pub fn get_chr_memory_and_type(chr_rom_size: usize, chr_ram_size: usize) -> (usize, bool) {
+    /***
+     * loader guarantees that one of chr_rom and chr_ram is non-zero.
+     */
+    if chr_rom_size > 0 {
+        (chr_rom_size, true)
+    } else {
+        (chr_ram_size, false)
+    }
 }

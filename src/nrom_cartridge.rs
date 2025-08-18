@@ -30,19 +30,31 @@ pub struct NromCartridge {
 impl NromCartridge {
 
     pub fn new(mut data: BufReader<File>,
-                  prg_rom_addr: u64, prg_rom_size: usize,
-                  chr_rom_addr: u64, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, CartridgeError> {
+               prg_rom_offset: u64, prg_rom_size: usize,
+               chr_rom_offset: Option<u64>, chr_rom_size: usize,
+               chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, CartridgeError> {
+
+        if chr_rom_size > 0 && chr_ram_size > 0 {
+            Err(CartridgeError::Unsupported(
+                format!("NROM cartridge does not support both CHR-ROM (detected: {} bytes) and CHR-RAM (detected: {} bytes)", chr_rom_size, chr_ram_size)))?
+        }
+
+        let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_and_type(chr_rom_size, chr_ram_size);
 
         let mut prg_rom = MemoryBank::new(prg_rom_size, CPU_ADDRESS_SPACE);
-        let mut chr_rom = MemoryBank::new(chr_rom_size, PPU_ADDRESS_SPACE);
+        let mut chr_rom = MemoryBank::new(chr_memory_size, PPU_ADDRESS_SPACE);
 
         debug!("NROM: loading prg_rom data ({} KB)...", prg_rom_size / 1024);
-        data.seek(SeekFrom::Start(prg_rom_addr))?;
+        data.seek(SeekFrom::Start(prg_rom_offset))?;
         cartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
 
-        debug!("NROM: loading chr_rom data ({} KB)...", chr_rom_size / 1024);
-        data.seek(SeekFrom::Start(chr_rom_addr))?;
-        cartridge::write_rom_data(&mut chr_rom, chr_rom_size, &mut data)?;
+        if is_chr_rom == true {
+            info!("NROM: loading chr_rom data ({} KB)...", chr_memory_size / 1024);
+            data.seek(SeekFrom::Start(chr_rom_offset.unwrap()))?;
+            cartridge::write_rom_data(&mut chr_rom, chr_memory_size, &mut data)?;
+        } else {
+            info!("NROM: chr_ram ({} KB)...", chr_memory_size / 1024);
+        }
 
         let cartridge = NromCartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
@@ -56,12 +68,13 @@ impl NromCartridge {
     }
 
     fn build(file: File,
-             prg_rom_addr: u64, prg_rom_size: usize,
-             chr_rom_addr: u64, chr_rom_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, LoaderError> {
+             prg_rom_offset: u64, prg_rom_size: usize,
+             chr_rom_offset: Option<u64>, chr_rom_size: usize,
+             chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, LoaderError> {
         info!("creating NROM cartridge");
 
         let reader = BufReader::new(file);
-        let cartridge = NromCartridge::new(reader, prg_rom_addr, prg_rom_size, chr_rom_addr, chr_rom_size, mirroring)?;
+        let cartridge = NromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring)?;
         Ok(cartridge)
     }
 }
@@ -73,8 +86,9 @@ impl FromINes for NromCartridge {
         Self: Sized
     {
         let cartridge = NromCartridge::build(file,
-                                             header.prg_addr(), header.prg_rom_size,
-                                             header.chr_addr(), header.chr_rom_size,
+                                             header.prg_offset(), header.prg_rom_size,
+                                             header.chr_offset(), header.chr_rom_size,
+                                             header.chr_ram_size,
                                              header.nametables_layout)?;
 
         Ok(cartridge)

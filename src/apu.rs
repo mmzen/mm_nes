@@ -55,9 +55,9 @@ impl From<IrqError> for ApuError {
 impl Display for ApuError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            ApuError::MemoryError(e) => { write!(f, "memory error: {}", e) },
-            ApuError::CpuError(e) => { write!(f, "cpu error: {}", e) },
-            ApuError::IrqError(e) => { write!(f, "irq error: {}", e) }
+            ApuError::MemoryError(e) => { write!(f, "-> memory error: {}", e) },
+            ApuError::CpuError(e) => { write!(f, "-> cpu error: {}", e) },
+            ApuError::IrqError(e) => { write!(f, "-> irq error: {}", e) }
         }
     }
 }

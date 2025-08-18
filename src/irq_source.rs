@@ -11,7 +11,7 @@ pub enum IrqError {
 
 impl From<CpuError> for IrqError {
     fn from(error: CpuError) -> Self {
-        IrqError::IrqAssertion(format!("unable to assert IRQ: {}", error))
+        IrqError::IrqAssertion(format!("-> cpu error: {}", error))
     }
 }
 

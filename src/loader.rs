@@ -50,8 +50,8 @@ impl Display for LoaderError {
         match self {
             LoaderError::IoError(e) => { write!(f, "i/o error {}", e) },
             LoaderError::InvalidRomFormat => { write!(f, "invalid ROM format") },
-            LoaderError::MemoryError(e) => { write!(f, "memory error: {}", e) }
-            LoaderError::CartridgeError(e) => { write!(f, "cartridge error: {}", e) }
+            LoaderError::MemoryError(e) => { write!(f, "-> memory error: {}", e) }
+            LoaderError::CartridgeError(e) => { write!(f, "-> cartridge error: {}", e) }
             LoaderError::UnsupportedMapper(s) => { write!(f, "unsupported mapper: {}", s) }
         }
     }

@@ -62,9 +62,9 @@ impl Error for PpuError {}
 impl Display for PpuError {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
-            PpuError::BusError(e) => { write!(f, "bus error: {}", e) }
-            PpuError::MemoryError(e) => { write!(f, "memory error: {}", e) }
-            PpuError::CpuError(e) => { write!(f, "cpu error: {}", e) }
+            PpuError::BusError(e) => { write!(f, "-> bus error: {}", e) }
+            PpuError::MemoryError(e) => { write!(f, "-> memory error: {}", e) }
+            PpuError::CpuError(e) => { write!(f, "-> cpu error: {}", e) }
         }
     }
 }

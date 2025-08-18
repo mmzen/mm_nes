@@ -144,7 +144,11 @@ fn main() -> Result<(), NESConsoleError> {
         .build()?;
 
     info!("emulator starting...");
-    console.power_on()?;
+    let r = console.power_on();
+
+    if let Err(e) = r {
+        eprintln!("fatal error: {}", e);
+    }
 
     Ok(())
 }
