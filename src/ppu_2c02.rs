@@ -999,7 +999,7 @@ impl Ppu2c02 {
         }
     }
 
-    fn set_pixel(&mut self, pixel_pos_x: u8, pixel_pos_y: u8, line_pattern_data: &[u8],
+    fn set_pixel(&mut self, pixel_pos_x: u8, _: u8, line_pattern_data: &[u8],
                  palette: (u8, u8, u8, u8), mode: PixelMode, priority: SpritePriority, sprite0_hit_detect: bool) {
 
         line_pattern_data.iter().enumerate().for_each(|(pixel_num, color)| {
@@ -1232,7 +1232,7 @@ impl Ppu2c02 {
         let mut name_table_addr = name_table_addr_from_v;
 
         let pattern_table_addr = self.get_background_pattern_table_addr();
-        let attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
+        let mut attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
 
         let mut fine_y = self.get_fine_y();
         let mut coarse_y = self.get_coarse_y();
@@ -1268,6 +1268,7 @@ impl Ppu2c02 {
                 }
 
                 (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
+                attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
             }
         }
 
@@ -1480,7 +1481,7 @@ impl Ppu2c02 {
 
     fn render(&mut self) -> Result<u16, PpuError> {
 
-        let (_, duration): (Result<(), PpuError>, Duration) = measure_exec_time(|| {
+        let (_, _): (Result<(), PpuError>, Duration) = measure_exec_time(|| {
             self.render_scanline()?;
             Ok(())
         });
