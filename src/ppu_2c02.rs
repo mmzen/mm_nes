@@ -39,14 +39,13 @@ const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 const PPU_INTERNAL_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x3FFF);
 const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
 const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
-const TILE_X_MAX: u8 = 32;
 const PIXEL_X_MAX: u8 = 255;
 const PIXEL_Y_MAX: u8 = 239;
 const PATTERN_DATA_SIZE: usize = 16;
 const MERGED_PATTERN_DATA_SIZE: usize = 64;
 const SPRITE_PALETTE_ADDR: u16 = 0x3F10;
 const CLOCK_CYCLES_PER_SCANLINE: u16 = 114;
-
+const SPRITE_WIDTH: u8 = 8;
 
 #[derive(Debug)]
 enum PpuFlag {
@@ -907,16 +906,10 @@ impl Ppu2c02 {
         line_pattern_data
     }
 
-    fn fetch_pattern_data(&self, tile_index: u8, pattern_table_addr: u16, flip_horizontal: bool, flip_vertical: bool) -> Result<Vec<u8>, PpuError> {
+    fn fetch_pattern_data(&self, tile_index: u8, pattern_table_addr: u16, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
         let mut pattern_data= vec![];
 
-        let line_range: Box<dyn Iterator<Item = u8>> = if flip_vertical {
-            Box::new((0..=7).rev())
-        } else {
-            Box::new(0..=7)
-        };
-
-        for line in line_range {
+        for line in 0..=7 {
             let mut pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16)?;
             let mut pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16 + (PATTERN_DATA_SIZE as u16 / 2))?;
 
@@ -1093,7 +1086,7 @@ impl Ppu2c02 {
         let tile_index = self.fetch_tile_index(coarse_x, coarse_y, name_table_addr)?;
         let palette = self.fetch_palette(coarse_x, coarse_y, attribute_table_addr)?;
         let colors = self.get_background_palette_colors(palette)?;
-        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, false, false)?;
+        let pattern_data = self.fetch_pattern_data(tile_index, pattern_table_addr, false)?;
 
         let tile = Tile::new(tile_index, colors, vec_to_array::<64>(pattern_data));
 
@@ -1294,16 +1287,39 @@ impl Ppu2c02 {
          sprite.get_attribute_value(FlipVertical) != 0)
     }
 
-    fn get_tile_by_sprite_definition(&self, sprite: &Sprite, pattern_table_addr: u16) -> Result<Tile, PpuError> {
+    fn get_tile_by_sprite_definition(&self, sprite: &Sprite, is_sprite_8x16: bool, line: u8, pattern_table_addr: u16) -> Result<(Tile, u8), PpuError> {
         let palette = sprite.get_attribute_value(SpriteAttribute::Palette);
         let colors = self.get_sprite_palette_colors(palette)?;
 
         let (flip_horizontal, flip_vertical) = self.get_flip_values(&sprite);
 
-        let pattern_data = self.fetch_pattern_data(sprite.tile_index, pattern_table_addr, flip_horizontal, flip_vertical)?;
-        let tile = Tile::new(sprite.tile_index, colors, vec_to_array::<64>(pattern_data));
+        let (tile_index, fixed_pattern_table_addr, tile_offset) = if is_sprite_8x16 {
+            // ignore pattern table from control register and use LSB of sprite index for pattern table
+            let fixed_pattern_table_addr = if (sprite.tile_index & 1) == 0 {
+                PATTERN_TABLE_LEFT_ADDR
+            } else {
+                PATTERN_TABLE_RIGHT_ADDR
+            };
 
-        Ok(tile)
+            // apply vertical flip to the 0..15 row within the sprite
+            let row = if flip_vertical { 15 - line } else { line };
+
+            // choose half and fine row 0..7
+            let pick_top_tile = row < 8;
+            let tile_index = if pick_top_tile { sprite.tile_index & 0xFE } else { sprite.tile_index | 1 };
+            let tile_offset = row & 7;
+
+            // fetch pattern data and create a tile, force flip vertical to false as it was already flipped
+            (tile_index, fixed_pattern_table_addr, tile_offset)
+        } else {
+            let tile_offset = if flip_vertical { 7 - (line & 7) } else { line & 7 };
+            (sprite.tile_index, pattern_table_addr, tile_offset)
+        };
+
+        let pattern_data = self.fetch_pattern_data(tile_index, fixed_pattern_table_addr, flip_horizontal)?;
+        let tile = Tile::new(tile_index, colors, vec_to_array::<64>(pattern_data));
+
+        Ok((tile, tile_offset))
     }
 
     fn do_sprite_evaluation(&mut self, scanline: u16) -> Result<(), PpuError> {
@@ -1354,26 +1370,25 @@ impl Ppu2c02 {
      * https://www.reddit.com/r/EmuDev/comments/x1ol0k/nes_emulator_working_perfectly_except_one/
      */
     fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
+        let is_sprite_8x16  = self.get_flag(Control(SpriteSize));
         let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
-        let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
 
+        //let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
         //trace!("rendering {} sprites for scanline: {}", self.oam.sprite_count, scanline);
 
         self.sprites_pixels_line.clear();
 
         for i in (0..self.oam.sprite_count).rev() {
             let sprite = &self.oam.secondary[i];
-
             let pixel_pos_y = scanline as u8 - (sprite.y + 1);
-            let tile = self.get_tile_by_sprite_definition(sprite, sprite_pattern_table_addr)?;
+            let width = if PIXEL_X_MAX - sprite.x > SPRITE_WIDTH { SPRITE_WIDTH as usize } else { (PIXEL_X_MAX - sprite.x) as usize };
 
-            //trace!("tile: {}", tile);
+            let (tile, tile_offset) = self.get_tile_by_sprite_definition(sprite, is_sprite_8x16, pixel_pos_y, sprite_pattern_table_addr)?;
 
             let sprite0_hit_detect = self.detect_sprite_0_hit(sprite.sprite0);
             let priority = self.get_sprite_priority(sprite);
-            let size = if PIXEL_X_MAX - sprite.x > sprite_size { sprite_size as usize } else { (PIXEL_X_MAX - sprite.x) as usize };
 
-            let line_pattern_data = self.fetch_line_pattern_data(&tile, pixel_pos_y, 0, size);
+            let line_pattern_data = self.fetch_line_pattern_data(&tile, tile_offset, 0, width);
             let palette = tile.colors;
 
             self.set_pixel(sprite.x, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, priority, sprite0_hit_detect);
