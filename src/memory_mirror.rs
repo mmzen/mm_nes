@@ -12,13 +12,30 @@ pub struct MemoryMirror {
 }
 
 impl MemoryMirror {
-    pub fn new(memory: Rc<RefCell<MemoryBank>>) -> Self {
-        let m = memory.clone();
 
-        MemoryMirror {
-            memory,
-            address_space: m.borrow().get_address_range()
-        }
+    fn is_address_space_valid(memory: Rc<RefCell<MemoryBank>>, address_space: (u16, u16)) -> bool {
+        let real_virtual_size0 = memory.borrow().get_address_range().1 - memory.borrow().get_address_range().0;
+        let mirror_virtual_size1 = address_space.1 - address_space.0;
+        mirror_virtual_size1 <= real_virtual_size0
+    }
+    
+    pub fn new(memory: Rc<RefCell<MemoryBank>>, address_space: (u16, u16)) -> Result<Self, MemoryError> {
+        let result = if MemoryMirror::is_address_space_valid(memory.clone(), address_space) == false {
+            Err(MemoryError::InvalidAddressSpace(
+                format!("mirror virtual memory mirror can not be larger as the primary memory: {} versus {}.",
+                        memory.borrow().get_address_range().1 - memory.borrow().get_address_range().0,
+                        address_space.1 - address_space.0 + 1))
+            )
+        } else {
+            let mirror = MemoryMirror {
+                memory,
+                address_space
+            };
+
+            Ok(mirror)
+        };
+        
+        result
     }
 }
 

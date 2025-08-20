@@ -45,6 +45,7 @@ pub enum MemoryError {
     OutOfRange(u16),
     BusError(u16),
     IllegalState(String),
+    InvalidAddressSpace(String)
 }
 
 impl Error for MemoryError {}
@@ -55,6 +56,7 @@ impl Display for MemoryError {
             MemoryError::OutOfRange(addr) => write!(f, "memory access out of bounds: 0x{:04X}", addr),
             MemoryError::BusError(addr) => { write!(f, "bus error: 0x{:04X}", addr) },
             MemoryError::IllegalState(s) => { write!(f, "illegal state: {}", s) }
+            MemoryError::InvalidAddressSpace(s) => { write!(f, "invalid address space: {}", s) }
         }
     }
 }

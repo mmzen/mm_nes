@@ -10,6 +10,7 @@ use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
+use crate::memory_mirror::MemoryMirror;
 use crate::memory_palette::MemoryPalette;
 use crate::nes_bus::NESBus;
 use crate::palette::Palette;
@@ -24,28 +25,45 @@ use crate::renderer::Renderer;
 use crate::util::{measure_exec_time, vec_to_array};
 
 const PPU_NAME: &str = "PPU 2C02";
-//const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x2FFF)];
-const NAME_TABLE_HORIZONTAL_ADDRESS_SPACE: [(u16, u16); 2] = [(0x2000, 0x27FF), (0x2800, 0x3EFF)];
-const NAME_TABLE_VERTICAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3EFF);
-const NAME_TABLE_HORIZONTAL_SIZE: usize = 1024;
-const NAME_TABLE_VERTICAL_SIZE: usize = 2048;
-const NAME_TABLE_SIZE: usize = 960;
+
+pub const NT_BASES: [(u16,u16); 8] = [
+    (0x2000, 0x23FF), // name table 1
+    (0x2400, 0x27FF), // name table 2
+    (0x2800, 0x2BFF), // name table 3
+    (0x2C00, 0x2FFF), // name table 4
+    (0x3000, 0x33FF), // mirror of name table 1
+    (0x3400, 0x37FF), // mirror of name table 2
+    (0x3800, 0x3BFF), // mirror of name table 3
+    (0x3C00, 0x3EFF), // partial mirror of name table 4
+];
+
+pub const NT_MAP_HORIZONTAL: [usize; 8] = [0, 0, 1, 1, 0, 0, 1, 1]; // A and B same name table; C and D same name table
+pub const NT_MAP_VERTICAL:   [usize; 8] = [0, 1, 0, 1, 0, 1, 0, 1]; // A and C same name table; B and D same name table
+const NAME_TABLE_SIZE: usize = 1024;
+const ATTRIBUTE_TABLE_SIZE: usize = 64;
+const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
+const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
+
 const PALETTE_ADDRESS_SPACE: (u16, u16) = (0x3F00, 0x3FFF);
+const SPRITE_PALETTE_ADDR: u16 = 0x3F10;
 const PALETTE_SIZE: usize = 32;
+
 const V_INCR_GOING_ACROSS: u8 = 1;
 const V_INCR_GOING_DOWN: u8 = 32;
+
 const PPU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 const PPU_INTERNAL_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x3FFF);
-const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
-const PATTERN_TABLE_RIGHT_ADDR: u16 = 0x1000;
+
+
 const PIXEL_X_MAX: u8 = 255;
 const PIXEL_Y_MAX: u8 = 239;
+const SPRITE_WIDTH: u8 = 8;
 const PATTERN_DATA_SIZE: usize = 16;
 const MERGED_PATTERN_DATA_SIZE: usize = 64;
-const SPRITE_PALETTE_ADDR: u16 = 0x3F10;
+
 const CLOCK_CYCLES_PER_SCANLINE: u16 = 114;
-const SPRITE_WIDTH: u8 = 8;
+
 
 #[derive(Debug)]
 enum PpuFlag {
@@ -751,26 +769,29 @@ impl Ppu2c02 {
         Ok(())
     }
 
-    /***
-     * XXX a reecrire: trop compliqué
-     ***/
     fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: PpuNameTableMirroring) -> Result<(), PpuError> {
-        match mirroring {
-            PpuNameTableMirroring::Vertical => {
-                let memory = Rc::new(RefCell::new(
-                    MemoryBank::new(NAME_TABLE_VERTICAL_SIZE, NAME_TABLE_VERTICAL_ADDRESS_SPACE)));
-                memory.borrow_mut().initialize()?;
-                bus.add_device(memory)?;
-            },
+        let map = match mirroring {
+            PpuNameTableMirroring::Vertical => NT_MAP_VERTICAL,
+            PpuNameTableMirroring::Horizontal => NT_MAP_HORIZONTAL,
+        };
 
-            PpuNameTableMirroring::Horizontal => {
-                for &(start, end) in &NAME_TABLE_HORIZONTAL_ADDRESS_SPACE {
-                    let memory = Rc::new(RefCell::new(
-                        MemoryBank::new(NAME_TABLE_HORIZONTAL_SIZE, (start, end))));
-                    memory.borrow_mut().initialize()?;
-                    bus.add_device(memory)?;
-                }
-            }
+        let mut created_name_tables: Vec<Rc<RefCell<MemoryBank>>> = Vec::new();
+
+        for (i, &(start, end)) in NT_BASES.iter().enumerate() {
+            let group = map[i];
+
+            let new_name_table: Rc<RefCell<dyn BusDevice>> = if let Some(name_table) = created_name_tables.get(group) {
+                let m = MemoryMirror::new(name_table.clone(), (start, end))?;
+                Rc::new(RefCell::new(m))
+            } else {
+                let m0 = MemoryBank::new(NAME_TABLE_SIZE, (start, end));
+                let m1 = Rc::new(RefCell::new(m0));
+                created_name_tables.push(m1.clone());
+                m1
+            };
+
+            new_name_table.borrow_mut().initialize()?;
+            bus.add_device(new_name_table)?;
         }
 
         Ok(())
@@ -1054,24 +1075,14 @@ impl Ppu2c02 {
     }
 
     fn get_attribute_table_addr(&self, base_name_table_addr: u16) -> u16 {
-        let attribute_table_addr= base_name_table_addr + NAME_TABLE_SIZE as u16;
+        let attribute_table_addr= base_name_table_addr + (NAME_TABLE_SIZE - ATTRIBUTE_TABLE_SIZE) as u16;
 
         //trace!("PPU: attribute table: 0x{:04X}", attribute_table_addr);
         attribute_table_addr
     }
 
     fn get_name_table_addr(&self, select: u8) -> u16 {
-
-        let base_name_table_addr = match select {
-            0x00 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0,
-            0x01 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
-            0x02 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[1].0,
-            0x03 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[1].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
-            _ => unreachable!(),
-        };
-
-        //trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);
-        base_name_table_addr
+        NT_BASES[select as usize].0
     }
 
     fn get_name_table_addr_from_v(&self) -> u16 {
