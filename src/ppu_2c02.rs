@@ -751,6 +751,9 @@ impl Ppu2c02 {
         Ok(())
     }
 
+    /***
+     * XXX a reecrire: trop compliqué
+     ***/
     fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: PpuNameTableMirroring) -> Result<(), PpuError> {
         match mirroring {
             PpuNameTableMirroring::Vertical => {
@@ -1063,7 +1066,7 @@ impl Ppu2c02 {
             0x00 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0,
             0x01 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
             0x02 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[1].0,
-            0x03 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[0].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
+            0x03 => NAME_TABLE_HORIZONTAL_ADDRESS_SPACE[1].0 + NAME_TABLE_HORIZONTAL_SIZE as u16,
             _ => unreachable!(),
         };
 
@@ -1073,7 +1076,6 @@ impl Ppu2c02 {
 
     fn get_name_table_addr_from_v(&self) -> u16 {
         let select = ((*self.v.borrow() >> 10) & 0x03) as u8;
-
         let base_name_table_addr = self.get_name_table_addr(select);
 
         //trace!("PPU: base name table from control register: 0x{:04X}", base_name_table_addr);

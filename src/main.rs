@@ -51,6 +51,7 @@ mod sound_playback_sdl2_queue;
 mod mapper;
 mod irq_source;
 mod unrom_cartridge;
+mod memory_mirror;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

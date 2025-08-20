@@ -2,7 +2,7 @@ use crate::bus::MockBusStub;
 use crate::bus_device::BusDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
-use crate::tests::init;
+use crate::tests::{create_memory_bank, init};
 
 const DEFAULT_MEMORY_RANGE: (u16, u16) = (0x1000, 0x1FFF);
 const DEFAULT_MEMORY_SIZE: usize = 4096;
@@ -17,10 +17,6 @@ fn check_memory(memory: MemoryBank) {
 fn create_bus() -> MockBusStub {
     let bus = MockBusStub::new();
     bus
-}
-
-fn create_memory_bank(size: usize, address_range: (u16, u16)) -> MemoryBank {
-    MemoryBank::new(size, address_range)
 }
 
 #[test]
