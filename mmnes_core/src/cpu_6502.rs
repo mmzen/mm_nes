@@ -1,11 +1,10 @@
 use std::{fmt, io};
 use std::cell::RefCell;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display};
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
-use std::time::Instant;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError, Interruptible};

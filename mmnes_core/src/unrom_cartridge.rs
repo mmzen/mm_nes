@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 use std::rc::Rc;
-use log::{debug, info};
+use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError};

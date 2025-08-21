@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::info;
 use std::fmt::{Debug, Formatter};
 use sdl2::Sdl;
 use sdl2::audio::{AudioQueue, AudioSpecDesired};

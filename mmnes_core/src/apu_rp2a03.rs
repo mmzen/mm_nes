@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
 use std::rc::Rc;
-use log::{debug, info, trace};
+use log::{info, trace};
 use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
 use crate::bus::Bus;
@@ -1021,7 +1021,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         self.pulse2.enabled = value & 0x02 != 0;
         self.triangle.enabled = value & 0x04 != 0;
         self.noise.enabled = value & 0x08 != 0;
-        let dmc_bit = (value & 0x10 != 0);
+        let dmc_bit = value & 0x10 != 0;
 
         for pulse in [&mut self.pulse1, &mut self.pulse2] {
             if pulse.enabled == false {

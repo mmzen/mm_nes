@@ -12,9 +12,6 @@ const DOWN: usize = 0x05;
 const LEFT: usize = 0x06;
 const RIGHT: usize = 0x07;
 
-const RELEASED: u8 = 0x00;
-const PRESSED: u8 = 0x01;
-
 pub struct InputSDL2 {
     event_pump: EventPump,
 }

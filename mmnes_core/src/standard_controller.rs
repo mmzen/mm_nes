@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::fmt::{Debug};
-use log::{debug, trace};
+use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::bus_device::BusDeviceType::CONTROLLER;
 use crate::controller::{Controller, ControllerType};

@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::rc::Rc;
-use log::{debug, info, warn};
+use log::{debug, info};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError};

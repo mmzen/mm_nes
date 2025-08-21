@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
 use std::time::Duration;
-use log::{debug, info, trace};
+use log::info;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cpu::CPU;
