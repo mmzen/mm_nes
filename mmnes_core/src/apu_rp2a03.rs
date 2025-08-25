@@ -11,6 +11,7 @@ use crate::cpu::CPU;
 use crate::cpu_6502::{APU_DMC_IRQ, APU_FRAME_COUNTER_IRQ};
 use crate::irq_source::IrqSource;
 use crate::memory::{Memory, MemoryError};
+use crate::nes_samples::NesSamples;
 use crate::sound_playback::SoundPlayback;
 
 const APU_NAME: &str = "APU RP2A03";
@@ -1338,7 +1339,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
      * https://forums.nesdev.org/viewtopic.php?t=8602
      *
      ***/
-    fn run(&mut self, _: u32, credits: u32) -> Result<u32, ApuError> {
+    fn run(&mut self, _: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError> {
 
         for counter in 0..credits {
 
@@ -1365,6 +1366,14 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
             }
         }
 
-        Ok(credits)
+
+        let buffer = self.sound_player.samples();
+        let samples = if buffer.is_empty() {
+            None
+        } else {
+            Some(NesSamples::new(buffer))
+        };
+
+        Ok((credits, samples))
     }
 }

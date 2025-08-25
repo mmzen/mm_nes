@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use crate::cpu::CpuError;
 use crate::irq_source::IrqError;
 use crate::memory::MemoryError;
+use crate::nes_samples::NesSamples;
 
 #[derive(Default, Debug, Clone)]
 pub enum ApuType {
@@ -66,5 +67,5 @@ impl Display for ApuError {
 pub trait APU {
     fn reset(&mut self) -> Result<(), ApuError>;
     fn panic(&self, error: &ApuError);
-    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, ApuError>;
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError>;
 }

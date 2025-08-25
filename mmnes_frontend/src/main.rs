@@ -1,5 +1,3 @@
-mod nes_front_end;
-
 use std::fs::File;
 use std::hint::spin_loop;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
@@ -20,8 +18,13 @@ use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::loader::LoaderType::INESV2;
 use mmnes_core::memory::MemoryType::NESMemory;
 use mmnes_core::nes_console::{NESConsole, NESConsoleBuilder, NESConsoleError};
+use mmnes_core::nes_samples::NesSamples;
 use mmnes_core::ppu::PpuType::NES2C02;
 use crate::nes_front_end::NesFrontend;
+use crate::sound_player::SoundPlayer;
+
+mod nes_front_end;
+mod sound_player;
 
 const APP_NAME: &str = "MMNES";
 
@@ -171,10 +174,24 @@ fn get_input(rx: &Receiver<KeyEvents>) -> Option<KeyEvents> {
     }
 }
 
+fn process_frame(tx: &SyncSender<NesFrame>, frame: NesFrame) -> Result<(), NESConsoleError> {
+    tx.send(frame).map_err(|e| NESConsoleError::ChannelCommunication(e.to_string()))?;
+    Ok(())
+}
+
+fn process_samples(samples: NesSamples, sound_player: &mut SoundPlayer) -> Result<(), NESConsoleError> {
+    for sample in samples.samples() {
+        sound_player.push_sample(*sample)
+    }
+    
+    Ok(())
+}
+
 fn run(nes: &mut NESConsole, tx: SyncSender<NesFrame>, rx: Receiver<KeyEvents>) -> Result<(), NESConsoleError> {
     let frame_duration = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
     let mut next_frame = Instant::now() + frame_duration;
-
+    let mut sound_player = SoundPlayer::new().map_err(|e| NESConsoleError::ControllerError(e.to_string()))?;
+    
     loop {
         let inputs = get_input(&rx);
 
@@ -182,14 +199,11 @@ fn run(nes: &mut NESConsole, tx: SyncSender<NesFrame>, rx: Receiver<KeyEvents>) 
             nes.set_input(inputs)?;
         }
 
-        let frame =nes.step_frame()?;
-        let result = tx.send(frame);
+        let (frame, samples) =nes.step_frame()?;
+        process_frame(&tx, frame)?;
+        process_samples(samples, &mut sound_player)?;
 
         next_frame = sleep_until_next_frame(next_frame, frame_duration);
-
-        if let Err(error) = result {
-            eprintln!("Error sending frame: {}", error);
-        }
     }
 }
 

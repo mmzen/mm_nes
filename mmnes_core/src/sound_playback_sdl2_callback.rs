@@ -79,6 +79,10 @@ impl SoundPlayback for SoundPlaybackSDL2Callback {
         self.audio_buffer.lock().unwrap().push_sample(sample);
     }
 
+    fn samples(&mut self) -> Vec<f32> {
+        unreachable!()
+    }
+
     fn resume(&self) {
         self.audio_device.resume()
     }

@@ -31,6 +31,10 @@ impl SoundPlayback for SoundPlaybackSDL2Queue {
         }
     }
 
+    fn samples(&mut self) -> Vec<f32> {
+        unreachable!()
+    }
+
     fn resume(&self) {
         self.audio_queue.resume();
     }

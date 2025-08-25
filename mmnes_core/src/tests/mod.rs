@@ -11,6 +11,8 @@ mod cpu_6502;
 mod memory_mirror;
 mod input_external;
 mod key_events;
+mod sound_playback_passive;
+mod nes_samples;
 
 static START: Once = Once::new();
 

@@ -1835,6 +1835,7 @@ dependencies = [
  "log",
  "mmnes_core",
  "mockall",
+ "sdl2",
  "simplelog",
 ]
 

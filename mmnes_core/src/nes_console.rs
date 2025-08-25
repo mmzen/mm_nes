@@ -4,7 +4,6 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
 use log::debug;
-use sdl2::Sdl;
 use crate::apu::{ApuError, ApuType, APU};
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
@@ -24,11 +23,12 @@ use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
 use crate::nes_frame::NesFrame;
+use crate::nes_samples::NesSamples;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
 use crate::sound_playback::SoundPlaybackError;
-use crate::sound_playback_sdl2_queue::SoundPlaybackSDL2Queue;
+use crate::sound_playback_passive::SoundPlaybackPassive;
 use crate::standard_controller::StandardController;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
@@ -69,34 +69,62 @@ impl NESConsole {
             NESConsoleError::ControllerError(format!("{}", e.to_string())))
     }
 
-    pub fn step_frame(&mut self) -> Result<NesFrame, NESConsoleError> {
+    pub fn get_sample(&self) -> Result<Vec<f32>, NESConsoleError> {
+        let vec = Vec::new();
+
+        Ok(vec)
+    }
+
+    pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NESConsoleError> {
         let credits = CYCLE_CREDITS;
-        let frame;
+        let mut out_frame: Option<NesFrame> = None;
+        let mut out_samples: NesSamples = NesSamples::default();
 
         loop {
             self.cycles_counter = self.cpu.borrow_mut().run(self.cycles_counter, credits - self.cycles_debt)?;
             self.cycles_debt = (self.cycles_counter - self.previous_cycles_counter) - (credits - self.cycles_debt);
 
             let (_, ppu_frame) = self.ppu.borrow_mut().run(self.cycles_counter, credits)?;
-            self.apu.borrow_mut().run(self.cycles_counter, credits)?;
+            if let Some(f) = ppu_frame {
+                out_frame = Some(f);
+            }
+
+            let (_, apu_samples) = self.apu.borrow_mut().run(self.cycles_counter, credits)?;
+            if let Some(s) = apu_samples {
+                out_samples.append(s);
+            }
 
             self.previous_cycles_counter = self.cycles_counter;
 
-            if ppu_frame.is_some() {
-                frame = ppu_frame.unwrap();
+            if out_frame.is_some() {
                 break;
             }
         };
 
-        Ok(frame)
+        Ok((out_frame.unwrap(), out_samples))
     }
 
-    pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
+    fn reset_entry_point(&mut self) -> Result<(), NESConsoleError> {
         if let Some(pc) = self.entry_point {
             self.cpu.borrow_mut().set_pc_immediate(pc)?
         } else {
             self.cpu.borrow_mut().set_pc_indirect(DEFAULT_START_ADDRESS)?
         }
+
+        Ok(())
+    }
+
+    pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
+        self.reset_entry_point()?;
+        Ok(())
+    }
+
+    pub fn reset(&mut self) -> Result<(), NESConsoleError> {
+        self.cpu.borrow_mut().reset()?;
+        self.ppu.borrow_mut().reset()?;
+        self.apu.borrow_mut().reset()?;
+
+        self.reset_entry_point()?;
 
         Ok(())
     }
@@ -111,7 +139,8 @@ pub enum NESConsoleError {
     PpuError(PpuError),
     ApuError(ApuError),
     InternalError(String),
-    ControllerError(String)
+    ControllerError(String),
+    ChannelCommunication(String),
 }
 
 impl From<std::io::Error> for NESConsoleError {
@@ -184,6 +213,7 @@ impl Display for NESConsoleError {
             NESConsoleError::ApuError(s) => { write!(f, "apu error: {}", s) }
             NESConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
             NESConsoleError::ControllerError(s) => { write!(f, "controller error: {}", s) }
+            NESConsoleError::ChannelCommunication(s) => { write!(f, "channel communication error: {}", s) }
         }
     }
 }
@@ -367,13 +397,12 @@ impl NESConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType, sdl_context: &Sdl,
-                        bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
             ApuType::RP2A03 => {
-                let sound_player = SoundPlaybackSDL2Queue::new(sdl_context)?;
+                let sound_player = SoundPlaybackPassive::new();
                 ApuRp2A03::new(sound_player, cpu, bus)
             },
         };
@@ -402,7 +431,7 @@ impl NESConsoleBuilder {
     }
 
     fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType,
-                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>, sdl_context: &Sdl) -> Result<(), NESConsoleError> {
+                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(), NESConsoleError> {
         debug!("creating device: {:?}", device_type);
 
         match device_type {
@@ -442,7 +471,7 @@ impl NESConsoleBuilder {
             }
 
             BusDeviceType::APU(apu_type) => {
-                let apu= self.build_apu_device(apu_type, &sdl_context, bus.clone(), cpu)?;
+                let apu= self.build_apu_device(apu_type,bus.clone(), cpu)?;
                 bus.borrow_mut().add_device(apu)?;
             }
 
@@ -466,12 +495,8 @@ impl NESConsoleBuilder {
     }
 
     fn build_nes(mut self) -> Result<NESConsole, NESConsoleError> {
-
         let bus = self.build_bus()?;
         let cpu = self.build_cpu(bus.clone())?;
-        let sdl_context = sdl2::init().map_err(
-            |s| NESConsoleError::InternalError(s)
-        )?;
 
         self.bus = Some(bus.clone());
         self.cpu = Some(cpu.clone());
@@ -479,7 +504,7 @@ impl NESConsoleBuilder {
         let device_types = self.device_types.clone();
 
         for device_type in device_types {
-            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone(), &sdl_context)?;
+            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone())?;
         }
 
         let cpu = self.cpu.take()
