@@ -64,28 +64,6 @@ impl NESConsole {
         }
     }
 
-    /***
-     * Legacy functions that integrates the loop
-     *
-     * fn run_scheduler(&mut self) -> Result<(), NESConsoleError> {
-     *   let mut cycles = CYCLE_START_SEQUENCE;
-     *   let credits = CYCLE_CREDITS;
-     *
-     *   let mut debt = 0;
-     *
-     *   loop {
-     *       let previous_cycles = cycles;
-     *
-     *       cycles = self.cpu.borrow_mut().run(cycles, CYCLE_CREDITS - debt)?;
-     *
-     *       debt = (cycles - previous_cycles) - (CYCLE_CREDITS - debt);
-     *
-     *       self.ppu.borrow_mut().run(cycles, credits)?;
-     *       self.apu.borrow_mut().run(cycles, credits)?;
-     *   }
-     *}
-     ***/
-
     pub fn set_input(&self, events: KeyEvents) -> Result<(), NESConsoleError>{
         self.controller.borrow_mut().set_input(events).map_err(|e|
             NESConsoleError::ControllerError(format!("{}", e.to_string())))

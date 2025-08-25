@@ -1,4 +1,5 @@
 use std::sync::mpsc::{Receiver, SyncSender};
+use std::time::Instant;
 use eframe::{egui, App, Frame};
 use eframe::egui::{vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Margin, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
 use mmnes_core::nes_frame::NesFrame;
@@ -12,8 +13,12 @@ pub struct NesFrontend {
     texture_options: TextureOptions,
     height: usize,
     width: usize,
+    last_tick: Instant,
+    last_frame_counter: u32,
     frame_counter: u32,
     rendering_duration_ms: f64,
+    ui_fps: f32,
+    emulator_fps: f32,
     input: KeyEvents
 }
 
@@ -41,9 +46,47 @@ impl NesFrontend {
             texture_options,
             height,
             width,
+            last_tick: Instant::now(),
+            last_frame_counter: 0,
             frame_counter: 0,
             rendering_duration_ms: 0.0,
+            ui_fps: 0.0,
+            emulator_fps: 0.0,
             input: KeyEvents::new()
+        }
+    }
+
+    fn compute_fps(&mut self) {
+        const ALPHA: f32 = 0.1;
+
+        let now = Instant::now();
+        let duration = (now - self.last_tick).as_secs_f32();
+
+        if duration > 0.0 {
+            // UI FPS: 1/duration (EMA-smoothed)
+            let ui_fps = 1.0 / duration;
+            self.ui_fps = if self.ui_fps == 0.0 {
+                ui_fps
+            } else {
+                self.ui_fps + ALPHA * (ui_fps - self.ui_fps)
+            };
+
+            // Emulator FPS: delta frames / duration
+            let delta_frames = if self.frame_counter >= self.last_frame_counter {
+                (self.frame_counter - self.last_frame_counter) as f32
+            } else {
+                0.0
+            };
+
+            let emulator_fps = delta_frames / duration;
+            self.emulator_fps = if self.emulator_fps == 0.0 {
+                emulator_fps
+            } else {
+                self.emulator_fps + ALPHA * (emulator_fps - self.emulator_fps)
+            };
+
+            self.last_frame_counter = self.frame_counter;
+            self.last_tick = now;
         }
     }
 
@@ -82,11 +125,12 @@ impl App for NesFrontend {
                 let _ = ui.button("Pause");
                 ui.end_row();
             });
-            ui.label(format!("Number of frames: {}", self.frame_counter));
         });
 
         TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.label(format!("rendering time: {:.4} ms", self.rendering_duration_ms));
+            ui.label(format!("rendering: {:.3} ms | UI: {:>5.1} fps | Emulator: {:>5.1} fps",
+                self.rendering_duration_ms, self.ui_fps, self.emulator_fps
+            ));
         });
 
         CentralPanel::default().show(ctx, |ui| {
@@ -102,6 +146,7 @@ impl App for NesFrontend {
                         let (_, duration) = measure_exec_time(|| {
                             ui.add(Image::new((self.texture.id(), size)));
                         });
+                        self.compute_fps();
                         self.rendering_duration_ms = duration.as_secs_f64() * 1000.0;
                     });
                 });

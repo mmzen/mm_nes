@@ -1,7 +1,7 @@
 image: rust:latest
 
 options:
-  max-time: 2
+  max-time: 6
 
 pipelines:
   default:
