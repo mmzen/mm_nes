@@ -19,12 +19,25 @@ pub struct NesFrontend {
     rendering_duration_ms: f64,
     ui_fps: f32,
     emulator_fps: f32,
+    emulator_viewport_frame: egui::containers::Frame,
     input: KeyEvents
 }
 
 impl NesFrontend {
+
+    fn create_default_texture(width: usize, height: usize) -> Vec<Color32> {
+        let mut vec = Vec::<Color32>::with_capacity(width * height);
+
+        for _ in 0..width * height {
+            vec.push(Color32::RED);
+        }
+
+        vec
+    }
+
+
     pub fn new(cc: &eframe::CreationContext<'_>, tx: SyncSender<KeyEvents>, rx: Receiver<NesFrame>, width: usize, height: usize) -> NesFrontend {
-        let vec = Vec::<Color32>::with_capacity(width * height);
+        let vec = NesFrontend::create_default_texture(width, height);
 
         let texture_options = TextureOptions {
             minification: egui::TextureFilter::Nearest,
@@ -39,6 +52,15 @@ impl NesFrontend {
             texture_options
         );
 
+        let frame = egui::containers::Frame {
+            inner_margin: Default::default(),
+            outer_margin: Default::default(),
+            fill: Color32::from_hex("#727370").unwrap(),
+            stroke: Default::default(),
+            corner_radius: Default::default(),
+            shadow: Default::default(),
+        };
+
         NesFrontend {
             rx,
             tx,
@@ -52,6 +74,7 @@ impl NesFrontend {
             rendering_duration_ms: 0.0,
             ui_fps: 0.0,
             emulator_fps: 0.0,
+            emulator_viewport_frame: frame,
             input: KeyEvents::new()
         }
     }
@@ -133,7 +156,7 @@ impl App for NesFrontend {
             ));
         });
 
-        CentralPanel::default().show(ctx, |ui| {
+        CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |ui| {
             let img_px = vec2(self.width as f32, self.height as f32);
             let available_size = ui.available_size();
             let scale = (available_size.x / img_px.x).min(available_size.y / img_px.y);

@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::hint::spin_loop;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::thread::{sleep, spawn, JoinHandle};
 use std::time::{Duration, Instant};
 use log::{debug, info, LevelFilter};
@@ -161,29 +161,30 @@ fn sleep_until_next_frame(next: Instant, frame: Duration) -> Instant {
 }
 
 fn get_input(rx: &Receiver<KeyEvents>) -> Option<KeyEvents> {
-    let mut key_events = KeyEvents::new();
+    let mut acc = KeyEvents::new();
 
-    if let Ok(events) = rx.try_recv() {
-        key_events = key_events.chain(events).collect();
+    while let Ok(events) = rx.try_recv() {
+        acc = acc.chain(events).collect();
     }
 
-    if key_events.is_empty() {
-        None
-    } else {
-        Some(key_events)
-    }
+    (!acc.is_empty()).then_some(acc)
 }
 
 fn process_frame(tx: &SyncSender<NesFrame>, frame: NesFrame) -> Result<(), NESConsoleError> {
-    tx.send(frame).map_err(|e| NESConsoleError::ChannelCommunication(e.to_string()))?;
-    Ok(())
+    match tx.try_send(frame) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(_frame)) => Ok(()), // drop frame
+        Err(TrySendError::Disconnected(frame)) => {
+            Err(NESConsoleError::ChannelCommunication(format!("UI is gone ... frame {}", frame.count())))
+        }
+    }
 }
 
 fn process_samples(samples: NesSamples, sound_player: &mut SoundPlayer) -> Result<(), NESConsoleError> {
     for sample in samples.samples() {
         sound_player.push_sample(*sample)
     }
-    
+
     Ok(())
 }
 
@@ -191,7 +192,7 @@ fn run(nes: &mut NESConsole, tx: SyncSender<NesFrame>, rx: Receiver<KeyEvents>) 
     let frame_duration = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
     let mut next_frame = Instant::now() + frame_duration;
     let mut sound_player = SoundPlayer::new().map_err(|e| NESConsoleError::ControllerError(e.to_string()))?;
-    
+
     loop {
         let inputs = get_input(&rx);
 

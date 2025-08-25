@@ -354,10 +354,6 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(ppu_dma)))
     }
 
-    /***
-     * TODO inject Sdl2 renderer into Ppu
-     *
-     ***/
     fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
                         mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>,
                         cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
