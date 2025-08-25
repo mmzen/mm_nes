@@ -1,8 +1,10 @@
+use mmnes_core::key_event::KeyEvents;
 
-enum NesMessage {
+#[derive(Debug, Clone)]
+pub enum NesMessage {
     LoadRom(String),
+    Keys(KeyEvents),
     Start,
     Pause,
-    Reset,
-    Quit,
+    Reset
 }

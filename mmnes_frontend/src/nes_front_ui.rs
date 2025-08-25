@@ -1,14 +1,19 @@
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
 use eframe::egui::{vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Margin, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
+use egui_file_dialog::FileDialog;
 use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
+use mmnes_core::nes_console::NesConsoleError;
+use crate::nes_message::NesMessage;
+use crate::nes_message::NesMessage::{Keys, LoadRom, Reset};
 
 pub struct NesFrontUI {
     rx: Receiver<NesFrame>,
-    tx: SyncSender<KeyEvents>,
+    tx: SyncSender<NesMessage>,
     texture: TextureHandle,
     texture_options: TextureOptions,
     height: usize,
@@ -20,7 +25,9 @@ pub struct NesFrontUI {
     ui_fps: f32,
     emulator_fps: f32,
     emulator_viewport_frame: egui::containers::Frame,
-    input: KeyEvents
+    input: KeyEvents,
+    rom_file_dialog: FileDialog,
+    rom_file: Option<PathBuf>,
 }
 
 impl NesFrontUI {
@@ -36,7 +43,7 @@ impl NesFrontUI {
     }
 
 
-    pub fn new(cc: &eframe::CreationContext<'_>, tx: SyncSender<KeyEvents>, rx: Receiver<NesFrame>, width: usize, height: usize) -> NesFrontUI {
+    pub fn new(cc: &eframe::CreationContext<'_>, tx: SyncSender<NesMessage>, rx: Receiver<NesFrame>, width: usize, height: usize) -> NesFrontUI {
         let vec = NesFrontUI::create_default_texture(width, height);
 
         let texture_options = TextureOptions {
@@ -75,7 +82,9 @@ impl NesFrontUI {
             ui_fps: 0.0,
             emulator_fps: 0.0,
             emulator_viewport_frame: frame,
-            input: KeyEvents::new()
+            input: KeyEvents::new(),
+            rom_file_dialog: FileDialog::new(),
+            rom_file: None,
         }
     }
 
@@ -122,8 +131,18 @@ impl NesFrontUI {
         }
     }
 
+    fn send_message(&mut self, message: NesMessage) -> Result<(), NesConsoleError> {
+        match self.tx.try_send(message) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_frame)) => Ok(()), // drop input
+            Err(TrySendError::Disconnected(message)) => {
+                Err(NesConsoleError::ChannelCommunication(format!("NES backend is gone ... {:?}", message)))
+            }
+        }
+    }
+
     fn send_input_to_emulator(&mut self) {
-        if let Ok(()) = self.tx.try_send(self.input.clone()) {
+        if let Ok(()) = self.tx.try_send(Keys(self.input.clone())) {
             self.input.clear();
         }
     }
@@ -142,8 +161,20 @@ impl App for NesFrontUI {
 
         TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             Grid::new("edit_grid").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
-                let _ = ui.button("Load ROM");
-                let _ = ui.button("Reset");
+                if ui.button("Load ROM").clicked() {
+                    self.rom_file_dialog.pick_file();
+                }
+
+                self.rom_file_dialog.update(ctx);
+
+                if let Some(path) = self.rom_file_dialog.take_picked() {
+                    self.rom_file = Some(path.to_path_buf());
+                    let _ = self.send_message(LoadRom(path.to_str().unwrap().to_string()));
+                }
+
+                if ui.button("Reset").clicked() {
+                    let _ = self.send_message(Reset);
+                }
                 let _ = ui.button("Power Off");
                 let _ = ui.button("Pause");
                 ui.end_row();
