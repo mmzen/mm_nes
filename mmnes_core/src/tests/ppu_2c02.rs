@@ -12,7 +12,6 @@ use crate::tests::init;
 const CHR_MEMORY_RANGE: (u16, u16) = (0x0000, 0x1FFF);
 const CHR_MEMORY_SIZE: usize = 8192;
 const CHR_NAME: &str = "Test CHR-ROM";
-const PPU_EXTERNAL_MEMORY_RANGE: (u16, u16) = (0x2000, 0x3FFF);
 const PPU_EXTERNAL_MEMORY_SIZE: usize = 8;
 const VALID_CH_ROM_ADDRESS: u16 = 0x1000;
 const VALID_PALETTE_ADDRESS: u16 = 0x3FAB;
@@ -26,6 +25,7 @@ fn create_cpu() -> MockCpuStub {
     cpu
 }
 
+#[allow(dead_code)]
 fn create_bus() -> MockBusStub {
     let bus = MockBusStub::new();
     bus
@@ -323,7 +323,7 @@ fn v_wraps_to_0x0000_when_incrementing_from_0x3fff() {
     set_v_increment(&mut ppu, 1);
 
     write_address_to_addr_register(&mut ppu, 0x3FFF).unwrap();
-    write_data_to_data_register(&mut ppu, data).unwrap();;
+    write_data_to_data_register(&mut ppu, data).unwrap();
     let v = ppu.get_v_value();
     println!("V: 0x{:04X}", v);
     assert_eq!(ppu.get_v_value(), 0x0000);

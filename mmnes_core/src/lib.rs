@@ -19,7 +19,7 @@ pub mod palette_2c02;
 pub mod dma_device;
 pub mod dma;
 pub mod ppu_dma;
-pub mod frame;
+pub mod nes_frame;
 pub mod apu_rp2a03;
 pub mod renderer;
 pub mod memory_palette;
@@ -37,3 +37,5 @@ pub mod memory_mirror;
 
 #[cfg(test)]
 pub mod tests;
+pub mod key_event;
+mod input_external;

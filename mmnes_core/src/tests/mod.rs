@@ -9,6 +9,8 @@ mod ppu_2c02;
 mod ppu_dma;
 mod cpu_6502;
 mod memory_mirror;
+mod input_external;
+mod key_events;
 
 static START: Once = Once::new();
 

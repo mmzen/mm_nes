@@ -4,8 +4,9 @@ use std::fmt::{Debug};
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::bus_device::BusDeviceType::CONTROLLER;
-use crate::controller::{Controller, ControllerType};
+use crate::controller::{Controller, ControllerError, ControllerType};
 use crate::input::Input;
+use crate::key_event::KeyEvents;
 use crate::memory::{Memory, MemoryError};
 
 const DEVICE_NAME: &str = "Standard Controller";
@@ -29,7 +30,12 @@ pub struct StandardController<T: Input> {
     control_index: RefCell<usize>,
 }
 
-impl<T: Input> Controller for StandardController<T> {}
+impl<T: Input> Controller for StandardController<T> {
+    fn set_input(&mut self, input: KeyEvents) -> Result<(), ControllerError> {
+        self.input.set_input_state(input);
+        Ok(())
+    }
+}
 
 impl<T: Input> Memory for StandardController<T> {
     fn initialize(&mut self) -> Result<usize, MemoryError> {

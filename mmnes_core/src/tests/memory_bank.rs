@@ -14,6 +14,7 @@ fn check_memory(memory: MemoryBank) {
     }
 }
 
+#[allow(dead_code)]
 fn create_bus() -> MockBusStub {
     let bus = MockBusStub::new();
     bus

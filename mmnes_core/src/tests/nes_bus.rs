@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::memory::{Memory, MemoryError, MemoryType};
+use crate::memory::{Memory, MemoryType};
 use mockall::predicate::eq;
 use crate::bus::Bus;
 use crate::bus_device::{BusDeviceType, MockBusDeviceStub};

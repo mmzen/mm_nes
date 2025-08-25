@@ -3,32 +3,33 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::{debug, info};
+use log::debug;
 use sdl2::Sdl;
 use crate::apu::{ApuError, ApuType, APU};
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
-use crate::controller::ControllerType;
+use crate::controller::{Controller, ControllerType};
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::dma::PpuDmaType;
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::input::InputError;
-use crate::input_sdl2::InputSDL2;
+use crate::input_external::InputExternal;
+use crate::key_event::KeyEvents;
 use crate::loader::{Loader, LoaderError, LoaderType};
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
 use crate::nes_bus::NESBus;
+use crate::nes_frame::NesFrame;
 use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
 use crate::ppu_2c02::Ppu2c02;
 use crate::ppu_dma::PpuDma;
 use crate::sound_playback::SoundPlaybackError;
 use crate::sound_playback_sdl2_queue::SoundPlaybackSDL2Queue;
 use crate::standard_controller::StandardController;
-use crate::util::measure_exec_time;
 
 const WRAM_MEMORY_SIZE: usize = 2 * 1024;
 const WRAM_START_ADDR: u16 = 0x0000;
@@ -42,34 +43,74 @@ pub struct NESConsole {
     cpu: Rc<RefCell<dyn CPU>>,
     ppu: Rc<RefCell<dyn PPU>>,
     apu: Rc<RefCell<dyn APU>>,
+    controller: Rc<RefCell<dyn Controller>>,
     entry_point: Option<u16>,
+    cycles_counter: u32,
+    previous_cycles_counter: u32,
+    cycles_debt: u32,
 }
 
 impl NESConsole {
+    fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>) -> NESConsole {
+        NESConsole {
+            cpu,
+            ppu,
+            apu,
+            controller,
+            entry_point,
+            previous_cycles_counter: CYCLE_START_SEQUENCE,
+            cycles_counter: CYCLE_START_SEQUENCE,
+            cycles_debt: 0,
+        }
+    }
 
     /***
-     * TODO - switch cycle to master clock cycles instead of CPU cycles
+     * Legacy functions that integrates the loop
+     *
+     * fn run_scheduler(&mut self) -> Result<(), NESConsoleError> {
+     *   let mut cycles = CYCLE_START_SEQUENCE;
+     *   let credits = CYCLE_CREDITS;
+     *
+     *   let mut debt = 0;
+     *
+     *   loop {
+     *       let previous_cycles = cycles;
+     *
+     *       cycles = self.cpu.borrow_mut().run(cycles, CYCLE_CREDITS - debt)?;
+     *
+     *       debt = (cycles - previous_cycles) - (CYCLE_CREDITS - debt);
+     *
+     *       self.ppu.borrow_mut().run(cycles, credits)?;
+     *       self.apu.borrow_mut().run(cycles, credits)?;
+     *   }
+     *}
      ***/
-    fn run_scheduler(&mut self) -> Result<(), NESConsoleError> {
-        let mut cycles = CYCLE_START_SEQUENCE;
-        let credits = CYCLE_CREDITS;
 
-        let mut debt = 0;
-        //let mut cpu = self.cpu.borrow_mut();
-        //let mut ppu = self.ppu.borrow_mut();
-        //let mut apu = self.apu.borrow_mut();
+    pub fn set_input(&self, events: KeyEvents) -> Result<(), NESConsoleError>{
+        self.controller.borrow_mut().set_input(events).map_err(|e|
+            NESConsoleError::ControllerError(format!("{}", e.to_string())))
+    }
+
+    pub fn step_frame(&mut self) -> Result<NesFrame, NESConsoleError> {
+        let credits = CYCLE_CREDITS;
+        let frame;
 
         loop {
-            let previous_cycles = cycles;
+            self.cycles_counter = self.cpu.borrow_mut().run(self.cycles_counter, credits - self.cycles_debt)?;
+            self.cycles_debt = (self.cycles_counter - self.previous_cycles_counter) - (credits - self.cycles_debt);
 
-            cycles = self.cpu.borrow_mut().run(cycles, CYCLE_CREDITS - debt)?;
+            let (_, ppu_frame) = self.ppu.borrow_mut().run(self.cycles_counter, credits)?;
+            self.apu.borrow_mut().run(self.cycles_counter, credits)?;
 
-            //trace!("cycle: {}, previous: {}, used: {}, credits: {}, debt: {}", cycles, previous_cycles, cycles - previous_cycles, CYCLE_CREDITS - debt, debt);
-            debt = (cycles - previous_cycles) - (CYCLE_CREDITS - debt);
+            self.previous_cycles_counter = self.cycles_counter;
 
-            self.ppu.borrow_mut().run(cycles, credits)?;
-            self.apu.borrow_mut().run(cycles, credits)?;
-        }
+            if ppu_frame.is_some() {
+                frame = ppu_frame.unwrap();
+                break;
+            }
+        };
+
+        Ok(frame)
     }
 
     pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
@@ -77,24 +118,9 @@ impl NESConsole {
             self.cpu.borrow_mut().set_pc_immediate(pc)?
         } else {
             self.cpu.borrow_mut().set_pc_indirect(DEFAULT_START_ADDRESS)?
-        };
-
-        let (status, duration) = measure_exec_time(|| {
-            self.run_scheduler()
-        });
-
-        info!("ended, execution time: {:.2?} ms", duration.as_millis());
-
-        if let Err(error) = status {
-            match error {
-                NESConsoleError::CpuError(ref e) => self.cpu.borrow().panic(e),
-                NESConsoleError::PpuError(ref e) => self.ppu.borrow().panic(e),
-                _ => {}
-            };
-            Err(error)
-        } else {
-            Ok(())
         }
+
+        Ok(())
     }
 }
 
@@ -107,6 +133,7 @@ pub enum NESConsoleError {
     PpuError(PpuError),
     ApuError(ApuError),
     InternalError(String),
+    ControllerError(String)
 }
 
 impl From<std::io::Error> for NESConsoleError {
@@ -151,7 +178,6 @@ impl From<ApuError> for NESConsoleError {
     }
 }
 
-
 impl From<InputError> for NESConsoleError {
     fn from(error: InputError) -> Self {
         match error {
@@ -179,6 +205,7 @@ impl Display for NESConsoleError {
             NESConsoleError::PpuError(s) => { write!(f, "ppu error: {}", s) },
             NESConsoleError::ApuError(s) => { write!(f, "apu error: {}", s) }
             NESConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
+            NESConsoleError::ControllerError(s) => { write!(f, "controller error: {}", s) }
         }
     }
 }
@@ -194,6 +221,7 @@ pub struct NESConsoleBuilder {
     ppu_type: Option<PpuType>,
     apu: Option<Rc<RefCell<dyn APU>>>,
     apu_type: Option<ApuType>,
+    controller: Option<Rc<RefCell<dyn Controller>>>,
     device_types: Vec<BusDeviceType>,
     loader_type: Option<LoaderType>,
     rom_file: Option<String>,
@@ -214,6 +242,7 @@ impl NESConsoleBuilder {
             ppu_type: None,
             apu: None,
             apu_type: None,
+            controller: None,
             device_types: Vec::new(),
             loader_type: None,
             rom_file: None,
@@ -344,12 +373,12 @@ impl NESConsoleBuilder {
         Ok((ppu.clone(), dma))
     }
 
-    fn build_controller_device(&self, controller_type: &ControllerType, sdl_context: &Sdl) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_controller_device(&self, controller_type: &ControllerType) -> Result<Rc<RefCell<dyn Controller>>, NESConsoleError> {
         debug!("creating controller {:?}", controller_type);
 
         let result = match controller_type {
             ControllerType::StandardController => {
-                let input = InputSDL2::new(sdl_context)?;
+                let input = InputExternal::new();
                 StandardController::new(input)
             },
         };
@@ -429,8 +458,9 @@ impl NESConsoleBuilder {
             },
 
             BusDeviceType::CONTROLLER(controller_type) => {
-                let controller = self.build_controller_device(controller_type, &sdl_context)?;
-                bus.borrow_mut().add_device(controller)?;
+                let controller = self.build_controller_device(controller_type)?;
+                bus.borrow_mut().add_device(controller.clone())?;
+                self.controller = Some(controller.clone());
             }
 
             BusDeviceType::APU(apu_type) => {
@@ -483,12 +513,10 @@ impl NESConsoleBuilder {
         let apu = self.apu.take()
             .ok_or(NESConsoleError::BuilderError("apu missing".to_string()))?;
 
-        let console = NESConsole {
-            cpu,
-            ppu,
-            apu,
-            entry_point: self.entry_point.take()
-        };
+        let controller = self.controller.take()
+            .ok_or(NESConsoleError::BuilderError("controller missing".to_string()))?;
+
+        let console = NESConsole::new(cpu, ppu, apu, controller, self.entry_point.take());
 
         Ok(console)
     }

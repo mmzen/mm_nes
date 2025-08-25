@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use std::time::Duration;
 use log::info;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
+use crate::nes_frame::{FrameState, NesFrame};
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::memory_mirror::MemoryMirror;
@@ -22,7 +22,7 @@ use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
 use crate::ppu_2c02::SpriteAttribute::{FlipHorizontal, FlipVertical};
 use crate::ppu_2c02::StatusFlag::{Sprite0Hit, SpriteOverflow, VBlank};
 use crate::renderer::Renderer;
-use crate::util::{measure_exec_time, vec_to_array};
+use crate::util::vec_to_array;
 
 const PPU_NAME: &str = "PPU 2C02";
 
@@ -342,7 +342,7 @@ pub struct Ppu2c02 {
     state: PpuState,
     tile_cache: TileCache,
     background_pixels_line: PixelLines,
-    sprites_pixels_line: PixelLines
+    sprites_pixels_line: PixelLines,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -463,7 +463,10 @@ impl PPU for Ppu2c02 {
         unreachable!()
     }
 
-    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, PpuError> {
+    /***
+     * returns number of cycles consumed and a frame
+     */
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesFrame>), PpuError> {
         let mut cycles = start_cycle;
         let cycles_threshold = start_cycle + credits;
 
@@ -477,7 +480,17 @@ impl PPU for Ppu2c02 {
             }
         }
 
-        Ok(cycles)
+        let frame = if self.renderer.borrow().frame().state() == FrameState::Completed {
+            Some(self.frame())
+        } else {
+            None
+        };
+
+        Ok((cycles, frame))
+    }
+
+    fn frame(&self) -> NesFrame {
+        self.renderer.borrow().frame().clone()
     }
 }
 
@@ -823,7 +836,7 @@ impl Ppu2c02 {
             state: PpuState::VBlank(261),
             tile_cache: TileCache::default(),
             background_pixels_line: PixelLines::default(),
-            sprites_pixels_line: PixelLines::default(),
+            sprites_pixels_line: PixelLines::default()
         };
 
         Ok(ppu)
@@ -1488,6 +1501,7 @@ impl Ppu2c02 {
             },
 
             PpuState::Rendering(241) => {
+                self.renderer.borrow_mut().reset();
                 self.set_flag(Status(VBlank), true);
                 self.state = PpuState::VBlank(242);
 
@@ -1509,12 +1523,7 @@ impl Ppu2c02 {
 
     fn render(&mut self) -> Result<u16, PpuError> {
 
-        let (_, _): (Result<(), PpuError>, Duration) = measure_exec_time(|| {
-            self.render_scanline()?;
-            Ok(())
-        });
-
-        //trace!("PPU: rendered line in: {} ms", duration.as_millis());
+        self.render_scanline()?;
         Ok(CLOCK_CYCLES_PER_SCANLINE)
     }
 }

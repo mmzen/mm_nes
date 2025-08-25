@@ -1,5 +1,7 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use crate::bus_device::BusDevice;
+use crate::key_event::KeyEvents;
 
 #[derive(Default, Debug, Clone)]
 pub enum ControllerType {
@@ -23,10 +25,21 @@ impl PartialEq for ControllerType {
     }
 }
 
-pub trait Controller {}
+pub trait Controller: BusDevice {
+    fn set_input(&mut self, input: KeyEvents) -> Result<(), ControllerError>;
+}
 
 #[derive(Debug, PartialEq)]
 pub enum ControllerError {
-    IncorrectInput(String)
+    IncorrectInput(String),
+    Unexpected(String),
 }
 
+impl Display for ControllerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            ControllerError::IncorrectInput(message) => write!(f, "incorrect input: {}", message),
+            ControllerError::Unexpected(message) => write!(f, "unexpected error: {}", message),
+        }
+    }
+}

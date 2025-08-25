@@ -9,9 +9,9 @@ simplelog = { version = "0.12.2" }
 clap = { version = "4.5.15", features = ["derive"] }
 clap-num = "1.1.1"
 mmnes_core = { workspace = true }
+eframe = "0.32.1"
+egui_extras = { version = "0.32.1" , features = ["image"] }
 
 [dev-dependencies]
 mockall = "0.13.0"
 simplelog = { version = "0.12.2", features = ["test"] }
-
-

@@ -5,6 +5,7 @@ use crate::bus::BusError;
 use crate::bus_device::BusDevice;
 use crate::cpu::CpuError;
 use crate::dma_device::DmaDevice;
+use crate::nes_frame::NesFrame;
 use crate::memory::MemoryError;
 
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +48,8 @@ impl PartialEq for PpuType {
 pub trait PPU: BusDevice + DmaDevice {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
-    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, PpuError>;
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesFrame>), PpuError>;
+    fn frame(&self) -> NesFrame;
 }
 
 #[derive(Debug)]
