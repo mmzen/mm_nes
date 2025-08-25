@@ -1,11 +1,10 @@
 use std::fs::File;
-use std::hint::spin_loop;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
-use std::thread::{sleep, spawn, JoinHandle};
-use std::time::{Duration, Instant};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::thread::{spawn, JoinHandle};
+use std::time::{Duration};
 use log::{debug, info, LevelFilter};
 use simplelog::{Config, SimpleLogger};
-use clap::Parser;
+use clap::{Parser};
 use clap_num::maybe_hex;
 use mmnes_core::apu::ApuType::RP2A03;
 use mmnes_core::bus::BusType;
@@ -17,14 +16,15 @@ use mmnes_core::key_event::KeyEvents;
 use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::loader::LoaderType::INESV2;
 use mmnes_core::memory::MemoryType::NESMemory;
-use mmnes_core::nes_console::{NESConsole, NESConsoleBuilder, NESConsoleError};
-use mmnes_core::nes_samples::NesSamples;
+use mmnes_core::nes_console::{NesConsole, NesConsoleBuilder, NesConsoleError};
 use mmnes_core::ppu::PpuType::NES2C02;
-use crate::nes_front_end::NesFrontend;
-use crate::sound_player::SoundPlayer;
+use crate::nes_front_end::NesFrontEnd;
+use crate::nes_front_ui::NesFrontUI;
 
-mod nes_front_end;
+mod nes_front_ui;
 mod sound_player;
+mod nes_message;
+mod nes_front_end;
 
 const APP_NAME: &str = "MMNES";
 
@@ -89,12 +89,8 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-pub fn start_emulator() -> Result<NESConsole, NESConsoleError> {
-    let args: Args = Args::parse();
-
-    logger_init(args.debug);
-
-    let builder = NESConsoleBuilder::new();
+fn create_emulator(args: Args) -> Result<NesConsole, NesConsoleError> {
+    let builder = NesConsoleBuilder::new();
 
     let trace_file = if let Some(trace_file) = args.trace_file {
         debug!("output for traces: {}", trace_file);
@@ -125,107 +121,34 @@ pub fn start_emulator() -> Result<NESConsole, NESConsoleError> {
         .with_entry_point(args.pc)
         .build()?;
 
-    info!("emulator starting...");
-    let r = console.power_on();
-
-    if let Err(e) = r {
-        eprintln!("fatal error: {}", e);
-    }
+    console.power_on()?;
+    info!("emulator ready");
 
     Ok(console)
 }
 
-fn sleep_until_next_frame(next: Instant, frame: Duration) -> Instant {
-    let now = Instant::now();
-    let mut next = next;
+fn spawn_emulator_thread(args: Args, tx: SyncSender<NesFrame>, rx: Receiver<KeyEvents>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
 
-    if next > now {
-        let mut to_sleep = next - now;
-        if to_sleep > SPIN_BEFORE {
-            to_sleep -= SPIN_BEFORE;
-            sleep(to_sleep);
-        }
-
-        while Instant::now() < next {
-            spin_loop();
-        }
-
-        next + frame
-    } else {
-        while next <= now {
-            next += frame;
-        }
-
-        next
-    }
-}
-
-fn get_input(rx: &Receiver<KeyEvents>) -> Option<KeyEvents> {
-    let mut acc = KeyEvents::new();
-
-    while let Ok(events) = rx.try_recv() {
-        acc = acc.chain(events).collect();
-    }
-
-    (!acc.is_empty()).then_some(acc)
-}
-
-fn process_frame(tx: &SyncSender<NesFrame>, frame: NesFrame) -> Result<(), NESConsoleError> {
-    match tx.try_send(frame) {
-        Ok(()) => Ok(()),
-        Err(TrySendError::Full(_frame)) => Ok(()), // drop frame
-        Err(TrySendError::Disconnected(frame)) => {
-            Err(NESConsoleError::ChannelCommunication(format!("UI is gone ... frame {}", frame.count())))
-        }
-    }
-}
-
-fn process_samples(samples: NesSamples, sound_player: &mut SoundPlayer) -> Result<(), NESConsoleError> {
-    for sample in samples.samples() {
-        sound_player.push_sample(*sample)
-    }
-
-    Ok(())
-}
-
-fn run(nes: &mut NESConsole, tx: SyncSender<NesFrame>, rx: Receiver<KeyEvents>) -> Result<(), NESConsoleError> {
-    let frame_duration = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
-    let mut next_frame = Instant::now() + frame_duration;
-    let mut sound_player = SoundPlayer::new().map_err(|e| NESConsoleError::ControllerError(e.to_string()))?;
-
-    loop {
-        let inputs = get_input(&rx);
-
-        if let Some(inputs) = inputs {
-            nes.set_input(inputs)?;
-        }
-
-        let (frame, samples) =nes.step_frame()?;
-        process_frame(&tx, frame)?;
-        process_samples(samples, &mut sound_player)?;
-
-        next_frame = sleep_until_next_frame(next_frame, frame_duration);
-    }
-}
-
-fn spawn_emulator_thread(tx: SyncSender<NesFrame>, rx: Receiver<KeyEvents>) -> Result<JoinHandle<Result<(), NESConsoleError>>, NESConsoleError> {
-
-    let jh = spawn(move || -> Result<(), NESConsoleError>  {
-        let mut nes = start_emulator()?;
-        run(&mut nes, tx, rx)?;
-        unreachable!()
+    let jh = spawn(move || -> Result<(), NesConsoleError>  {
+        let nes = create_emulator(args)?;
+        let mut front = NesFrontEnd::new(nes, tx, rx);
+        front.run()?;
+        Ok(())
     });
 
     Ok(jh)
 }
 
-fn main() -> Result<(), NESConsoleError> {
+fn main() -> Result<(), NesConsoleError> {
+    let args: Args = Args::parse();
+
+    logger_init(args.debug);
 
     let native_options = eframe::NativeOptions::default();
     let (tx0, rx0) = sync_channel::<NesFrame>(CHANNEL_BOUND_SIZE);
     let (tx1, rx1) = sync_channel::<KeyEvents>(CHANNEL_BOUND_SIZE);
 
-    let _ = spawn_emulator_thread(tx0, rx1)?;
+    let _ = spawn_emulator_thread(args, tx0, rx1)?;
 
     let _ = eframe::run_native(
         APP_NAME,
@@ -233,8 +156,8 @@ fn main() -> Result<(), NESConsoleError> {
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            let nes_frontend = NesFrontend::new(cc, tx1, rx0, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
-            Ok(Box::new(nes_frontend))
+            let nes_front_ui = NesFrontUI::new(cc, tx1, rx0, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
+            Ok(Box::new(nes_front_ui))
         },),
     );
 

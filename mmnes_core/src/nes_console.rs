@@ -39,7 +39,7 @@ const CYCLE_START_SEQUENCE: u32 = 7;
 const CYCLE_CREDITS: u32 = 114;
 
 
-pub struct NESConsole {
+pub struct NesConsole {
     cpu: Rc<RefCell<dyn CPU>>,
     ppu: Rc<RefCell<dyn PPU>>,
     apu: Rc<RefCell<dyn APU>>,
@@ -50,9 +50,9 @@ pub struct NESConsole {
     cycles_debt: u32,
 }
 
-impl NESConsole {
-    fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>) -> NESConsole {
-        NESConsole {
+impl NesConsole {
+    fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>) -> NesConsole {
+        NesConsole {
             cpu,
             ppu,
             apu,
@@ -64,18 +64,18 @@ impl NESConsole {
         }
     }
 
-    pub fn set_input(&self, events: KeyEvents) -> Result<(), NESConsoleError>{
+    pub fn set_input(&self, events: KeyEvents) -> Result<(), NesConsoleError>{
         self.controller.borrow_mut().set_input(events).map_err(|e|
-            NESConsoleError::ControllerError(format!("{}", e.to_string())))
+            NesConsoleError::ControllerError(format!("{}", e.to_string())))
     }
 
-    pub fn get_sample(&self) -> Result<Vec<f32>, NESConsoleError> {
+    pub fn get_sample(&self) -> Result<Vec<f32>, NesConsoleError> {
         let vec = Vec::new();
 
         Ok(vec)
     }
 
-    pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NESConsoleError> {
+    pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
         let credits = CYCLE_CREDITS;
         let mut out_frame: Option<NesFrame> = None;
         let mut out_samples: NesSamples = NesSamples::default();
@@ -104,7 +104,7 @@ impl NESConsole {
         Ok((out_frame.unwrap(), out_samples))
     }
 
-    fn reset_entry_point(&mut self) -> Result<(), NESConsoleError> {
+    fn reset_entry_point(&mut self) -> Result<(), NesConsoleError> {
         if let Some(pc) = self.entry_point {
             self.cpu.borrow_mut().set_pc_immediate(pc)?
         } else {
@@ -114,12 +114,12 @@ impl NESConsole {
         Ok(())
     }
 
-    pub fn power_on(&mut self) -> Result<(), NESConsoleError> {
+    pub fn power_on(&mut self) -> Result<(), NesConsoleError> {
         self.reset_entry_point()?;
         Ok(())
     }
 
-    pub fn reset(&mut self) -> Result<(), NESConsoleError> {
+    pub fn reset(&mut self) -> Result<(), NesConsoleError> {
         self.cpu.borrow_mut().reset()?;
         self.ppu.borrow_mut().reset()?;
         self.apu.borrow_mut().reset()?;
@@ -131,7 +131,7 @@ impl NESConsole {
 }
 
 #[derive(Debug)]
-pub enum NESConsoleError {
+pub enum NesConsoleError {
     BuilderError(String),
     IOError(String),
     ProgramLoaderError(String),
@@ -143,82 +143,82 @@ pub enum NESConsoleError {
     ChannelCommunication(String),
 }
 
-impl From<std::io::Error> for NESConsoleError {
+impl From<std::io::Error> for NesConsoleError {
     fn from(error: std::io::Error) -> Self {
-        NESConsoleError::IOError(error.to_string())
+        NesConsoleError::IOError(error.to_string())
     }
 }
 
-impl From<MemoryError> for NESConsoleError {
+impl From<MemoryError> for NesConsoleError {
     fn from(error: MemoryError) -> Self {
-        NESConsoleError::IOError(error.to_string())
+        NesConsoleError::IOError(error.to_string())
     }
 }
 
-impl From<CpuError> for NESConsoleError {
+impl From<CpuError> for NesConsoleError {
     fn from(error: CpuError) -> Self {
-        NESConsoleError::CpuError(error)
+        NesConsoleError::CpuError(error)
     }
 }
 
-impl From<BusError> for NESConsoleError {
+impl From<BusError> for NesConsoleError {
     fn from(error: BusError) -> Self {
-        NESConsoleError::BuilderError(error.to_string())
+        NesConsoleError::BuilderError(error.to_string())
     }
 }
 
-impl From<LoaderError> for NESConsoleError {
+impl From<LoaderError> for NesConsoleError {
     fn from(error: LoaderError) -> Self {
-        NESConsoleError::ProgramLoaderError(error.to_string())
+        NesConsoleError::ProgramLoaderError(error.to_string())
     }
 }
 
-impl From<PpuError> for NESConsoleError {
+impl From<PpuError> for NesConsoleError {
     fn from(error: PpuError) -> Self {
-        NESConsoleError::PpuError(error)
+        NesConsoleError::PpuError(error)
     }
 }
 
-impl From<ApuError> for NESConsoleError {
+impl From<ApuError> for NesConsoleError {
     fn from(error: ApuError) -> Self {
-        NESConsoleError::ApuError(error)
+        NesConsoleError::ApuError(error)
     }
 }
 
-impl From<InputError> for NESConsoleError {
+impl From<InputError> for NesConsoleError {
     fn from(error: InputError) -> Self {
         match error {
-            InputError::InputFailure(s) => NESConsoleError::InternalError(s)
+            InputError::InputFailure(s) => NesConsoleError::InternalError(s)
         }
     }
 }
 
-impl From<SoundPlaybackError> for NESConsoleError {
+impl From<SoundPlaybackError> for NesConsoleError {
     fn from(error: SoundPlaybackError) -> Self {
         match error {
-            SoundPlaybackError::SoundPlaybackFailure(s) => NESConsoleError::InternalError(s)
+            SoundPlaybackError::SoundPlaybackFailure(s) => NesConsoleError::InternalError(s)
         }
     }
 }
 
 
-impl Display for NESConsoleError {
+impl Display for NesConsoleError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            NESConsoleError::BuilderError(s) => { write!(f, "builder error: {}", s) },
-            NESConsoleError::IOError(s) => { write!(f, "i/o error: {}", s) },
-            NESConsoleError::ProgramLoaderError(s) => { write!(f, "program loader error: {}", s) },
-            NESConsoleError::CpuError(s) => { write!(f, "cpu error: {}", s) },
-            NESConsoleError::PpuError(s) => { write!(f, "ppu error: {}", s) },
-            NESConsoleError::ApuError(s) => { write!(f, "apu error: {}", s) }
-            NESConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
-            NESConsoleError::ControllerError(s) => { write!(f, "controller error: {}", s) }
-            NESConsoleError::ChannelCommunication(s) => { write!(f, "channel communication error: {}", s) }
+            NesConsoleError::BuilderError(s) => { write!(f, "builder error: {}", s) },
+            NesConsoleError::IOError(s) => { write!(f, "i/o error: {}", s) },
+            NesConsoleError::ProgramLoaderError(s) => { write!(f, "program loader error: {}", s) },
+            NesConsoleError::CpuError(s) => { write!(f, "cpu error: {}", s) },
+            NesConsoleError::PpuError(s) => { write!(f, "ppu error: {}", s) },
+            NesConsoleError::ApuError(s) => { write!(f, "apu error: {}", s) }
+            NesConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
+            NesConsoleError::ControllerError(s) => { write!(f, "controller error: {}", s) }
+            NesConsoleError::ChannelCommunication(s) => { write!(f, "channel communication error: {}", s) }
         }
     }
 }
 
-pub struct NESConsoleBuilder {
+pub struct NesConsoleBuilder {
     cpu: Option<Rc<RefCell<dyn CPU>>>,
     cpu_type: Option<CpuType>,
     cpu_tracing: bool,
@@ -237,9 +237,9 @@ pub struct NESConsoleBuilder {
     cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
 }
 
-impl NESConsoleBuilder {
+impl NesConsoleBuilder {
     pub fn new() -> Self {
-        NESConsoleBuilder {
+        NesConsoleBuilder {
             cpu: None,
             cpu_type: None,
             cpu_tracing: false,
@@ -294,10 +294,10 @@ impl NESConsoleBuilder {
         self
     }
 
-    fn build_cpu(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn CPU>>, NESConsoleError> {
+    fn build_cpu(&mut self, bus: Rc<RefCell<dyn Bus>>) -> Result<Rc<RefCell<dyn CPU>>, NesConsoleError> {
         debug!("creating cpu: {:?}", self.cpu_type.clone().unwrap());
 
-        let result: Result<Rc<RefCell<dyn CPU>>, NESConsoleError> = match &self.cpu_type {
+        let result: Result<Rc<RefCell<dyn CPU>>, NesConsoleError> = match &self.cpu_type {
             Some(CpuType::NES6502) => {
                 let mut cpu = Cpu6502::new(bus, self.cpu_tracing, self.cpu_trace_file.take());
                 cpu.initialize()?;
@@ -305,31 +305,31 @@ impl NESConsoleBuilder {
             },
 
             None => {
-                Err(NESConsoleError::BuilderError("CPU type not specified".to_string()))
+                Err(NesConsoleError::BuilderError("CPU type not specified".to_string()))
             }
         };
 
         result
     }
 
-    fn build_bus(&self) -> Result<Rc<RefCell<dyn Bus>>, NESConsoleError> {
+    fn build_bus(&self) -> Result<Rc<RefCell<dyn Bus>>, NesConsoleError> {
         debug!("creating bus: {:?}", self.bus_type.clone().unwrap());
 
-        let result: Result<Rc<RefCell<dyn Bus>>, NESConsoleError> = match self.bus_type {
+        let result: Result<Rc<RefCell<dyn Bus>>, NesConsoleError> = match self.bus_type {
             Some(BusType::NESBus) => {
                 let bus = NESBus::new();
                 Ok(Rc::new(RefCell::new(bus)))
             },
 
             None => {
-                Err(NESConsoleError::BuilderError("bus type not specified".to_string()))
+                Err(NesConsoleError::BuilderError("bus type not specified".to_string()))
             }
         };
 
         result
     }
 
-    fn build_wram_device(&self, memory_type: &MemoryType) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_wram_device(&self, memory_type: &MemoryType) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
         debug!("creating wram: {:?}", memory_type);
 
         let mut wram = match memory_type {
@@ -342,7 +342,7 @@ impl NESConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
-    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, bus: Rc<RefCell<dyn Bus>>, ppu: Rc<RefCell<dyn DmaDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError>{
+    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, bus: Rc<RefCell<dyn Bus>>, ppu: Rc<RefCell<dyn DmaDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
         debug!("creating ppu dma {:?}", ppu_dma_type);
 
         let ppu_dma = match ppu_dma_type {
@@ -356,7 +356,7 @@ impl NESConsoleBuilder {
 
     fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
                         mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>,
-                        cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NESConsoleError> {
+                        cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NesConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
         let result = match ppu_type {
@@ -377,7 +377,7 @@ impl NESConsoleBuilder {
         Ok((ppu.clone(), dma))
     }
 
-    fn build_controller_device(&self, controller_type: &ControllerType) -> Result<Rc<RefCell<dyn Controller>>, NESConsoleError> {
+    fn build_controller_device(&self, controller_type: &ControllerType) -> Result<Rc<RefCell<dyn Controller>>, NesConsoleError> {
         debug!("creating controller {:?}", controller_type);
 
         let result = match controller_type {
@@ -393,7 +393,7 @@ impl NESConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NESConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
@@ -412,7 +412,7 @@ impl NESConsoleBuilder {
         Ok(apu)
     }
 
-    fn build_cartridge_device(&self) -> Result<Rc<RefCell<dyn Cartridge>>, NESConsoleError> {
+    fn build_cartridge_device(&self) -> Result<Rc<RefCell<dyn Cartridge>>, NesConsoleError> {
         debug!("creating cartridge");
 
         if let Some(ref rom_file) = self.rom_file {
@@ -422,12 +422,12 @@ impl NESConsoleBuilder {
 
             Ok(cartridge)
         } else {
-            Err(NESConsoleError::BuilderError("rom file not specified".to_string()))
+            Err(NesConsoleError::BuilderError("rom file not specified".to_string()))
         }
     }
 
     fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType,
-                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(), NESConsoleError> {
+                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(), NesConsoleError> {
         debug!("creating device: {:?}", device_type);
 
         match device_type {
@@ -447,13 +447,13 @@ impl NESConsoleBuilder {
                     .cartridge
                     .as_ref()
                     .map(|cartridge| cartridge.borrow().get_chr_rom())
-                    .ok_or(NESConsoleError::BuilderError("no cartridge to load".to_string()))?;
+                    .ok_or(NesConsoleError::BuilderError("no cartridge to load".to_string()))?;
 
                 let mirroring = self
                     .cartridge
                     .as_ref()
                     .map(|cartridge| cartridge.borrow().get_mirroring())
-                    .ok_or(NESConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
+                    .ok_or(NesConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
                 let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu)?;
                 bus.borrow_mut().add_device(ppu)?;
@@ -477,12 +477,12 @@ impl NESConsoleBuilder {
         Ok(())
     }
 
-    fn build_loader(&self, path: PathBuf) -> Result<impl Loader, NESConsoleError> {
+    fn build_loader(&self, path: PathBuf) -> Result<impl Loader, NesConsoleError> {
         debug!("creating loader: {:?}", self.loader_type.clone().unwrap());
 
         match self.loader_type {
             None => {
-                Err(NESConsoleError::BuilderError("loader not set".to_string()))
+                Err(NesConsoleError::BuilderError("loader not set".to_string()))
             },
             Some(LoaderType::INESV2) => {
                 Ok(INesLoader::from_file(path)?)
@@ -490,7 +490,7 @@ impl NESConsoleBuilder {
         }
     }
 
-    fn build_nes(mut self) -> Result<NESConsole, NESConsoleError> {
+    fn build_nes(mut self) -> Result<NesConsole, NesConsoleError> {
         let bus = self.build_bus()?;
         let cpu = self.build_cpu(bus.clone())?;
 
@@ -504,27 +504,27 @@ impl NESConsoleBuilder {
         }
 
         let cpu = self.cpu.take()
-            .ok_or(NESConsoleError::BuilderError("cpu missing".to_string()))?;
+            .ok_or(NesConsoleError::BuilderError("cpu missing".to_string()))?;
 
         let ppu = self.ppu.take()
-            .ok_or(NESConsoleError::BuilderError("ppu missing".to_string()))?;
+            .ok_or(NesConsoleError::BuilderError("ppu missing".to_string()))?;
 
         let apu = self.apu.take()
-            .ok_or(NESConsoleError::BuilderError("apu missing".to_string()))?;
+            .ok_or(NesConsoleError::BuilderError("apu missing".to_string()))?;
 
         let controller = self.controller.take()
-            .ok_or(NESConsoleError::BuilderError("controller missing".to_string()))?;
+            .ok_or(NesConsoleError::BuilderError("controller missing".to_string()))?;
 
-        let console = NESConsole::new(cpu, ppu, apu, controller, self.entry_point.take());
+        let console = NesConsole::new(cpu, ppu, apu, controller, self.entry_point.take());
 
         Ok(console)
     }
 
-    pub fn build(self) -> Result<NESConsole, NESConsoleError> {
+    pub fn build(self) -> Result<NesConsole, NesConsoleError> {
         if let (Some(_), Some(_), Some(_), Some(_)) = (&self.bus_type, &self.cpu_type, &self.loader_type, &self.rom_file) {
             self.build_nes()
         } else {
-            Err(NESConsoleError::BuilderError("missing required components".to_string()))
+            Err(NesConsoleError::BuilderError("missing required components".to_string()))
         }
     }
 }
