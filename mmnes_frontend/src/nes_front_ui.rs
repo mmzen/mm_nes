@@ -11,7 +11,7 @@ use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTR
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_front_end::NesFrontEnd;
 use crate::nes_message::NesMessage;
-use crate::nes_message::NesMessage::{Keys, LoadRom, Reset};
+use crate::nes_message::NesMessage::{Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
 
 pub struct NesFrontUI {
@@ -139,7 +139,7 @@ impl NesFrontUI {
                     let foreground = Color32::DARK_RED;
 
                     let mut image = ColorImage::new([self.width, self.height], NesFrontUI::create_default_texture(self.width, self.height, background));
-                    let _ = Test8x8Generator::draw_text_centered(&mut image, &format!("{}", e), foreground, background);
+                    let _ = Test8x8Generator::draw_text_wrapped_centered(&mut image, &format!("{}", e), foreground);
                     self.error = Some(e);
                     println!("{:?}", image);
                     self.nes_frame = Some(image);
@@ -204,7 +204,10 @@ impl App for NesFrontUI {
                     let _ = self.send_message(Reset);
                 }
                 let _ = ui.button("Power Off");
-                let _ = ui.button("Pause");
+                
+                if ui.button("Pause").clicked() {
+                    let _ = self.send_message(Pause);
+                }
                 ui.end_row();
             });
         });

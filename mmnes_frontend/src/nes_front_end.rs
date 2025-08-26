@@ -150,6 +150,19 @@ impl NesFrontEnd {
                     self.nes.reset()?;
                     return Ok(self.state.clone());
                 },
+                NesMessage::Pause => {
+                    match self.state {
+                        NesFrontEndState::Running => {
+                            return Ok(NesFrontEndState::Paused);
+                        },
+                        NesFrontEndState::Paused => {
+                            return Ok(NesFrontEndState::Running);
+                        },
+                        _ => {
+                            continue;
+                        }
+                    }
+                },
                 NesMessage::LoadRom(rom_file) => {
                     self.args.rom_file = rom_file;
                     let result = NesFrontEnd::create_emulator(&self.args);
