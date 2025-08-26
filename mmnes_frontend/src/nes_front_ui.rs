@@ -141,7 +141,6 @@ impl NesFrontUI {
                     let mut image = ColorImage::new([self.width, self.height], NesFrontUI::create_default_texture(self.width, self.height, background));
                     let _ = Test8x8Generator::draw_text_wrapped_centered(&mut image, &format!("{}", e), foreground);
                     self.error = Some(e);
-                    println!("{:?}", image);
                     self.nes_frame = Some(image);
                 },
                 NesMessage::Frame(nes_frame) => {
@@ -177,6 +176,28 @@ impl NesFrontUI {
             let _ = self.send_message(LoadRom(path));
         }
     }
+
+    fn get_window_title(&self) -> String {
+        let mut title = "MMNES".to_string();
+
+        let rom_name = if let Some(rom_file) = &self.rom_file {
+            if let Some (rom_file_str) = rom_file.file_name() {
+                " - ".to_string() + &*rom_file_str.to_string_lossy()
+            } else {
+                " - (invalid filename)".to_string()
+            }
+        } else {
+            " - (idle)".to_string()
+        };
+
+        title += &rom_name;
+
+        if let Some(_) = &self.error {
+            title += " - (error)";
+        }
+
+        title
+    }
 }
 
 impl App for NesFrontUI {
@@ -198,13 +219,14 @@ impl App for NesFrontUI {
                 }
 
                 self.load_rom_file();
+
                 self.rom_file_dialog.update(ctx);
 
                 if ui.button("Reset").clicked() {
                     let _ = self.send_message(Reset);
                 }
                 let _ = ui.button("Power Off");
-                
+
                 if ui.button("Pause").clicked() {
                     let _ = self.send_message(Pause);
                 }
@@ -236,6 +258,8 @@ impl App for NesFrontUI {
                     });
                 });
         });
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.get_window_title()));
     }
 
     fn raw_input_hook(&mut self, ctx: &Context, raw_input: &mut RawInput) {
