@@ -43,7 +43,7 @@ mock! {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum BusError {
     Unmapped(u16)
 }

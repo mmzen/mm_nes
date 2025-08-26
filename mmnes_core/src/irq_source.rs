@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use crate::cpu::{CpuError, Interruptible};
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum IrqError {
     IrqAssertion(String),
     IrqDeassertion(String)

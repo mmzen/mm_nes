@@ -27,7 +27,7 @@ impl PartialEq for ApuType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ApuError {
     CpuError(CpuError),
     MemoryError(MemoryError),

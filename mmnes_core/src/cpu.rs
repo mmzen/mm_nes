@@ -23,7 +23,7 @@ pub trait CPU: Interruptible + Debug {
     fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CpuError {
     MemoryError(MemoryError),
     Unimplemented(String),

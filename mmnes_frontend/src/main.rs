@@ -1,11 +1,11 @@
+use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::thread::{spawn, JoinHandle};
+use std::thread::{spawn};
 use std::time::{Duration};
 use log::LevelFilter;
 use simplelog::{Config, SimpleLogger};
 use clap::{Parser};
 use clap_num::maybe_hex;
-use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_front_end::NesFrontEnd;
 use crate::nes_front_ui::NesFrontUI;
@@ -15,6 +15,7 @@ mod nes_front_ui;
 mod sound_player;
 mod nes_message;
 mod nes_front_end;
+mod text_8x8_generator;
 
 const APP_NAME: &str = "MMNES";
 
@@ -64,7 +65,7 @@ pub struct Args {
         help = "rom file to load",
         required = true,
     )]
-    rom_file: String
+    rom_file: PathBuf
 }
 
 
@@ -79,15 +80,15 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-fn spawn_emulator_thread(args: Args, tx: SyncSender<NesFrame>, rx: Receiver<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
+fn spawn_emulator_thread(args: Args, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>) -> Result<(), NesConsoleError> {
 
-    let jh = spawn(move || -> Result<(), NesConsoleError>  {
+    let _ = spawn(move || -> Result<(), NesConsoleError>  {
         let mut front = NesFrontEnd::new(args, tx, rx)?;
         front.run()?;
         Ok(())
     });
 
-    Ok(jh)
+    Ok(())
 }
 
 fn main() -> Result<(), NesConsoleError> {
@@ -96,7 +97,7 @@ fn main() -> Result<(), NesConsoleError> {
     logger_init(args.debug);
 
     let native_options = eframe::NativeOptions::default();
-    let (tx0, rx0) = sync_channel::<NesFrame>(CHANNEL_BOUND_SIZE);
+    let (tx0, rx0) = sync_channel::<NesMessage>(CHANNEL_BOUND_SIZE);
     let (tx1, rx1) = sync_channel::<NesMessage>(CHANNEL_BOUND_SIZE);
 
     let _ = spawn_emulator_thread(args, tx0, rx1)?;

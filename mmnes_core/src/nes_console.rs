@@ -130,7 +130,7 @@ impl NesConsole {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NesConsoleError {
     BuilderError(String),
     IOError(String),
@@ -232,7 +232,7 @@ pub struct NesConsoleBuilder {
     controller: Option<Rc<RefCell<dyn Controller>>>,
     device_types: Vec<BusDeviceType>,
     loader_type: Option<LoaderType>,
-    rom_file: Option<String>,
+    rom_file: Option<PathBuf>,
     entry_point: Option<u16>,
     cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
 }
@@ -282,8 +282,8 @@ impl NesConsoleBuilder {
         self
     }
 
-    pub fn with_rom_file(mut self, rom_file: String) -> Self {
-        debug!("setting rom file: {}", rom_file);
+    pub fn with_rom_file(mut self, rom_file: PathBuf) -> Self {
+        debug!("setting rom file: {:?}", rom_file);
 
         self.rom_file = Some(rom_file);
         self
@@ -416,8 +416,7 @@ impl NesConsoleBuilder {
         debug!("creating cartridge");
 
         if let Some(ref rom_file) = self.rom_file {
-            let path = PathBuf::from(rom_file);
-            let loader = self.build_loader(path)?;
+            let loader = self.build_loader(rom_file.clone())?;
             let cartridge = loader.build_cartridge()?;
 
             Ok(cartridge)

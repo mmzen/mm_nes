@@ -4,7 +4,7 @@ use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use mmnes_core::apu::ApuType::RP2A03;
 use mmnes_core::bus::BusType;
 use mmnes_core::bus_device::BusDeviceType::{APU, CARTRIDGE, CONTROLLER, PPU, WRAM};
@@ -21,11 +21,19 @@ use crate::{Args, FRAMES_PER_SECOND, SPIN_BEFORE};
 use crate::nes_message::NesMessage;
 use crate::sound_player::SoundPlayer;
 
+#[derive(Debug, Clone, PartialEq)]
+enum NesFrontEndState {
+    Running,
+    Paused,
+    Idle,
+}
+
 pub struct NesFrontEnd {
     rx: Receiver<NesMessage>,
-    tx: SyncSender<NesFrame>,
+    tx: SyncSender<NesMessage>,
     nes: NesConsole,
     args: Args,
+    state: NesFrontEndState
 }
 
 impl NesFrontEnd {
@@ -68,14 +76,15 @@ impl NesFrontEnd {
         Ok(console)
     }
 
-    pub fn new(args: Args, tx: SyncSender<NesFrame>, rx: Receiver<NesMessage>) -> Result<NesFrontEnd, NesConsoleError> {
+    pub fn new(args: Args, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>) -> Result<NesFrontEnd, NesConsoleError> {
         let nes = NesFrontEnd::create_emulator(&args)?;
 
         let front = NesFrontEnd {
             nes,
             tx,
             rx,
-            args
+            args,
+            state: NesFrontEndState::Running
         };
 
         Ok(front)
@@ -105,15 +114,22 @@ impl NesFrontEnd {
             next
         }
     }
-
-    fn process_frame(&self, frame: NesFrame) -> Result<(), NesConsoleError> {
-        match self.tx.try_send(frame) {
+    fn send_message(&self, message: NesMessage) -> Result<(), NesConsoleError> {
+        match self.tx.try_send(message) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_frame)) => Ok(()), // drop frame
-            Err(TrySendError::Disconnected(frame)) => {
-                Err(NesConsoleError::ChannelCommunication(format!("UI is gone ... frame {}", frame.count())))
+            Err(TrySendError::Full(_message)) => Ok(()), // drop message
+            Err(TrySendError::Disconnected(message)) => {
+                Err(NesConsoleError::ChannelCommunication(format!("UI is gone ... {:?}", message)))
             }
         }
+    }
+
+    fn send_error(&self, error: NesConsoleError) {
+        let _ = self.send_message(NesMessage::Error(error));
+    }
+
+    fn process_frame(&self, frame: NesFrame) -> Result<(), NesConsoleError> {
+        self.send_message(NesMessage::Frame(frame))
     }
 
     fn process_samples(&self, samples: NesSamples, sound_player: &mut SoundPlayer) -> Result<(), NesConsoleError> {
@@ -124,8 +140,7 @@ impl NesFrontEnd {
         Ok(())
     }
 
-    fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
-
+    fn read_and_process_messages(&mut self) -> Result<NesFrontEndState, NesConsoleError> {
         while let Ok(message) = self.rx.try_recv() {
             match message {
                 NesMessage::Keys(key_events) => {
@@ -133,16 +148,30 @@ impl NesFrontEnd {
                 },
                 NesMessage::Reset => {
                     self.nes.reset()?;
+                    return Ok(self.state.clone());
                 },
                 NesMessage::LoadRom(rom_file) => {
                     self.args.rom_file = rom_file;
-                    self.nes = NesFrontEnd::create_emulator(&self.args)?;
+                    let result = NesFrontEnd::create_emulator(&self.args);
+
+                    return match result {
+                        Ok(nes) => {
+                            self.nes = nes;
+                            Ok(NesFrontEndState::Running)
+                        },
+                        Err(e) => {
+                            self.send_error(e);
+                            Ok(NesFrontEndState::Idle)
+                        },
+                    }
                 },
-                _ => { warn!("unexpected message: {:?}", message);  }
-            }
+                _ => {
+                    warn!("unexpected message: {:?}", message);
+                }
+            };
         }
 
-        Ok(())
+        Ok(self.state.clone())
     }
 
     pub fn run(&mut self) -> Result<(), NesConsoleError> {
@@ -151,13 +180,15 @@ impl NesFrontEnd {
         let mut sound_player = SoundPlayer::new().map_err(|e| NesConsoleError::ControllerError(e.to_string()))?;
 
         loop {
-            self.read_and_process_messages()?;
+            self.state = self.read_and_process_messages()?;
 
-            let (frame, samples) = self.nes.step_frame()?;
-            self.process_frame(frame)?;
-            self.process_samples(samples, &mut sound_player)?;
+            if self.state == NesFrontEndState::Running {
+                let (frame, samples) = self.nes.step_frame()?;
+                self.process_frame(frame)?;
+                self.process_samples(samples, &mut sound_player)?;
 
-            next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+                next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+            }
         }
     }
 }

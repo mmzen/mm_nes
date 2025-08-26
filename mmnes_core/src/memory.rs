@@ -40,7 +40,7 @@ pub trait Memory: Debug {
     fn size(&self) -> usize;
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum MemoryError {
     OutOfRange(u16),
     BusError(u16),

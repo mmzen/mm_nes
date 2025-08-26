@@ -1,18 +1,21 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
 use eframe::egui::{vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Margin, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
 use egui_file_dialog::FileDialog;
+use log::{error, warn};
 use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
+use crate::nes_front_end::NesFrontEnd;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Keys, LoadRom, Reset};
+use crate::text_8x8_generator::Test8x8Generator;
 
 pub struct NesFrontUI {
-    rx: Receiver<NesFrame>,
+    rx: Receiver<NesMessage>,
     tx: SyncSender<NesMessage>,
     texture: TextureHandle,
     texture_options: TextureOptions,
@@ -28,23 +31,25 @@ pub struct NesFrontUI {
     input: KeyEvents,
     rom_file_dialog: FileDialog,
     rom_file: Option<PathBuf>,
+    error: Option<NesConsoleError>,
+    nes_frame: Option<ColorImage>,
 }
 
 impl NesFrontUI {
 
-    fn create_default_texture(width: usize, height: usize) -> Vec<Color32> {
+    fn create_default_texture(width: usize, height: usize, color: Color32) -> Vec<Color32> {
         let mut vec = Vec::<Color32>::with_capacity(width * height);
 
         for _ in 0..width * height {
-            vec.push(Color32::KHAKI);
+            vec.push(color);
         }
 
         vec
     }
 
 
-    pub fn new(cc: &eframe::CreationContext<'_>, tx: SyncSender<NesMessage>, rx: Receiver<NesFrame>, width: usize, height: usize) -> NesFrontUI {
-        let vec = NesFrontUI::create_default_texture(width, height);
+    pub fn new(cc: &eframe::CreationContext<'_>, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
+        let vec = NesFrontUI::create_default_texture(width, height, Color32::DARK_GRAY);
 
         let texture_options = TextureOptions {
             minification: egui::TextureFilter::Nearest,
@@ -85,6 +90,8 @@ impl NesFrontUI {
             input: KeyEvents::new(),
             rom_file_dialog: FileDialog::new(),
             rom_file: None,
+            error: None,
+            nes_frame: None,
         }
     }
 
@@ -122,13 +129,30 @@ impl NesFrontUI {
         }
     }
 
-    fn fetch_image_frame_from_emulator(&mut self) -> Option<ColorImage> {
-        if let Some(frame) = self.rx.try_iter().last() {
-            self.frame_counter = frame.count();
-            Some(ColorImage::from_rgba_unmultiplied([frame.width(), frame.height()], frame.pixels()))
-        } else {
-            None
+    fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
+
+        while let Ok(message) = self.rx.try_recv() {
+            match message {
+                NesMessage::Error(e) => {
+                    error!("received error from NES backend: {}", e);
+                    let background = Color32::DARK_GRAY;
+                    let foreground = Color32::DARK_RED;
+
+                    let mut image = ColorImage::new([self.width, self.height], NesFrontUI::create_default_texture(self.width, self.height, background));
+                    let _ = Test8x8Generator::draw_text_centered(&mut image, &format!("{}", e), foreground, background);
+                    self.error = Some(e);
+                    println!("{:?}", image);
+                    self.nes_frame = Some(image);
+                },
+                NesMessage::Frame(nes_frame) => {
+                    self.frame_counter = nes_frame.count();
+                    self.nes_frame = Some(ColorImage::from_rgba_unmultiplied([nes_frame.width(), nes_frame.height()], nes_frame.pixels()))
+                }
+                _ => { warn!("unexpected message: {:?}", message);  }
+            }
         }
+
+        Ok(())
     }
 
     fn send_message(&mut self, message: NesMessage) -> Result<(), NesConsoleError> {
@@ -146,14 +170,22 @@ impl NesFrontUI {
             self.input.clear();
         }
     }
+
+    fn load_rom_file(&mut self) {
+        if let Some(path) = self.rom_file_dialog.take_picked() {
+            self.rom_file = Some(path.clone());
+            let _ = self.send_message(LoadRom(path));
+        }
+    }
 }
 
 impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
 
         self.send_input_to_emulator();
+        let _ = self.read_and_process_messages();
 
-        if let Some(image) = self.fetch_image_frame_from_emulator() {
+        if let Some(image) = self.nes_frame.take() {
             self.texture.set(image, self.texture_options);
         }
 
@@ -165,12 +197,8 @@ impl App for NesFrontUI {
                     self.rom_file_dialog.pick_file();
                 }
 
+                self.load_rom_file();
                 self.rom_file_dialog.update(ctx);
-
-                if let Some(path) = self.rom_file_dialog.take_picked() {
-                    self.rom_file = Some(path.to_path_buf());
-                    let _ = self.send_message(LoadRom(path.to_str().unwrap().to_string()));
-                }
 
                 if ui.button("Reset").clicked() {
                     let _ = self.send_message(Reset);

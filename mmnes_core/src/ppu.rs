@@ -52,7 +52,7 @@ pub trait PPU: BusDevice + DmaDevice {
     fn frame(&self) -> NesFrame;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PpuError {
     BusError(BusError),
     MemoryError(MemoryError),
