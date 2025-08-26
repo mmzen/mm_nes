@@ -117,7 +117,10 @@ impl NesFrontEnd {
     fn send_message(&self, message: NesMessage) -> Result<(), NesConsoleError> {
         match self.tx.try_send(message) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_message)) => Ok(()), // drop message
+            Err(TrySendError::Full(_message)) => {
+                warn!("NES frontend channel is full, dropping message ...");
+                Ok(())
+            },
             Err(TrySendError::Disconnected(message)) => {
                 Err(NesConsoleError::ChannelCommunication(format!("UI is gone ... {:?}", message)))
             }

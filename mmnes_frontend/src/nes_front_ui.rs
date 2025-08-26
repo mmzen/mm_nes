@@ -129,6 +129,10 @@ impl NesFrontUI {
         }
     }
 
+    fn clear_error(&mut self) {
+        self.error = None;
+    }
+
     fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
 
         while let Ok(message) = self.rx.try_recv() {
@@ -157,7 +161,10 @@ impl NesFrontUI {
     fn send_message(&mut self, message: NesMessage) -> Result<(), NesConsoleError> {
         match self.tx.try_send(message) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_frame)) => Ok(()), // drop input
+            Err(TrySendError::Full(_frame)) => {
+                warn!("NES UI channel is full, dropping message ...");
+                Ok(())
+            },
             Err(TrySendError::Disconnected(message)) => {
                 Err(NesConsoleError::ChannelCommunication(format!("NES backend is gone ... {:?}", message)))
             }
@@ -172,6 +179,8 @@ impl NesFrontUI {
 
     fn load_rom_file(&mut self) {
         if let Some(path) = self.rom_file_dialog.take_picked() {
+            self.clear_error();
+
             self.rom_file = Some(path.clone());
             let _ = self.send_message(LoadRom(path));
         }
@@ -223,6 +232,7 @@ impl App for NesFrontUI {
                 self.rom_file_dialog.update(ctx);
 
                 if ui.button("Reset").clicked() {
+                    self.clear_error();
                     let _ = self.send_message(Reset);
                 }
                 let _ = ui.button("Power Off");
