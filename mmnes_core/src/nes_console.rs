@@ -141,6 +141,7 @@ pub enum NesConsoleError {
     InternalError(String),
     ControllerError(String),
     ChannelCommunication(String),
+    Terminated(String)
 }
 
 impl From<std::io::Error> for NesConsoleError {
@@ -214,6 +215,7 @@ impl Display for NesConsoleError {
             NesConsoleError::InternalError(s) => { write!(f, "internal error: {}", s) }
             NesConsoleError::ControllerError(s) => { write!(f, "controller error: {}", s) }
             NesConsoleError::ChannelCommunication(s) => { write!(f, "channel communication error: {}", s) }
+            NesConsoleError::Terminated(s) => {write!(f, "emulator terminated: {}", s) }
         }
     }
 }

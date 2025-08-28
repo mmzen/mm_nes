@@ -8,7 +8,6 @@ pub enum NesMessage {
     Frame(NesFrame),
     LoadRom(PathBuf),
     Keys(KeyEvents),
-    Start,
     Pause,
     Reset,
     Error(NesConsoleError),

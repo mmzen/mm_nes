@@ -1,11 +1,11 @@
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader};
 use std::rc::Rc;
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
-use crate::cartridge::{Cartridge, CartridgeError};
+use crate::cartridge::{Cartridge, CartridgeError, CPU_ADDRESS_SPACE, PPU_ADDRESS_SPACE, PRG_MEMORY_BANK_SIZE};
 use crate::cartridge::CartridgeType::UNROM;
 use crate::ines_loader::{FromINes, INesRomHeader};
 use crate::loader::LoaderError;
@@ -13,11 +13,8 @@ use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
-const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
-const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
-const MEMORY_BANK_SIZE: usize = 16 * 1024;
+pub const CHR_MEMORY_BANK_SIZE: usize = 8 * 1024;
 const MEMORY_FIXED_BANK_PHYS_ADDR: u16 = 0x3FFF; // 0xFFFF - 0x4000 (16 KB);
-
 const MAPPER_NAME: &str = "UNROM";
 
 #[derive(Debug)]
@@ -34,39 +31,6 @@ pub struct UnromCartridge {
 
 impl UnromCartridge {
 
-    fn create_chr_memory(data: &mut BufReader<File>, chr_rom_offset: Option<u64>, chr_rom_size: usize, is_chr_rom: bool) -> Result<MemoryBank, CartridgeError> {
-        let mut chr_rom = MemoryBank::new(chr_rom_size, PPU_ADDRESS_SPACE);
-
-        if is_chr_rom == true {
-            debug!("UNROM: loading chr_rom data ({} KB)...", chr_rom_size / 1024);
-            data.seek(SeekFrom::Start(chr_rom_offset.unwrap()))?;
-            cartridge::write_rom_data(&mut chr_rom, chr_rom_size, data)?;
-        } else {
-            debug!("UNROM: chr_ram ({} KB)...", chr_rom_size / 1024);
-        }
-
-        Ok(chr_rom)
-    }
-
-    fn create_prg_memory(data: &mut BufReader<File>, prg_rom_offset: u64, prg_rom_size: usize) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
-        let num_memory_banks = prg_rom_size / MEMORY_BANK_SIZE;
-        let mut memory_banks = Vec::with_capacity(num_memory_banks);
-
-        data.seek(SeekFrom::Start(prg_rom_offset))?;
-
-        for bank in 0..num_memory_banks {
-            debug!("UNROM: loading prg_rom data ({} / {} KB) in memory bank {} / {} (id: {}), offset: 0x{:04X}...",
-                MEMORY_BANK_SIZE * (bank + 1), prg_rom_size, bank + 1, num_memory_banks, bank, data.stream_position()?);
-
-            let mut prg_rom = MemoryBank::new(MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE);
-            cartridge::write_rom_data(&mut prg_rom, MEMORY_BANK_SIZE, data)?;
-
-            memory_banks.push(prg_rom);
-        }
-
-        Ok((memory_banks, num_memory_banks))
-    }
-
     /***
      * the cartridge announce a 32 Kb memory, to be sure to catch the high memory reads, served by a fixed bank.
      * the underlying memory mapping is made by multiple 16 KB memory banks, switched by writes.
@@ -74,25 +38,37 @@ impl UnromCartridge {
      ***/
     pub fn new(mut data: BufReader<File>,
                prg_rom_offset: u64, prg_rom_size: usize,
-               chr_rom_offset: Option<u64>, chr_rom_size: usize,
+               chr_rom_offset: u64, chr_rom_size: usize,
                chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<UnromCartridge, CartridgeError> {
 
 
-        let (memory_banks, num_memory_banks) = UnromCartridge::create_prg_memory(&mut data, prg_rom_offset, prg_rom_size)?;
-        let fixed_bank = num_memory_banks - 1;
+        let (prg_memory_banks, prg_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
+        let prg_fixed_bank = prg_num_memory_banks - 1;
+        debug!("UNROM: prg rom size: {}, number of bank: {}, fixed bank {}", prg_rom_size, prg_num_memory_banks, prg_fixed_bank);
 
-        let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_and_type(chr_rom_size, chr_ram_size);
-        let chr_rom = UnromCartridge::create_chr_memory(&mut data, chr_rom_offset, chr_memory_size, is_chr_rom)?;
+        let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
+        let rom_data = if is_chr_rom { Some(&mut data) } else { None };
+        let (mut chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
+        debug!("UNROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, num_chr_banks, !is_chr_rom);
+
+        let chr_memory_bank = if let Some(bank) = chr_memory_banks.pop() && num_chr_banks == 1 {
+            bank
+        } else {
+            Err(CartridgeError::LoadingError(
+                format!("error while creating chr memory bank, total size: {}, bank size: {}, number of banks: {}, is ram: {}, banks in array: {}",
+                        chr_ram_size, CHR_MEMORY_BANK_SIZE, num_chr_banks, !is_chr_rom, chr_memory_banks.len())
+            ))?
+        };
 
         let cartridge = UnromCartridge {
-            memory_banks,
+            memory_banks: prg_memory_banks,
             current_bank: 0,
-            fixed_bank,
-            num_memory_banks,
+            fixed_bank: prg_fixed_bank,
+            num_memory_banks: prg_num_memory_banks,
             prg_rom_size: (CPU_ADDRESS_SPACE.1 - CPU_ADDRESS_SPACE.0 + 1) as usize,
             device_type: BusDeviceType::CARTRIDGE(UNROM),
             mirroring,
-            chr_rom: Rc::new(RefCell::new(chr_rom)),
+            chr_rom: Rc::new(RefCell::new(chr_memory_bank)),
         };
 
         Ok(cartridge)
@@ -104,6 +80,8 @@ impl UnromCartridge {
         debug!("creating UNROM cartridge");
 
         let reader = BufReader::new(file);
+        let chr_rom_offset = if let Some(chr_rom_offset_unwrapped) = chr_rom_offset { chr_rom_offset_unwrapped } else { 0 };
+
         let cartridge = UnromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring)?;
         Ok(cartridge)
     }
@@ -132,7 +110,7 @@ impl Memory for UnromCartridge {
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         if addr > MEMORY_FIXED_BANK_PHYS_ADDR {
             let remapped_addr = addr & 0x3FFF;
-            debug!("UNROM: reading byte from fixed bank at 0x{:04X} (initial addr: {}), bank: {}, ", remapped_addr, addr, self.fixed_bank);
+            debug!("UNROM: reading byte from fixed bank at 0x{:04X} (initial addr: 0x{:04X}), bank: {}, ", remapped_addr, addr, self.fixed_bank);
             self.memory_banks[self.fixed_bank].read_byte(remapped_addr)
         } else {
             debug!("UNROM: reading byte from switchable bank at 0x{:04X}, bank: {}", addr, self.current_bank);
@@ -154,7 +132,7 @@ impl Memory for UnromCartridge {
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
         if addr > MEMORY_FIXED_BANK_PHYS_ADDR {
             let remapped_addr = addr & 0x3FFF;
-            debug!("UNROM: reading word from fixed bank at 0x{:04X} (initial addr: {}), bank: {}, ", remapped_addr, addr, self.fixed_bank);
+            debug!("UNROM: reading word from fixed bank at 0x{:04X} (initial addr: 0x{:04X}), bank: {}, ", remapped_addr, addr, self.fixed_bank);
             self.memory_banks[self.fixed_bank].read_word(remapped_addr)
         } else {
             debug!("UNROM: reading word from switchable bank at 0x{:04X}, bank: {}", addr, self.current_bank);

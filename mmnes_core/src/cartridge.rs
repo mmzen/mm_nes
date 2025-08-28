@@ -2,18 +2,27 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{BufReader, Error, Read};
+use std::io::{BufReader, Error, Read, Seek, SeekFrom};
 use std::rc::Rc;
+use log::debug;
 use crate::bus_device::BusDevice;
 use crate::memory::{Memory, MemoryError};
+use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
+pub const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
+pub const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
+pub const CHR_RAM_SIZE: usize = 8 * 1024;
+pub const PRG_RAM_SIZE: usize = 32 * 1024;  // max = SxROM
+pub const PRG_RAM_MEMORY_BANK_SIZE: usize = 8 * 1024;
+pub const PRG_MEMORY_BANK_SIZE: usize = 16 * 1024;
 
 #[derive(Debug)]
 pub enum CartridgeError {
     LoadingError(String),
     MemoryError(MemoryError),
-    Unsupported(String)
+    Unsupported(String),
+    IllegalState(String)
 }
 
 impl From<Error> for CartridgeError {
@@ -33,7 +42,8 @@ impl Display for CartridgeError {
         match self {
             CartridgeError::LoadingError(s) => { write!(f, "loading error: {}", s) }
             CartridgeError::MemoryError(e) => { write!(f, "-> memory error: {}", e) }
-            CartridgeError::Unsupported(s) => { write!(f, "unsupported: {}", s) }
+            CartridgeError::Unsupported(s) => { write!(f, "unsupported: {}", s) },
+            CartridgeError::IllegalState(s) => { write!(f, "illegal state: {}", s) }
         }
     }
 }
@@ -43,7 +53,8 @@ pub enum CartridgeType {
     #[default]
     NESCARTRIDGE,
     NROM,
-    UNROM
+    UNROM,
+    MMC1
 }
 
 impl Display for CartridgeType {
@@ -52,6 +63,7 @@ impl Display for CartridgeType {
             CartridgeType::NESCARTRIDGE => { write!(f, "cartridge type: NESCARTRIDGE") },
             CartridgeType::NROM => { write!(f, "cartridge type: NROM") }
             CartridgeType::UNROM => { write!(f, "cartridge type: UNROM") }
+            CartridgeType::MMC1 => { write!(f, "cartridge type: MMC1") }
         }
     }
 }
@@ -85,7 +97,7 @@ pub fn write_rom_data(rom: &mut dyn Memory, size: usize, data: &mut BufReader<Fi
     Ok(())
 }
 
-pub fn get_chr_memory_and_type(chr_rom_size: usize, chr_ram_size: usize) -> (usize, bool) {
+pub fn get_chr_memory_size_and_type(chr_rom_size: usize, chr_ram_size: usize) -> (usize, bool) {
     /***
      * loader guarantees that one of chr_rom and chr_ram is non-zero.
      */
@@ -94,4 +106,70 @@ pub fn get_chr_memory_and_type(chr_rom_size: usize, chr_ram_size: usize) -> (usi
     } else {
         (chr_ram_size, false)
     }
+}
+
+fn memory_banks_vec(total_size: usize, bank_size: usize) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    let num_memory_banks = total_size / bank_size;
+    let memory_banks: Vec<MemoryBank> = Vec::with_capacity(num_memory_banks);
+
+    Ok((memory_banks, num_memory_banks))
+}
+
+pub fn create_split_ram_memory(total_size: usize, bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    let (mut memory_banks, num_memory_banks) = memory_banks_vec(total_size, bank_size)?;
+
+    for _ in 0..num_memory_banks {
+        let ram = MemoryBank::new(bank_size, address_range);
+        memory_banks.push(ram);
+    }
+
+    Ok((memory_banks, num_memory_banks))
+}
+
+pub fn create_split_rom_memory(data: &mut BufReader<File>, offset: u64, total_size: usize, bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    let (mut memory_banks, num_memory_banks) = memory_banks_vec(total_size, bank_size)?;
+
+    data.seek(SeekFrom::Start(offset))?;
+
+    for bank in 0..num_memory_banks {
+        debug!("CARTRIDGE: loading rom data ({} / {} KB) in memory bank {} / {} (id: {}), offset: 0x{:04X}...",
+                bank_size * (bank + 1), total_size, bank + 1, num_memory_banks, bank, data.stream_position()?);
+
+        let mut rom = MemoryBank::new(bank_size, address_range);
+        write_rom_data(&mut rom, bank_size, data)?;
+
+        memory_banks.push(rom);
+    }
+
+    Ok((memory_banks, num_memory_banks))
+}
+
+pub fn create_chr_rom_memory(data: &mut BufReader<File>, chr_rom_offset: u64, chr_rom_total_size: usize, chr_rom_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    create_split_rom_memory(data, chr_rom_offset, chr_rom_total_size, chr_rom_bank_size, address_range)
+}
+
+pub fn create_chr_ram_memory(chr_ram_total_size: usize, chr_ram_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    create_split_ram_memory(chr_ram_total_size, chr_ram_bank_size, address_range)
+}
+
+pub fn create_chr_memory(data: Option<&mut BufReader<File>>, offset: u64, total_size: usize, bank_size: usize, is_chr_rom: bool, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    let (chr, num_chr_banks) = if is_chr_rom {
+        if let Some(mut data) = data {
+            create_chr_rom_memory(&mut data, offset, total_size, bank_size, address_range)?
+        } else {
+            Err(CartridgeError::IllegalState(format!("data can not be empty for CHR rom (offset: 0x{:04X})", offset)))?
+        }
+    } else {
+        create_chr_ram_memory(total_size, bank_size, address_range)?
+    };
+
+    Ok((chr, num_chr_banks))
+}
+
+pub fn create_prg_rom_memory(data: &mut BufReader<File>, prg_rom_offset: u64, prg_rom_total_size: usize, prg_rom_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    create_split_rom_memory(data, prg_rom_offset, prg_rom_total_size, prg_rom_bank_size, address_range)
+}
+
+pub fn create_prg_ram_memory(prg_ram_total_size: usize, prg_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+    create_split_ram_memory(prg_ram_total_size, prg_bank_size, address_range)
 }

@@ -1,15 +1,13 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
 use eframe::egui::{vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Margin, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
 use egui_file_dialog::FileDialog;
 use log::{error, warn};
-use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
-use crate::nes_front_end::NesFrontEnd;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
@@ -32,7 +30,7 @@ pub struct NesFrontUI {
     rom_file_dialog: FileDialog,
     rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
-    nes_frame: Option<ColorImage>,
+    nes_frame: Option<ColorImage>
 }
 
 impl NesFrontUI {
@@ -91,7 +89,7 @@ impl NesFrontUI {
             rom_file_dialog: FileDialog::new(),
             rom_file: None,
             error: None,
-            nes_frame: None,
+            nes_frame: None
         }
     }
 

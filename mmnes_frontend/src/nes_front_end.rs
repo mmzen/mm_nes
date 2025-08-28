@@ -4,7 +4,7 @@ use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use mmnes_core::apu::ApuType::RP2A03;
 use mmnes_core::bus::BusType;
 use mmnes_core::bus_device::BusDeviceType::{APU, CARTRIDGE, CONTROLLER, PPU, WRAM};

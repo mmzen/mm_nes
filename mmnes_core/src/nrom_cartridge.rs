@@ -6,7 +6,7 @@ use std::rc::Rc;
 use log::{debug, info};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
-use crate::cartridge::{Cartridge, CartridgeError};
+use crate::cartridge::{Cartridge, CartridgeError, CPU_ADDRESS_SPACE, PPU_ADDRESS_SPACE};
 use crate::cartridge::CartridgeType::NROM;
 use crate::ines_loader::{FromINes, INesRomHeader};
 use crate::loader::LoaderError;
@@ -14,8 +14,6 @@ use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
-const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
-const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
 const MAPPER_NAME: &str = "NROM";
 
 #[derive(Debug)]
@@ -27,6 +25,9 @@ pub struct NromCartridge {
     prg_rom_size: usize,
 }
 
+/***
+ * XXX utiliser les helpers function de cartridge
+ */
 impl NromCartridge {
 
     pub fn new(mut data: BufReader<File>,
@@ -39,7 +40,7 @@ impl NromCartridge {
                 format!("NROM cartridge does not support both CHR-ROM (detected: {} bytes) and CHR-RAM (detected: {} bytes)", chr_rom_size, chr_ram_size)))?
         }
 
-        let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_and_type(chr_rom_size, chr_ram_size);
+        let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
 
         let mut prg_rom = MemoryBank::new(prg_rom_size, CPU_ADDRESS_SPACE);
         let mut chr_rom = MemoryBank::new(chr_memory_size, PPU_ADDRESS_SPACE);

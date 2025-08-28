@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
-use std::thread::{spawn};
+use std::thread::{spawn, JoinHandle};
 use std::time::{Duration};
-use log::LevelFilter;
+use log::{error, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use clap::{Parser};
 use clap_num::maybe_hex;
@@ -80,15 +80,21 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-fn spawn_emulator_thread(args: Args, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>) -> Result<(), NesConsoleError> {
+fn spawn_emulator_thread(args: Args, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
 
-    let _ = spawn(move || -> Result<(), NesConsoleError>  {
-        let mut front = NesFrontEnd::new(args, tx, rx)?;
-        front.run()?;
-        Ok(())
+    let handle = spawn(move || -> Result<(), NesConsoleError> {
+        let mut front = NesFrontEnd::new(args, tx, rx).map_err(|e| {
+            error!("fatal error while creating emulator: {}", e);
+            e
+        })?;
+
+        front.run().map_err(|e| {
+            error!("fatal error in emulator thread: {}", e);
+            e
+        })
     });
 
-    Ok(())
+    Ok(handle)
 }
 
 fn main() -> Result<(), NesConsoleError> {
