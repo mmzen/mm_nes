@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::BufReader;
 use std::rc::Rc;
 use log::{debug, info};
 use crate::bus_device::{BusDevice, BusDeviceType};
@@ -14,6 +14,8 @@ use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
+const NROM_PRG_MEMORY_BANK_SIZE: usize = 32 * 1024;
+const NROM_CHR_MEMORY_BANK_SIZE: usize = 8 * 1024;
 const MAPPER_NAME: &str = "NROM";
 
 #[derive(Debug)]
@@ -25,14 +27,11 @@ pub struct NromCartridge {
     prg_rom_size: usize,
 }
 
-/***
- * XXX utiliser les helpers function de cartridge
- */
 impl NromCartridge {
 
     pub fn new(mut data: BufReader<File>,
                prg_rom_offset: u64, prg_rom_size: usize,
-               chr_rom_offset: Option<u64>, chr_rom_size: usize,
+               chr_rom_offset: u64, chr_rom_size: usize,
                chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, CartridgeError> {
 
         if chr_rom_size > 0 && chr_ram_size > 0 {
@@ -40,26 +39,21 @@ impl NromCartridge {
                 format!("NROM cartridge does not support both CHR-ROM (detected: {} bytes) and CHR-RAM (detected: {} bytes)", chr_rom_size, chr_ram_size)))?
         }
 
+        let (prg_memory_banks, prg_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
+        let prg_rom = cartridge::get_first_bank_or_fail(prg_memory_banks, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, true)?;
+        debug!("NROM: prg rom size: {}, number of bank: {}", prg_rom_size, prg_num_memory_banks);
+
         let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
+        let rom_data = if is_chr_rom { Some(&mut data) } else { None };
 
-        let mut prg_rom = MemoryBank::new(prg_rom_size, CPU_ADDRESS_SPACE);
-        let mut chr_rom = MemoryBank::new(chr_memory_size, PPU_ADDRESS_SPACE);
+        let (chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, NROM_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
+        let chr_mem = cartridge::get_first_bank_or_fail(chr_memory_banks, chr_rom_size, NROM_CHR_MEMORY_BANK_SIZE, is_chr_rom)?;
 
-        debug!("NROM: loading prg_rom data ({} KB)...", prg_rom_size / 1024);
-        data.seek(SeekFrom::Start(prg_rom_offset))?;
-        cartridge::write_rom_data(&mut prg_rom, prg_rom_size, &mut data)?;
-
-        if is_chr_rom == true {
-            info!("NROM: loading chr_rom data ({} KB)...", chr_memory_size / 1024);
-            data.seek(SeekFrom::Start(chr_rom_offset.unwrap()))?;
-            cartridge::write_rom_data(&mut chr_rom, chr_memory_size, &mut data)?;
-        } else {
-            info!("NROM: chr_ram ({} KB)...", chr_memory_size / 1024);
-        }
+        debug!("NROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, num_chr_banks, !is_chr_rom);
 
         let cartridge = NromCartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
-            chr_rom: Rc::new(RefCell::new(chr_rom)),
+            chr_rom: Rc::new(RefCell::new(chr_mem)),
             device_type: BusDeviceType::CARTRIDGE(NROM),
             mirroring,
             prg_rom_size,
@@ -75,6 +69,8 @@ impl NromCartridge {
         info!("creating NROM cartridge");
 
         let reader = BufReader::new(file);
+        let chr_rom_offset = if let Some(chr_rom_offset_unwrapped) = chr_rom_offset { chr_rom_offset_unwrapped } else { 0 };
+
         let cartridge = NromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring)?;
         Ok(cartridge)
     }

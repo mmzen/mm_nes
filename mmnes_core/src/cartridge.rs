@@ -12,12 +12,8 @@ use crate::ppu::PpuNameTableMirroring;
 
 pub const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
 pub const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
-pub const CHR_RAM_SIZE: usize = 8 * 1024;
-pub const PRG_RAM_SIZE: usize = 32 * 1024;  // max = SxROM
-pub const PRG_RAM_MEMORY_BANK_SIZE: usize = 8 * 1024;
-pub const PRG_MEMORY_BANK_SIZE: usize = 16 * 1024;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CartridgeError {
     LoadingError(String),
     MemoryError(MemoryError),
@@ -86,6 +82,7 @@ pub trait Cartridge: BusDevice {
 /***
  * helper functions
  ***/
+
 pub fn write_rom_data(rom: &mut dyn Memory, size: usize, data: &mut BufReader<File>) -> Result<(), CartridgeError> {
     let mut buf = vec![0u8; size];
     data.read_exact(&mut buf)?;
@@ -172,4 +169,17 @@ pub fn create_prg_rom_memory(data: &mut BufReader<File>, prg_rom_offset: u64, pr
 
 pub fn create_prg_ram_memory(prg_ram_total_size: usize, prg_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
     create_split_ram_memory(prg_ram_total_size, prg_bank_size, address_range)
+}
+
+pub fn get_first_bank_or_fail(mut memory_banks: Vec<MemoryBank>, total_size: usize, bank_size: usize, is_rom: bool) -> Result<MemoryBank, CartridgeError> {
+    let len = memory_banks.len();
+
+    if let Some(bank) = memory_banks.pop() && len == 1 {
+        Ok(bank)
+    } else {
+        Err(CartridgeError::LoadingError(
+            format!("error while creating memory bank, total size: {}, bank size: {}, number of banks: {}, is ram: {}",
+                    total_size, bank_size, len, !is_rom)
+        ))
+    }
 }

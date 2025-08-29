@@ -5,7 +5,7 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
-use crate::cartridge::{Cartridge, CartridgeError, PPU_ADDRESS_SPACE, PRG_MEMORY_BANK_SIZE, PRG_RAM_MEMORY_BANK_SIZE};
+use crate::cartridge::{Cartridge, CartridgeError, PPU_ADDRESS_SPACE};
 use crate::cartridge::CartridgeType::MMC1;
 use crate::ines_loader::{FromINes, INesRomHeader};
 use crate::loader::LoaderError;
@@ -14,6 +14,7 @@ use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
 const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
+const MMC1_PRG_MEMORY_BANK_SIZE: usize = 16 * 1024;
 const MMC1_CHR_MEMORY_BANK_SIZE: usize = 4 * 1024;
 const MAPPER_NAME: &str = "MMC1";
 
@@ -51,18 +52,12 @@ pub struct Mmc1Cartridge {
 
 impl Mmc1Cartridge {
 
-    /***
-     * to be moved to cartridge.rs as a static helper function
-     */
-    /***fn create_switchable_memory(data: Option<&mut BufReader<File>>, offset: u64, total_size: usize, bank_size: usize) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
-    }***/
-
     pub fn new(mut data: BufReader<File>,
                prg_rom_offset: u64, prg_rom_size: usize, prg_ram_size: usize,
                chr_rom_offset: u64, chr_rom_size: usize, chr_ram_size: usize,
                mirroring: PpuNameTableMirroring) -> Result<Mmc1Cartridge, CartridgeError> {
 
-        let (prg_rom_memory_banks, prg_rom_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
+        let (prg_rom_memory_banks, prg_rom_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, MMC1_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
         let prog_rom_fixed_bank = prg_rom_num_memory_banks - 1;
 
         let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
@@ -71,7 +66,7 @@ impl Mmc1Cartridge {
         let (chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, MMC1_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
 
         let (prg_ram_memory_banks, prg_ram_num_memory_banks) = if prg_ram_size > 0 {
-            cartridge::create_prg_ram_memory(prg_ram_size, PRG_RAM_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?
+            cartridge::create_prg_ram_memory(prg_ram_size, MMC1_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?
         } else {
             (Vec::new(), 0)
         };
@@ -80,14 +75,14 @@ impl Mmc1Cartridge {
         let cartridge = Mmc1Cartridge {
             shift_register: 0,
             prg_rom: SwitchableMemory {
-                size: PRG_MEMORY_BANK_SIZE,
+                size: MMC1_PRG_MEMORY_BANK_SIZE,
                 memory_banks: prg_rom_memory_banks,
                 num_memory_banks: prg_rom_num_memory_banks,
                 current_bank: 0,
                 fixed_bank: prog_rom_fixed_bank,
             },
             prg_ram: SwitchableMemory {
-                size: PRG_RAM_MEMORY_BANK_SIZE,
+                size: MMC1_PRG_MEMORY_BANK_SIZE,
                 memory_banks: prg_ram_memory_banks,
                 num_memory_banks: prg_ram_num_memory_banks,
                 current_bank: 0,

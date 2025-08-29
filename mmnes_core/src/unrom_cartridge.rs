@@ -5,7 +5,7 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
-use crate::cartridge::{Cartridge, CartridgeError, CPU_ADDRESS_SPACE, PPU_ADDRESS_SPACE, PRG_MEMORY_BANK_SIZE};
+use crate::cartridge::{Cartridge, CartridgeError, CPU_ADDRESS_SPACE, PPU_ADDRESS_SPACE};
 use crate::cartridge::CartridgeType::UNROM;
 use crate::ines_loader::{FromINes, INesRomHeader};
 use crate::loader::LoaderError;
@@ -13,7 +13,8 @@ use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
-pub const CHR_MEMORY_BANK_SIZE: usize = 8 * 1024;
+const UNROM_PRG_MEMORY_BANK_SIZE: usize = 16 * 1024;
+const UNROM_CHR_MEMORY_BANK_SIZE: usize = 8 * 1024;
 const MEMORY_FIXED_BANK_PHYS_ADDR: u16 = 0x3FFF; // 0xFFFF - 0x4000 (16 KB);
 const MAPPER_NAME: &str = "UNROM";
 
@@ -42,23 +43,16 @@ impl UnromCartridge {
                chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<UnromCartridge, CartridgeError> {
 
 
-        let (prg_memory_banks, prg_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
+        let (prg_memory_banks, prg_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, UNROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
         let prg_fixed_bank = prg_num_memory_banks - 1;
         debug!("UNROM: prg rom size: {}, number of bank: {}, fixed bank {}", prg_rom_size, prg_num_memory_banks, prg_fixed_bank);
 
         let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
         let rom_data = if is_chr_rom { Some(&mut data) } else { None };
-        let (mut chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
-        debug!("UNROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, num_chr_banks, !is_chr_rom);
+        let (chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, UNROM_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
 
-        let chr_memory_bank = if let Some(bank) = chr_memory_banks.pop() && num_chr_banks == 1 {
-            bank
-        } else {
-            Err(CartridgeError::LoadingError(
-                format!("error while creating chr memory bank, total size: {}, bank size: {}, number of banks: {}, is ram: {}, banks in array: {}",
-                        chr_ram_size, CHR_MEMORY_BANK_SIZE, num_chr_banks, !is_chr_rom, chr_memory_banks.len())
-            ))?
-        };
+        let chr_mem = cartridge::get_first_bank_or_fail(chr_memory_banks, UNROM_CHR_MEMORY_BANK_SIZE, num_chr_banks, is_chr_rom)?;
+        debug!("UNROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, num_chr_banks, !is_chr_rom);
 
         let cartridge = UnromCartridge {
             memory_banks: prg_memory_banks,
@@ -68,7 +62,7 @@ impl UnromCartridge {
             prg_rom_size: (CPU_ADDRESS_SPACE.1 - CPU_ADDRESS_SPACE.0 + 1) as usize,
             device_type: BusDeviceType::CARTRIDGE(UNROM),
             mirroring,
-            chr_rom: Rc::new(RefCell::new(chr_memory_bank)),
+            chr_rom: Rc::new(RefCell::new(chr_mem)),
         };
 
         Ok(cartridge)

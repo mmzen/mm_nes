@@ -9,10 +9,10 @@ simplelog = { version = "0.12.2" }
 once_cell = "1.19.0"
 sdl2 = { version = "0.37.0", features = ["unsafe_textures"] }
 
-
 [dev-dependencies]
 mockall = "0.13.0"
 simplelog = { version = "0.12.2", features = ["test"] }
+tempfile = "3.21.0"
 
 [lib]
 crate-type = ["lib"]

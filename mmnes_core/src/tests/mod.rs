@@ -13,6 +13,7 @@ mod input_external;
 mod key_events;
 mod sound_playback_passive;
 mod nes_samples;
+mod cartridge;
 
 static START: Once = Once::new();
 
