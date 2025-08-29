@@ -786,6 +786,7 @@ impl Ppu2c02 {
         let map = match mirroring {
             PpuNameTableMirroring::Vertical => NT_MAP_VERTICAL,
             PpuNameTableMirroring::Horizontal => NT_MAP_HORIZONTAL,
+            _ => Err(PpuError::UnsupportedConfiguration(format!("invalid mirroring: {}", mirroring)))?,
         };
 
         let mut created_name_tables: Vec<Rc<RefCell<MemoryBank>>> = Vec::new();

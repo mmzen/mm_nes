@@ -8,6 +8,7 @@ use log::info;
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::mapper::NesMapper;
+use crate::mmc1_cartridge::Mmc1Cartridge;
 use crate::nrom_cartridge::NromCartridge;
 use crate::ppu::PpuNameTableMirroring;
 use crate::unrom_cartridge::UnromCartridge;
@@ -46,6 +47,7 @@ impl Loader for INesLoader {
         let cartridge: Rc<RefCell<dyn Cartridge>> = match self.header.mapper {
             NesMapper::NROM => Rc::new(RefCell::new(NromCartridge::from_ines(self.file, self.header)?)),
             NesMapper::UxROM => Rc::new(RefCell::new(UnromCartridge::from_ines(self.file, self.header)?)),
+            NesMapper::MMC1 => Rc::new(RefCell::new(Mmc1Cartridge::from_ines(self.file, self.header)?)),
             _ => Err(LoaderError::UnsupportedMapper(self.header.mapper.name().to_string()))?
         };
 
@@ -299,7 +301,7 @@ impl INesRomHeader {
         let result: usize = if byte1 == 0x0F {
             let mul = (byte0 & 0x03) * 2 + 1;
             let exp = (byte0 & !0x03) >> 3;
-            (2u16.pow(exp as u32) * (mul as u16)) as usize // XXX padding should be added is non-aligned
+            (2u16.pow(exp as u32) * (mul as u16)) as usize // XXX padding should be added if non-aligned
         } else {
             let lsb = byte0 as u16;
             let msb = ((byte1 & mask) as u16) << (8 - shift);

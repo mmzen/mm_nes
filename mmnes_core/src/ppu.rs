@@ -11,14 +11,16 @@ use crate::memory::MemoryError;
 #[derive(Debug, Clone, Copy)]
 pub enum PpuNameTableMirroring {
     Vertical,
-    Horizontal
+    Horizontal,
+    Single
 }
 
 impl Display for PpuNameTableMirroring {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             PpuNameTableMirroring::Vertical => write!(f, "vertical mirroring"),
-            PpuNameTableMirroring::Horizontal => write!(f, "horizontal mirroring")
+            PpuNameTableMirroring::Horizontal => write!(f, "horizontal mirroring"),
+            PpuNameTableMirroring::Single => { write!(f, "single screen") }
         }
     }
 }
@@ -56,7 +58,8 @@ pub trait PPU: BusDevice + DmaDevice {
 pub enum PpuError {
     BusError(BusError),
     MemoryError(MemoryError),
-    CpuError(CpuError)
+    CpuError(CpuError),
+    UnsupportedConfiguration(String)
 }
 
 impl Error for PpuError {}
@@ -67,6 +70,7 @@ impl Display for PpuError {
             PpuError::BusError(e) => { write!(f, "-> bus error: {}", e) }
             PpuError::MemoryError(e) => { write!(f, "-> memory error: {}", e) }
             PpuError::CpuError(e) => { write!(f, "-> cpu error: {}", e) }
+            PpuError::UnsupportedConfiguration(s) => { write!(f, "unsupported configuration: {}", s) }
         }
     }
 }
