@@ -80,33 +80,31 @@ impl SwitchableMemory {
         &self.name
     }
 
-    fn get_current_bank_index_by_region(&self, addr: u16) -> usize {
+    fn get_current_bank_index_and_effective_addr(&self, addr: u16) -> Result<(usize, u16), MemoryError> {
         match addr {
             x if x >= self.addr_half_lo.0 && x <= self.addr_half_lo.1 => {
-                self.current_bank_lo
+                Ok((self.current_bank_lo, addr - self.addr_half_lo.0))
             },
             x if x >= self.addr_half_hi.0 && x <= self.addr_half_hi.1 => {
-                self.current_bank_hi
+                Ok((self.current_bank_hi, addr - self.addr_half_hi.0))
             },
-            _ => unreachable!()
+            _ => Err(MemoryError::OutOfRange(addr))
         }
     }
 
 
     fn get_bank_by_address(&self, addr: u16) -> Result<(&MemoryBank, u16), MemoryError> {
-        let bank_index = self.get_current_bank_index_by_region(addr);
+        let (bank_index, effective_addr) = self.get_current_bank_index_and_effective_addr(addr)?;
         let bank = &self.memory_banks[bank_index];
-        let mask = self.addr_half_lo.1;
 
-        Ok((bank, addr & mask))
+        Ok((bank, effective_addr))
     }
 
     fn get_bank_by_address_as_mut(&mut self, addr: u16) -> Result<(&mut MemoryBank, u16), MemoryError> {
-        let bank_index = self.get_current_bank_index_by_region(addr);
+        let (bank_index, effective_addr) = self.get_current_bank_index_and_effective_addr(addr)?;
         let bank = &mut self.memory_banks[bank_index];
-        let mask = self.addr_half_lo.1;
 
-        Ok((bank, addr & mask))
+        Ok((bank, effective_addr))
     }
 }
 
