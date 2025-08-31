@@ -55,6 +55,10 @@ pub trait BusDevice: Memory {
     fn get_name(&self) -> String;
     fn get_device_type(&self) -> BusDeviceType;
     fn get_address_range(&self) -> (u16, u16);
+    /***
+     * XXX
+     * misleading as it compare virtual addresses, and is, in fact never really called
+     */
     fn is_addr_in_address_space(&self, addr: u16) -> bool;
 }
 

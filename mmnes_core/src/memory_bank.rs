@@ -1,7 +1,7 @@
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
-use crate::memory::MemoryType::NESMemory;
+use crate::memory::MemoryType::StandardMemory;
 
 pub const MEMORY_BASE_ADDRESS: usize = 0x0000;
 const DEVICE_NAME: &str = "Memory Bank";
@@ -32,10 +32,6 @@ impl Memory for MemoryBank {
             //trace!("read byte at 0x{:04X}: {:02X}", addr, value);
             Ok(value)
         }
-    }
-
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        self.read_byte(addr)
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
@@ -109,10 +105,16 @@ impl MemoryBank {
         MemoryBank {
             memory: vec![0x00; size],
             address_space: address_range,
-            device_type: BusDeviceType::WRAM(NESMemory),
+            device_type: BusDeviceType::WRAM(StandardMemory),
         }
     }
 
+    /***
+     * XXX
+     * WRONG WRONG WRONG
+     * comparison should be made against size, not virtual address space
+     * which is not relevant in this case
+     ***/
     fn wrapping_add(&self, addr: u16, n: u16) -> u16 {
         if addr == self.address_space.1 {
             self.address_space.0

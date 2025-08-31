@@ -335,9 +335,10 @@ impl NesConsoleBuilder {
         debug!("creating wram: {:?}", memory_type);
 
         let mut wram = match memory_type {
-            MemoryType::NESMemory => {
+            MemoryType::StandardMemory => {
                 MemoryBank::new(WRAM_MEMORY_SIZE, (WRAM_START_ADDR, WRAM_END_ADDR))
-            },
+            }
+            _ => Err(NesConsoleError::BuilderError("invalid wram type specified".to_string()))?
         };
 
         wram.initialize()?;

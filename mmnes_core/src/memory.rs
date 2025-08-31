@@ -5,38 +5,49 @@ use std::fmt::{Debug, Display, Formatter};
 use mockall::automock;
 use crate::bus::BusError;
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum MemoryType {
     #[default]
-    NESMemory,
+    StandardMemory,
+    SwitchableMemory,
 }
 
 impl Display for MemoryType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            MemoryType::NESMemory => write!(f, "memory type: NESMemory"),
-        }
-    }
-}
-
-impl PartialEq for MemoryType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (MemoryType::NESMemory, MemoryType::NESMemory) => true
+            MemoryType::StandardMemory => write!(f, "memory type: Standard Memory"),
+            MemoryType::SwitchableMemory => write!(f, "memory type: Switchable Memory"),
         }
     }
 }
 
 #[cfg_attr(test, automock)]
 pub trait Memory: Debug {
-    fn initialize(&mut self) -> Result<usize, MemoryError>;
+    fn initialize(&mut self) -> Result<usize, MemoryError> {
+        Ok(0)
+    }
+    
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError>;
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError>;
-    fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError>;
+    
+    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+        self.read_byte(addr)
+    }
+    
+    fn write_byte(&mut self, _addr: u16, _value: u8) -> Result<(), MemoryError> {
+        unreachable!()
+    }
+    
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError>;
-    fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError>;
+    
+    fn write_word(&mut self, _addr: u16, _value: u16) -> Result<(), MemoryError> {
+        unreachable!()
+    }
+    
     #[allow(dead_code)]
-    fn dump(&self);
+    fn dump(&self) {
+        unimplemented!()
+    }
+    
     fn size(&self) -> usize;
 }
 

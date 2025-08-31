@@ -29,7 +29,7 @@ fn create_bus_device_with_expectations(memory_size: usize, memory_range: (u16, u
     let mut device = MockBusDeviceStub::new();
 
     device.expect_get_name().returning(|| DEFAULT_DEVICE_NAME.to_string());
-    device.expect_get_device_type().returning(|| BusDeviceType::WRAM(MemoryType::NESMemory));
+    device.expect_get_device_type().returning(|| BusDeviceType::WRAM(MemoryType::StandardMemory));
 
     device.expect_size().returning(move || memory_size);
     device.expect_get_address_range().returning(move || memory_range);

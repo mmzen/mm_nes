@@ -112,7 +112,7 @@ fn memory_banks_vec(total_size: usize, bank_size: usize) -> Result<(Vec<MemoryBa
     Ok((memory_banks, num_memory_banks))
 }
 
-pub fn create_split_ram_memory(total_size: usize, bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+pub fn create_split_ram_memory(total_size: usize, bank_size: usize, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
     let (mut memory_banks, num_memory_banks) = memory_banks_vec(total_size, bank_size)?;
 
     for _ in 0..num_memory_banks {
@@ -120,10 +120,10 @@ pub fn create_split_ram_memory(total_size: usize, bank_size: usize, address_rang
         memory_banks.push(ram);
     }
 
-    Ok((memory_banks, num_memory_banks))
+    Ok(memory_banks)
 }
 
-pub fn create_split_rom_memory(data: &mut BufReader<File>, offset: u64, total_size: usize, bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+pub fn create_split_rom_memory(data: &mut BufReader<File>, offset: u64, total_size: usize, bank_size: usize, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
     let (mut memory_banks, num_memory_banks) = memory_banks_vec(total_size, bank_size)?;
 
     data.seek(SeekFrom::Start(offset))?;
@@ -138,19 +138,19 @@ pub fn create_split_rom_memory(data: &mut BufReader<File>, offset: u64, total_si
         memory_banks.push(rom);
     }
 
-    Ok((memory_banks, num_memory_banks))
+    Ok(memory_banks)
 }
 
-pub fn create_chr_rom_memory(data: &mut BufReader<File>, chr_rom_offset: u64, chr_rom_total_size: usize, chr_rom_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+pub fn create_chr_rom_memory(data: &mut BufReader<File>, chr_rom_offset: u64, chr_rom_total_size: usize, chr_rom_bank_size: usize, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
     create_split_rom_memory(data, chr_rom_offset, chr_rom_total_size, chr_rom_bank_size, address_range)
 }
 
-pub fn create_chr_ram_memory(chr_ram_total_size: usize, chr_ram_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+pub fn create_chr_ram_memory(chr_ram_total_size: usize, chr_ram_bank_size: usize, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
     create_split_ram_memory(chr_ram_total_size, chr_ram_bank_size, address_range)
 }
 
-pub fn create_chr_memory(data: Option<&mut BufReader<File>>, offset: u64, total_size: usize, bank_size: usize, is_chr_rom: bool, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
-    let (chr, num_chr_banks) = if is_chr_rom {
+pub fn create_chr_memory(data: Option<&mut BufReader<File>>, offset: u64, total_size: usize, bank_size: usize, is_chr_rom: bool, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
+    let chr = if is_chr_rom {
         if let Some(mut data) = data {
             create_chr_rom_memory(&mut data, offset, total_size, bank_size, address_range)?
         } else {
@@ -160,14 +160,14 @@ pub fn create_chr_memory(data: Option<&mut BufReader<File>>, offset: u64, total_
         create_chr_ram_memory(total_size, bank_size, address_range)?
     };
 
-    Ok((chr, num_chr_banks))
+    Ok(chr)
 }
 
-pub fn create_prg_rom_memory(data: &mut BufReader<File>, prg_rom_offset: u64, prg_rom_total_size: usize, prg_rom_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+pub fn create_prg_rom_memory(data: &mut BufReader<File>, prg_rom_offset: u64, prg_rom_total_size: usize, prg_rom_bank_size: usize, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
     create_split_rom_memory(data, prg_rom_offset, prg_rom_total_size, prg_rom_bank_size, address_range)
 }
 
-pub fn create_prg_ram_memory(prg_ram_total_size: usize, prg_bank_size: usize, address_range: (u16, u16)) -> Result<(Vec<MemoryBank>, usize), CartridgeError> {
+pub fn create_prg_ram_memory(prg_ram_total_size: usize, prg_bank_size: usize, address_range: (u16, u16)) -> Result<Vec<MemoryBank>, CartridgeError> {
     create_split_ram_memory(prg_ram_total_size, prg_bank_size, address_range)
 }
 

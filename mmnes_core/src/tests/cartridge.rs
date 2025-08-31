@@ -75,9 +75,9 @@ fn create_split_ram_memory_creates_correct_number_of_banks_and_address_ranges() 
     let result = create_split_ram_memory(total_size, bank_size, CPU_ADDRESS_SPACE);
 
     assert!(result.is_ok());
-    let (memory_banks, num_banks) = result.unwrap();
+    let memory_banks  = result.unwrap();
+    let num_banks = memory_banks.len();
 
-    assert_eq!(memory_banks.len(), expected_num_banks);
     assert_eq!(num_banks, expected_num_banks);
 
     for bank in memory_banks {
@@ -108,9 +108,9 @@ fn create_split_rom_memory_creates_correct_number_of_banks_from_file_at_offset()
     let result = create_split_rom_memory(&mut buf_reader, offset, total_size, bank_size, CPU_ADDRESS_SPACE);
 
     assert!(result.is_ok());
-    let (memory_banks, num_banks) = result.unwrap();
+    let memory_banks = result.unwrap();
+    let num_banks = memory_banks.len();
 
-    assert_eq!(memory_banks.len(), expected_num_banks);
     assert_eq!(num_banks, expected_num_banks);
 
     // Verify each bank has correct size and address range
@@ -156,9 +156,9 @@ fn create_chr_rom_memory_creates_correct_memory_banks_from_file() {
     let result = create_chr_rom_memory(&mut buf_reader, chr_rom_offset, chr_rom_total_size, chr_rom_bank_size, CPU_ADDRESS_SPACE);
 
     assert!(result.is_ok());
-    let (memory_banks, num_banks) = result.unwrap();
+    let memory_banks = result.unwrap();
+    let num_banks = memory_banks.len();
 
-    assert_eq!(memory_banks.len(), expected_num_banks);
     assert_eq!(num_banks, expected_num_banks);
 
     // Verify each bank has correct size and address range
@@ -193,9 +193,9 @@ fn create_chr_ram_memory_creates_correct_memory_banks() {
     let result = create_chr_ram_memory(chr_ram_total_size, chr_ram_bank_size, CPU_ADDRESS_SPACE);
 
     assert!(result.is_ok());
-    let (memory_banks, num_banks) = result.unwrap();
+    let memory_banks = result.unwrap();
+    let num_banks = memory_banks.len();
 
-    assert_eq!(memory_banks.len(), expected_num_banks);
     assert_eq!(num_banks, expected_num_banks);
 
     // Verify each bank has correct size and address range

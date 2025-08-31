@@ -12,7 +12,7 @@ use mmnes_core::cartridge::CartridgeType::NROM;
 use mmnes_core::controller::ControllerType::StandardController;
 use mmnes_core::cpu::CpuType::NES6502;
 use mmnes_core::loader::LoaderType::INESV2;
-use mmnes_core::memory::MemoryType::NESMemory;
+use mmnes_core::memory::MemoryType::StandardMemory;
 use mmnes_core::nes_console::{NesConsole, NesConsoleBuilder, NesConsoleError};
 use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::nes_samples::NesSamples;
@@ -60,7 +60,7 @@ impl NesFrontEnd {
         let mut console = builder
             .with_cpu_tracing_options(NES6502, args.cpu_tracing, trace_file)
             .with_bus_type(BusType::NESBus)
-            .with_bus_device_type(WRAM(NESMemory))
+            .with_bus_device_type(WRAM(StandardMemory))
             .with_bus_device_type(CARTRIDGE(NROM))
             .with_bus_device_type(APU(RP2A03))
             .with_bus_device_type(PPU(NES2C02))

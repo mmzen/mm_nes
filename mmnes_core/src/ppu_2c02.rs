@@ -39,6 +39,7 @@ pub const NT_BASES: [(u16,u16); 8] = [
 
 pub const NT_MAP_HORIZONTAL: [usize; 8] = [0, 0, 1, 1, 0, 0, 1, 1]; // A and B same name table; C and D same name table
 pub const NT_MAP_VERTICAL:   [usize; 8] = [0, 1, 0, 1, 0, 1, 0, 1]; // A and C same name table; B and D same name table
+pub const NT_MAP_SINGLE_SCREEN: [usize; 8] = [0, 0, 0, 0, 0, 0, 0, 0]; // A, B, C, and D same name table
 const NAME_TABLE_SIZE: usize = 1024;
 const ATTRIBUTE_TABLE_SIZE: usize = 64;
 const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
@@ -786,7 +787,7 @@ impl Ppu2c02 {
         let map = match mirroring {
             PpuNameTableMirroring::Vertical => NT_MAP_VERTICAL,
             PpuNameTableMirroring::Horizontal => NT_MAP_HORIZONTAL,
-            _ => Err(PpuError::UnsupportedConfiguration(format!("invalid mirroring: {}", mirroring)))?,
+            PpuNameTableMirroring::SingleScreen => NT_MAP_SINGLE_SCREEN,
         };
 
         let mut created_name_tables: Vec<Rc<RefCell<MemoryBank>>> = Vec::new();

@@ -12,7 +12,7 @@ use crate::memory::MemoryError;
 pub enum PpuNameTableMirroring {
     Vertical,
     Horizontal,
-    Single
+    SingleScreen
 }
 
 impl Display for PpuNameTableMirroring {
@@ -20,7 +20,7 @@ impl Display for PpuNameTableMirroring {
         match self {
             PpuNameTableMirroring::Vertical => write!(f, "vertical mirroring"),
             PpuNameTableMirroring::Horizontal => write!(f, "horizontal mirroring"),
-            PpuNameTableMirroring::Single => { write!(f, "single screen") }
+            PpuNameTableMirroring::SingleScreen => { write!(f, "single screen") }
         }
     }
 }

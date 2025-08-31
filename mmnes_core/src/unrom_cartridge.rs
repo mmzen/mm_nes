@@ -43,22 +43,23 @@ impl UnromCartridge {
                chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<UnromCartridge, CartridgeError> {
 
 
-        let (prg_memory_banks, prg_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, UNROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
-        let prg_fixed_bank = prg_num_memory_banks - 1;
-        debug!("UNROM: prg rom size: {}, number of bank: {}, fixed bank {}", prg_rom_size, prg_num_memory_banks, prg_fixed_bank);
+        let prg_memory_banks = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, UNROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
+        let prg_fixed_bank = prg_memory_banks.len() - 1;
+        debug!("UNROM: prg rom size: {}, number of bank: {}, fixed bank {}", prg_rom_size, prg_memory_banks.len(), prg_fixed_bank);
 
         let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
         let rom_data = if is_chr_rom { Some(&mut data) } else { None };
-        let (chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, UNROM_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
+        let chr_memory_banks = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, UNROM_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
 
-        let chr_mem = cartridge::get_first_bank_or_fail(chr_memory_banks, UNROM_CHR_MEMORY_BANK_SIZE, num_chr_banks, is_chr_rom)?;
-        debug!("UNROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, num_chr_banks, !is_chr_rom);
+        let chr_mem = cartridge::get_first_bank_or_fail(chr_memory_banks, chr_rom_size, UNROM_CHR_MEMORY_BANK_SIZE, is_chr_rom)?;
+        debug!("UNROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, 1, !is_chr_rom);
 
+        let num_memory_banks = prg_memory_banks.len();
         let cartridge = UnromCartridge {
             memory_banks: prg_memory_banks,
             current_bank: 0,
             fixed_bank: prg_fixed_bank,
-            num_memory_banks: prg_num_memory_banks,
+            num_memory_banks,
             prg_rom_size: (CPU_ADDRESS_SPACE.1 - CPU_ADDRESS_SPACE.0 + 1) as usize,
             device_type: BusDeviceType::CARTRIDGE(UNROM),
             mirroring,

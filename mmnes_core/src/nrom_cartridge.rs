@@ -39,17 +39,17 @@ impl NromCartridge {
                 format!("NROM cartridge does not support both CHR-ROM (detected: {} bytes) and CHR-RAM (detected: {} bytes)", chr_rom_size, chr_ram_size)))?
         }
 
-        let (prg_memory_banks, prg_num_memory_banks) = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
+        let prg_memory_banks = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
         let prg_rom = cartridge::get_first_bank_or_fail(prg_memory_banks, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, true)?;
-        debug!("NROM: prg rom size: {}, number of bank: {}", prg_rom_size, prg_num_memory_banks);
+        debug!("NROM: prg rom size: {}, number of bank: {}", prg_rom_size, 1);
 
         let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
         let rom_data = if is_chr_rom { Some(&mut data) } else { None };
 
-        let (chr_memory_banks, num_chr_banks) = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, NROM_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
+        let chr_memory_banks = cartridge::create_chr_memory(rom_data, chr_rom_offset, chr_memory_size, NROM_CHR_MEMORY_BANK_SIZE, is_chr_rom, PPU_ADDRESS_SPACE)?;
         let chr_mem = cartridge::get_first_bank_or_fail(chr_memory_banks, chr_rom_size, NROM_CHR_MEMORY_BANK_SIZE, is_chr_rom)?;
 
-        debug!("NROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, num_chr_banks, !is_chr_rom);
+        debug!("NROM: chr memory size: {}, number of bank: {}, ram: {}", chr_memory_size, 1, !is_chr_rom);
 
         let cartridge = NromCartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
