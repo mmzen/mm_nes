@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
-use log::{debug, info};
+use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError, PPU_ADDRESS_SPACE};
@@ -251,15 +251,16 @@ impl Mmc1Cartridge {
 
     fn get_chr_bank_indexes_4k(&self) -> (usize, usize) {
         let chr = self.chr_rom.borrow();
-        let bank_lo = chr.current_bank_lo;
-        let bank_hi = chr.current_bank_hi;
+        let bank_lo = (self.control_chr_bank0 & 0x1F) as usize % chr.num_memory_banks;
+        let bank_hi = (self.control_chr_bank1 & 0x1F) as usize % chr.num_memory_banks;
 
         (bank_lo, bank_hi)
     }
 
     fn get_chr_bank_indexes_8k(&self) -> (usize, usize) {
-        let bank_lo = (self.control_chr_bank0 & 0xFE) as usize;
-        let bank_hi = bank_lo + 1;
+        let chr = self.chr_rom.borrow();
+        let bank_lo = (self.control_chr_bank0 & 0x1F) as usize % chr.num_memory_banks;
+        let bank_hi = (bank_lo + 1) % chr.num_memory_banks;
 
         (bank_lo, bank_hi)
     }
@@ -272,11 +273,11 @@ impl Mmc1Cartridge {
             _ => unreachable!(),
         };
 
-        let previous_bank_lo = self.chr_rom.borrow_mut().current_bank_lo;
-        let previous_bank_hi = self.chr_rom.borrow_mut().current_bank_hi;
+        //let previous_bank_lo = self.chr_rom.borrow_mut().current_bank_lo;
+        //let previous_bank_hi = self.chr_rom.borrow_mut().current_bank_hi;
 
-        //self.chr_rom.borrow_mut().current_bank_lo = bank_lo;
-        //self.chr_rom.borrow_mut().current_bank_hi = bank_hi;
+        self.chr_rom.borrow_mut().current_bank_lo = bank_lo;
+        self.chr_rom.borrow_mut().current_bank_hi = bank_hi;
 
         //info!("MMC1: switched chr rom banks: low {} -> {}, high {} -> {}, mode: {}",
         //    previous_bank_lo, self.chr_rom.borrow().current_bank_lo, previous_bank_hi, self.chr_rom.borrow().current_bank_hi, self.chr_rom_bank_mode);
