@@ -76,6 +76,9 @@ impl PartialEq for CartridgeType {
 
 pub trait Cartridge: BusDevice {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
+    fn get_prg_ram(&self) -> Option<Rc<RefCell<dyn BusDevice>>> {
+        None
+    }
     fn get_mirroring(&self) -> PpuNameTableMirroring;
 }
 

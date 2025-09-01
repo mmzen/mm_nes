@@ -435,6 +435,11 @@ impl NesConsoleBuilder {
         match device_type {
             BusDeviceType::CARTRIDGE(_) => {
                 let cartridge = self.build_cartridge_device()?;
+                let prg_ram = cartridge.borrow().get_prg_ram();
+                if let Some(prg_ram) = prg_ram {
+                    debug!("adding prg_ram: {} kb", prg_ram.borrow().size());
+                    bus.borrow_mut().add_device(prg_ram)?;
+                }
                 bus.borrow_mut().add_device(cartridge.clone())?;
                 self.cartridge = Some(cartridge.clone());
             },

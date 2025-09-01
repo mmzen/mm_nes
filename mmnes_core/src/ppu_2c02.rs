@@ -597,7 +597,7 @@ impl BusDevice for Ppu2c02 {
         BusDeviceType::PPU(PpuType::NES2C02)
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         PPU_EXTERNAL_ADDRESS_SPACE
     }
 

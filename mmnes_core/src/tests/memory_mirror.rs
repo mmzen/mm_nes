@@ -28,7 +28,7 @@ fn test_create_memory_mirror_with_correct_address_space() -> Result<(), MemoryEr
     let memory_bank_rc = Rc::new(RefCell::new(memory_bank));
     let memory_mirror = create_memory_mirror(memory_bank_rc.clone())?;
 
-    assert_eq!(memory_mirror.get_address_range(), memory_bank_rc.borrow().get_address_range());
+    assert_eq!(memory_mirror.get_virtual_address_range(), memory_bank_rc.borrow().get_virtual_address_range());
     assert_eq!(memory_mirror.get_device_type(), memory_bank_rc.borrow().get_device_type());
     assert_eq!(memory_mirror.get_name(), memory_bank_rc.borrow().get_name());
 

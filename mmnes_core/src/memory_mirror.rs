@@ -14,7 +14,7 @@ pub struct MemoryMirror {
 impl MemoryMirror {
 
     fn is_address_space_valid(memory: Rc<RefCell<MemoryBank>>, address_space: (u16, u16)) -> bool {
-        let real_virtual_size0 = memory.borrow().get_address_range().1 - memory.borrow().get_address_range().0;
+        let real_virtual_size0 = memory.borrow().get_virtual_address_range().1 - memory.borrow().get_virtual_address_range().0;
         let mirror_virtual_size1 = address_space.1 - address_space.0;
         mirror_virtual_size1 <= real_virtual_size0
     }
@@ -23,7 +23,7 @@ impl MemoryMirror {
         let result = if MemoryMirror::is_address_space_valid(memory.clone(), address_space) == false {
             Err(MemoryError::InvalidAddressSpace(
                 format!("mirror virtual memory mirror can not be larger as the primary memory: {} versus {}.",
-                        memory.borrow().get_address_range().1 - memory.borrow().get_address_range().0,
+                        memory.borrow().get_virtual_address_range().1 - memory.borrow().get_virtual_address_range().0,
                         address_space.1 - address_space.0 + 1))
             )
         } else {
@@ -83,7 +83,7 @@ impl BusDevice for MemoryMirror {
         self.memory.borrow().get_device_type()
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         self.address_space
     }
 

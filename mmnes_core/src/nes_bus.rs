@@ -68,7 +68,7 @@ impl Bus for NESBus {
 
     fn add_device(&mut self, device: Rc<RefCell<dyn BusDevice>>) -> Result<(), BusError> {
         let size = device.borrow().size();
-        let address_space = device.borrow().get_address_range();
+        let address_space = device.borrow().get_virtual_address_range();
 
         debug!("BUS: adding device {} - size: {} bytes, address range: 0x{:04X} - 0x{:04X}",
         device.borrow().get_name(), size, address_space.0, address_space.1);
@@ -113,7 +113,7 @@ impl NESBus {
 
         trace!("BUS: translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
                     addr, device.borrow().get_name(), device.borrow().get_device_type(),
-                    device.borrow().get_address_range().0, device.borrow().get_address_range().1,
+                    device.borrow().get_virtual_address_range().0, device.borrow().get_virtual_address_range().1,
                     effective_addr);
 
         Ok((device, effective_addr))
@@ -154,7 +154,7 @@ impl BusDevice for OpenBus {
     }
 
     #[allow(arithmetic_overflow)]
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         (0x000, 0x0000 + (BUS_ADDRESSABLE_SIZE - 1) as u16)
     }
 

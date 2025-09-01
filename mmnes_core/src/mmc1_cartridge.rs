@@ -71,8 +71,9 @@ struct SwitchableMemory {
     num_memory_banks: usize,
     current_bank_lo: usize,
     current_bank_hi: usize,
-    addr_half_lo: (u16, u16),
-    addr_half_hi: (u16, u16),
+    phys_addr_half_lo: (u16, u16),
+    phys_addr_half_hi: (u16, u16),
+    virtual_addr_space: (u16, u16),
 }
 
 impl SwitchableMemory {
@@ -82,11 +83,11 @@ impl SwitchableMemory {
 
     fn get_current_bank_index_and_effective_addr(&self, addr: u16) -> Result<(usize, u16), MemoryError> {
         match addr {
-            x if x >= self.addr_half_lo.0 && x <= self.addr_half_lo.1 => {
-                Ok((self.current_bank_lo, addr - self.addr_half_lo.0))
+            x if x >= self.phys_addr_half_lo.0 && x <= self.phys_addr_half_lo.1 => {
+                Ok((self.current_bank_lo, addr - self.phys_addr_half_lo.0))
             },
-            x if x >= self.addr_half_hi.0 && x <= self.addr_half_hi.1 => {
-                Ok((self.current_bank_hi, addr - self.addr_half_hi.0))
+            x if x >= self.phys_addr_half_hi.0 && x <= self.phys_addr_half_hi.1 => {
+                Ok((self.current_bank_hi, addr - self.phys_addr_half_hi.0))
             },
             _ => Err(MemoryError::OutOfRange(addr))
         }
@@ -144,12 +145,12 @@ impl BusDevice for SwitchableMemory {
         BusDeviceType::WRAM(MemoryType::SwitchableMemory)
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
-        (self.addr_half_lo.0, self.addr_half_hi.1)
+    fn get_virtual_address_range(&self) -> (u16, u16) {
+        self.virtual_addr_space
     }
 
     fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        self.addr_half_lo.0 <= addr && addr <= self.addr_half_hi.1
+        self.phys_addr_half_lo.0 <= addr && addr <= self.phys_addr_half_hi.1
     }
 }
 
@@ -163,7 +164,7 @@ pub struct Mmc1Cartridge {
     prg_rom_bank_mode: SwitchingMode,
     chr_rom_bank_mode: SwitchingMode,
     prg_rom: SwitchableMemory,
-    prg_ram: SwitchableMemory,
+    prg_ram: Rc<RefCell<SwitchableMemory>>,
     chr_rom: Rc<RefCell<SwitchableMemory>>,
     device_type: BusDeviceType,
     mirroring: PpuNameTableMirroring
@@ -199,13 +200,12 @@ impl Mmc1Cartridge {
 
     fn get_prg_bank_index_from_prg_register(&self) -> usize {
         let index = if self.prg_rom_bank_mode == SwitchingMode::PrgBankMode32k {
-            let original = (self.control_prg_bank & 0x0E) as usize;
-            original * 2
+            (self.control_prg_bank & 0x0E) as usize
         } else {
             (self.control_prg_bank & 0x0F) as usize
         };
 
-        index
+        index % self.prg_rom.num_memory_banks
     }
 
     fn get_prg_bank_indexes_16k_hi(&self) -> (usize, usize) {
@@ -223,20 +223,28 @@ impl Mmc1Cartridge {
 
     fn get_prg_bank_indexes_32k(&mut self) -> (usize, usize) {
         let bank_lo = self.get_prg_bank_index_from_prg_register();
-        let bank_hi = bank_lo + 1;
+        let bank_hi = (bank_lo + 1) % self.prg_rom.num_memory_banks;
 
         (bank_lo, bank_hi)
     }
 
-    fn remap_prg_banks(&mut self, bank_lo: usize, bank_hi: usize) -> Result<(), MemoryError> {
-        let previous_bank_lo = self.prg_rom.current_bank_lo;
-        let previous_bank_hi = self.prg_rom.current_bank_hi;
+    fn remap_prg_banks(&mut self) -> Result<(), MemoryError> {
+
+        let (bank_lo, bank_hi) = match self.prg_rom_bank_mode {
+            SwitchingMode::PrgBankMode32k => { self.get_prg_bank_indexes_32k() },
+            SwitchingMode::PrgBankMode16kHi => { self.get_prg_bank_indexes_16k_hi() },
+            SwitchingMode::PrgBankMode16kLo => { self.get_prg_bank_indexes_16k_lo() },
+            _ => unreachable!(),
+        };
+
+        //let previous_bank_lo = self.prg_rom.current_bank_lo;
+        //let previous_bank_hi = self.prg_rom.current_bank_hi;
 
         self.prg_rom.current_bank_lo = bank_lo;
         self.prg_rom.current_bank_hi = bank_hi;
 
-        info!("MMC1: switched prg rom banks: low {} -> {}, high {} -> {}, mode: {}",
-            previous_bank_lo, self.prg_rom.current_bank_lo, previous_bank_hi, self.prg_rom.current_bank_hi, self.prg_rom_bank_mode);
+        //info!("MMC1: switched prg rom banks: low {} -> {}, high {} -> {}, mode: {}",
+        //    previous_bank_lo, self.prg_rom.current_bank_lo, previous_bank_hi, self.prg_rom.current_bank_hi, self.prg_rom_bank_mode);
 
         Ok(())
     }
@@ -256,72 +264,46 @@ impl Mmc1Cartridge {
         (bank_lo, bank_hi)
     }
 
-    fn remap_chr_banks(&mut self, bank_lo: usize, bank_hi: usize) -> Result<(), MemoryError> {
+    fn remap_chr_banks(&mut self) -> Result<(), MemoryError> {
+
+        let (bank_lo, bank_hi) = match self.chr_rom_bank_mode {
+            SwitchingMode::ChrBankMode4k => { self.get_chr_bank_indexes_4k() },
+            SwitchingMode::ChrBankMode8k => { self.get_chr_bank_indexes_8k() },
+            _ => unreachable!(),
+        };
+
         let previous_bank_lo = self.chr_rom.borrow_mut().current_bank_lo;
         let previous_bank_hi = self.chr_rom.borrow_mut().current_bank_hi;
 
-        self.chr_rom.borrow_mut().current_bank_lo = bank_lo;
-        self.chr_rom.borrow_mut().current_bank_hi = bank_hi;
+        //self.chr_rom.borrow_mut().current_bank_lo = bank_lo;
+        //self.chr_rom.borrow_mut().current_bank_hi = bank_hi;
 
-        info!("MMC1: switched chr rom banks: low {} -> {}, high {} -> {}, mode: {}",
-            previous_bank_lo, self.chr_rom.borrow().current_bank_lo, previous_bank_hi, self.chr_rom.borrow().current_bank_hi, self.chr_rom_bank_mode);
+        //info!("MMC1: switched chr rom banks: low {} -> {}, high {} -> {}, mode: {}",
+        //    previous_bank_lo, self.chr_rom.borrow().current_bank_lo, previous_bank_hi, self.chr_rom.borrow().current_bank_hi, self.chr_rom_bank_mode);
 
         Ok(())
     }
 
     fn control_prg_rom_mode(&mut self) -> Result<(), MemoryError> {
-        let (bank_lo, bank_hi) = match (self.control_register >> 2) & 0x03 {
-            0 | 1 => {  // PrgBankMode32k
-                if self.prg_rom_bank_mode != SwitchingMode::PrgBankMode32k {
-                    self.prg_rom_bank_mode = SwitchingMode::PrgBankMode32k;
-                    self.get_prg_bank_indexes_32k()
-                } else {
-                    (self.prg_rom.current_bank_lo, self.prg_rom.current_bank_hi)
-                }
-            },
-            2 => {  // PrgBankMode16kHi
-                if self.prg_rom_bank_mode != SwitchingMode::PrgBankMode16kHi {
-                    self.prg_rom_bank_mode = SwitchingMode::PrgBankMode16kHi;
-                    self.get_prg_bank_indexes_16k_hi()
-                } else {
-                    (self.prg_rom.current_bank_lo, self.prg_rom.current_bank_hi)
-                }
-            },
-            3 => {  // PrgBankMode16kLo
-                if self.prg_rom_bank_mode != SwitchingMode::PrgBankMode16kLo {
-                    self.prg_rom_bank_mode = SwitchingMode::PrgBankMode16kLo;
-                    self.get_prg_bank_indexes_16k_lo()
-                } else {
-                    (self.prg_rom.current_bank_lo, self.prg_rom.current_bank_hi)
-                }
-            },
+        match (self.control_register >> 2) & 0x03 {
+            0 | 1 => self.prg_rom_bank_mode = SwitchingMode::PrgBankMode32k,
+            2 => self.prg_rom_bank_mode = SwitchingMode::PrgBankMode16kHi,
+            3 => self.prg_rom_bank_mode = SwitchingMode::PrgBankMode16kLo,
             _ => unreachable!(),
         };
 
-        self.remap_prg_banks(bank_lo, bank_hi)?;
+        self.remap_prg_banks()?;
         Ok(())
     }
 
     fn control_chr_rom_mode(&mut self) -> Result<(), MemoryError> {
-        let (bank_lo, bank_hi) = match (self.control_register >> 4) & 0x01 {
-            0 => {
-                if self.chr_rom_bank_mode != SwitchingMode::ChrBankMode8k {
-                    self.get_chr_bank_indexes_8k()
-                } else {
-                    (self.chr_rom.borrow().current_bank_lo, self.chr_rom.borrow().current_bank_hi)
-                }
-            },
-            1 => {
-                if self.chr_rom_bank_mode != SwitchingMode::ChrBankMode4k {
-                    self.get_chr_bank_indexes_4k()
-                } else {
-                    (self.chr_rom.borrow().current_bank_lo, self.chr_rom.borrow().current_bank_hi)
-                }
-            },
+        match (self.control_register >> 4) & 0x01 {
+            0 => self.chr_rom_bank_mode = SwitchingMode::ChrBankMode8k,
+            1 => self.chr_rom_bank_mode = SwitchingMode::ChrBankMode4k,
             _ => unreachable!(),
         };
 
-        self.remap_chr_banks(bank_lo, bank_hi)?;
+        self.remap_chr_banks()?;
         Ok(())
     }
 
@@ -345,28 +327,21 @@ impl Mmc1Cartridge {
     fn map_shift_register_to_chr0_register(&mut self) -> Result<(), MemoryError> {
         self.control_chr_bank0 = self.shift_register & 0x1F;
 
-        //info!("MMC1: chr bank low: {:?}", self.chr_rom_bank_mode);
+        self.remap_chr_banks()?;
         Ok(())
     }
 
     fn map_shift_register_to_chr1_register(&mut self) -> Result<(), MemoryError> {
         self.control_chr_bank1 = self.shift_register & 0x1F;
 
-        //info!("MMC1: chr bank high: {:?}", self.chr_rom_bank_mode);
+        self.remap_chr_banks()?;
         Ok(())
     }
 
     fn map_shift_register_to_prg_register(&mut self) -> Result<(), MemoryError> {
         self.control_prg_bank = self.shift_register & 0x1F;
 
-        let (bank_lo, bank_hi) = match self.prg_rom_bank_mode {
-            SwitchingMode::PrgBankMode32k => { self.get_prg_bank_indexes_32k() },
-            SwitchingMode::PrgBankMode16kHi => { self.get_prg_bank_indexes_16k_hi() },
-            SwitchingMode::PrgBankMode16kLo => { self.get_prg_bank_indexes_16k_lo() },
-            _ => unreachable!(),
-        };
-
-        self.remap_prg_banks(bank_lo, bank_hi)?;
+        self.remap_prg_banks()?;
         Ok(())
     }
 
@@ -388,7 +363,7 @@ impl Mmc1Cartridge {
         Ok(())
     }
 
-    fn build_switchable_memory(name: String, size: usize, memory_banks: Vec<MemoryBank>) -> Result<SwitchableMemory, MemoryError> {
+    fn build_switchable_memory(name: String, size: usize, memory_banks: Vec<MemoryBank>, virtual_addr_space: (u16, u16)) -> Result<SwitchableMemory, MemoryError> {
         let num_memory_banks = memory_banks.len();
 
         let memory = SwitchableMemory {
@@ -398,12 +373,13 @@ impl Mmc1Cartridge {
             num_memory_banks,
             current_bank_lo: 0,
             current_bank_hi: if num_memory_banks == 0 { 0 } else { num_memory_banks - 1 },
-            addr_half_lo: (0, ((size / 2) - 1) as u16),
-            addr_half_hi: ((size / 2) as u16, (size - 1) as u16)
+            phys_addr_half_lo: (0, ((size / 2) - 1) as u16),
+            phys_addr_half_hi: ((size / 2) as u16, (size - 1) as u16),
+            virtual_addr_space
         };
 
-        //info!("built switchable_memory: {}, addr_half_lo: 0x{:04X} - 0x{:04X}, addr_half_hi: 0x{:04X} - 0x{:04X}",
-        //    memory.name, memory.addr_half_lo.0, memory.addr_half_lo.1, memory.addr_half_hi.0, memory.addr_half_hi.1);
+        debug!("built switchable_memory: {}, virtual_addr_space: 0x{:04X} - 0x{:04X}, phys_addr_half_lo: 0x{:04X} - 0x{:04X}, phys_addr_half_hi: 0x{:04X} - 0x{:04X}, bank size: {}, number of banks: {}",
+            memory.name, memory.virtual_addr_space.0, memory.virtual_addr_space.1, memory.phys_addr_half_lo.0, memory.phys_addr_half_lo.1, memory.phys_addr_half_hi.0, memory.phys_addr_half_hi.1, size / num_memory_banks, num_memory_banks);
 
         Ok(memory)
     }
@@ -437,9 +413,9 @@ impl Mmc1Cartridge {
             control_prg_bank: 0,
             prg_rom_bank_mode: SwitchingMode::PrgBankMode16kLo,
             chr_rom_bank_mode: SwitchingMode::ChrBankMode8k,
-            prg_rom: Mmc1Cartridge::build_switchable_memory("prg_rom".to_string(), prg_rom_addr_size, prg_rom_memory_banks)?,
-            prg_ram: Mmc1Cartridge::build_switchable_memory("prg_ram".to_string(), prg_ram_addr_size, prg_ram_memory_banks)?,
-            chr_rom: Rc::new(RefCell::new(Mmc1Cartridge::build_switchable_memory("chr_rom".to_string(), chr_addr_size, chr_memory_banks)?)),
+            prg_rom: Mmc1Cartridge::build_switchable_memory("prg_rom".to_string(), prg_rom_addr_size, prg_rom_memory_banks, PRG_ROM_ADDRESS_SPACE)?,
+            prg_ram: Rc::new(RefCell::new(Mmc1Cartridge::build_switchable_memory("prg_ram".to_string(), prg_ram_addr_size, prg_ram_memory_banks, PRG_RAM_ADDRESS_SPACE)?)),
+            chr_rom: Rc::new(RefCell::new(Mmc1Cartridge::build_switchable_memory("chr_rom".to_string(), chr_addr_size, chr_memory_banks, PPU_ADDRESS_SPACE)?)),
             device_type: BusDeviceType::CARTRIDGE(MMC1),
             mirroring,
         };
@@ -468,8 +444,11 @@ impl FromINes for Mmc1Cartridge {
     where
         Self: Sized
     {
+
+        let prg_ram_size = if header.prg_ram_size == 0 { (PRG_RAM_ADDRESS_SPACE.1 - PRG_RAM_ADDRESS_SPACE.0 + 1) as usize } else { header.prg_ram_size };
+
         let cartridge = Mmc1Cartridge::build(file,
-                                              header.prg_offset(), header.prg_rom_size, header.prg_ram_size,
+                                              header.prg_offset(), header.prg_rom_size, prg_ram_size,
                                               header.chr_offset(), header.chr_rom_size, header.chr_ram_size,
                                               header.nametables_layout)?;
 
@@ -486,8 +465,8 @@ impl BusDevice for Mmc1Cartridge {
         self.device_type.clone()
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
-        PRG_ROM_ADDRESS_SPACE
+    fn get_virtual_address_range(&self) -> (u16, u16) {
+        (PRG_ROM_ADDRESS_SPACE.0, PRG_ROM_ADDRESS_SPACE.1)
     }
 
     fn is_addr_in_address_space(&self, addr: u16) -> bool {
@@ -507,22 +486,28 @@ impl Memory for Mmc1Cartridge {
      * (similar to the mirroring seen with PPU registers). After the fifth write, the shift register is cleared automatically.
      ***/
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        if value & 0x80 != 0 {
-            self.reset()?; // XXX PAS SUR DU TOUT DU TOUT
-        } else {
-            let final_write = (self.shift_register & 0x01) == 1;
-            self.shift_register = ((value & 0x01) << 4) | (self.shift_register >> 1);
 
-            if final_write == true {
-                self.write_shift_register_to_internal_register(addr)?;
+            if value & 0x80 != 0 {
+                self.reset()?;
+            } else {
+                let final_write = (self.shift_register & 0x01) == 1;
+                self.shift_register = ((value & 0x01) << 4) | (self.shift_register >> 1);
+
+                if final_write == true {
+                    self.write_shift_register_to_internal_register(addr)?;
+                }
             }
-        }
 
-        Ok(())
+            Ok(())
     }
 
+    /***
+     * needed to cross banks, eg: 0xBFFF + 0xC000 are on two different banks
+     ***/
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
-        self.prg_rom.read_word(addr)
+        let lo = self.read_byte(addr)?;
+        let hi = self.read_byte((addr).wrapping_add(1))?;
+        Ok(u16::from_le_bytes([lo, hi]))
     }
 
     fn size(&self) -> usize {
@@ -533,6 +518,10 @@ impl Memory for Mmc1Cartridge {
 impl Cartridge for Mmc1Cartridge {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>> {
         self.chr_rom.clone()
+    }
+
+    fn get_prg_ram(&self) -> Option<Rc<RefCell<dyn BusDevice>>> {
+        Some(self.prg_ram.clone())
     }
 
     fn get_mirroring(&self) -> PpuNameTableMirroring {

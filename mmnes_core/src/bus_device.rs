@@ -54,7 +54,7 @@ impl PartialEq for BusDeviceType {
 pub trait BusDevice: Memory {
     fn get_name(&self) -> String;
     fn get_device_type(&self) -> BusDeviceType;
-    fn get_address_range(&self) -> (u16, u16);
+    fn get_virtual_address_range(&self) -> (u16, u16);
     /***
      * XXX
      * misleading as it compare virtual addresses, and is, in fact never really called
@@ -64,9 +64,9 @@ pub trait BusDevice: Memory {
 
 impl Ord for dyn BusDevice {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.get_address_range().0 {
-            a if a < other.get_address_range().0 => Ordering::Less,
-            a if a > other.get_address_range().0 => Ordering::Greater,
+        match self.get_virtual_address_range().0 {
+            a if a < other.get_virtual_address_range().0 => Ordering::Less,
+            a if a > other.get_virtual_address_range().0 => Ordering::Greater,
             _ => Ordering::Equal,
         }
     }
@@ -82,7 +82,7 @@ impl Eq for dyn BusDevice {}
 
 impl PartialEq for dyn BusDevice {
     fn eq(&self, other: &Self) -> bool {
-        self.get_address_range() == other.get_address_range()
+        self.get_virtual_address_range() == other.get_virtual_address_range()
     }
 }
 
@@ -94,7 +94,7 @@ mock! {
     impl BusDevice for BusDeviceStub {
         fn get_name(&self) -> String;
         fn get_device_type(&self) -> BusDeviceType;
-        fn get_address_range(&self) -> (u16, u16);
+        fn get_virtual_address_range(&self) -> (u16, u16);
         fn is_addr_in_address_space(&self, addr: u16) -> bool;
     }
 

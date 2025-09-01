@@ -157,7 +157,7 @@ impl BusDevice for UnromCartridge {
         self.device_type.clone()
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         CPU_ADDRESS_SPACE
     }
 

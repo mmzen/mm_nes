@@ -91,7 +91,7 @@ impl BusDevice for MemoryBank {
         self.device_type.clone()
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         self.address_space
     }
 

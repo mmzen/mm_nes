@@ -114,7 +114,7 @@ impl<T: Input> BusDevice for StandardController<T> {
         CONTROLLER(ControllerType::StandardController)
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         CONTROLLER_ADDRESS_SPACE
     }
 

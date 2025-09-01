@@ -721,7 +721,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03
         BusDeviceType::APU(RP2A03)
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         APU_EXTERNAL_ADDRESS_SPACE
     }
 

@@ -82,7 +82,7 @@ fn create_split_ram_memory_creates_correct_number_of_banks_and_address_ranges() 
 
     for bank in memory_banks {
         assert_eq!(bank.size(), bank_size);
-        assert_eq!(bank.get_address_range(), CPU_ADDRESS_SPACE);
+        assert_eq!(bank.get_virtual_address_range(), CPU_ADDRESS_SPACE);
     }
 }
 
@@ -116,7 +116,7 @@ fn create_split_rom_memory_creates_correct_number_of_banks_from_file_at_offset()
     // Verify each bank has correct size and address range
     for bank in &memory_banks {
         assert_eq!(bank.size(), bank_size);
-        assert_eq!(bank.get_address_range(), CPU_ADDRESS_SPACE);
+        assert_eq!(bank.get_virtual_address_range(), CPU_ADDRESS_SPACE);
     }
 
     // Verify the data was read from the correct offset (bytes 4-7 of test_data)
@@ -164,7 +164,7 @@ fn create_chr_rom_memory_creates_correct_memory_banks_from_file() {
     // Verify each bank has correct size and address range
     for bank in &memory_banks {
         assert_eq!(bank.size(), chr_rom_bank_size);
-        assert_eq!(bank.get_address_range(), CPU_ADDRESS_SPACE);
+        assert_eq!(bank.get_virtual_address_range(), CPU_ADDRESS_SPACE);
     }
 
     // Verify the data was loaded correctly into banks
@@ -201,7 +201,7 @@ fn create_chr_ram_memory_creates_correct_memory_banks() {
     // Verify each bank has correct size and address range
     for bank in memory_banks {
         assert_eq!(bank.size(), chr_ram_bank_size);
-        assert_eq!(bank.get_address_range(), CPU_ADDRESS_SPACE);
+        assert_eq!(bank.get_virtual_address_range(), CPU_ADDRESS_SPACE);
     }
 }
 

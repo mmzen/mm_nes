@@ -32,7 +32,7 @@ fn create_bus_device_with_expectations(memory_size: usize, memory_range: (u16, u
     device.expect_get_device_type().returning(|| BusDeviceType::WRAM(MemoryType::StandardMemory));
 
     device.expect_size().returning(move || memory_size);
-    device.expect_get_address_range().returning(move || memory_range);
+    device.expect_get_virtual_address_range().returning(move || memory_range);
 
     match (request, length) {
         (RequestType::Read, RequestData::Byte(value)) => {

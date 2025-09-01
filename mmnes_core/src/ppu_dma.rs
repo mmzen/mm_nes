@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use log::{debug, info};
+use log::info;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::dma::{Dma, DmaType};
@@ -24,7 +24,7 @@ impl Dma for PpuDma {
         let source = (value as u16) << 8;
         let last_value = source | 0x00FF;
 
-        debug!("DMA: transferring 256 bytes of memory from 0x{:04X} to PPU", source);
+        //debug!("DMA: transferring 256 bytes of memory from 0x{:04X} to PPU", source);
 
         let mut index = 0;
         let bus = self.bus.as_ptr();
@@ -52,7 +52,7 @@ impl BusDevice for PpuDma {
         BusDeviceType::DMA(DmaType::PpuDma(NESPPUDMA))
     }
 
-    fn get_address_range(&self) -> (u16, u16) {
+    fn get_virtual_address_range(&self) -> (u16, u16) {
         PPU_DMA_ADDRESS_SPACE
     }
 
