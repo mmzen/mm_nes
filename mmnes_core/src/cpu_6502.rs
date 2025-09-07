@@ -208,7 +208,7 @@ impl CpuSnapshot for Cpu6502Snapshot {
 
 impl Display for Cpu6502Snapshot {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "cpu snapshot {{ pc: 0x{:04X}, a: 0x{:02X}, x: 0x{:02X}, y: 0x{:02X}, sp: 0x{:02X}, p: 0x{:02X}, total_cycles: {} }}",
+        write!(f, "pc: 0x{:04X}, a: 0x{:02X}, x: 0x{:02X}, y: 0x{:02X}, sp: 0x{:02X}, p: 0x{:02X}, total_cycles: {}",
                self.pc, self.a, self.x, self.y, self.sp, self.p, self.total_cycles)
     }
 }
