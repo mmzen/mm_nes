@@ -181,8 +181,8 @@ pub fn get_first_bank_or_fail(mut memory_banks: Vec<MemoryBank>, total_size: usi
         Ok(bank)
     } else {
         Err(CartridgeError::LoadingError(
-            format!("error while creating memory bank, total size: {}, bank size: {}, number of banks: {}, is ram: {}",
-                    total_size, bank_size, len, !is_rom)
+            format!("unexpected number of banks (expected: 1, found: {}), total size: {}, bank size: {}, number of banks: {}, is ram: {}",
+                    len, total_size, bank_size, len, !is_rom)
         ))
     }
 }

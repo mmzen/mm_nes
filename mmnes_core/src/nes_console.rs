@@ -12,6 +12,7 @@ use crate::cartridge::Cartridge;
 use crate::controller::{Controller, ControllerType};
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
+use crate::cpu_debugger::CpuSnapshot;
 use crate::dma::PpuDmaType;
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
@@ -36,8 +37,44 @@ const WRAM_START_ADDR: u16 = 0x0000;
 const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 const CYCLE_START_SEQUENCE: u32 = 7;
+
+/// The cycle credits given to the CPU, the PPU, and the APU
+/// the default value of 114 cycles is the number of cycles
+/// needed for the PPU to render a single scanline.
 const CYCLE_CREDITS: u32 = 114;
 
+/// The maximum number of cycles the CPU can go ahead
+/// before being caught up by the APU.
+const APU_CYCLES_THRESHOLD: u32 = 114;
+
+/// The maximum number of cycles the CPU can go ahead
+/// before being caught up by the PPU.
+const PPU_CYCLES_THRESHOLD: u32 = 114;
+
+///
+/// CPU cycle counter for CPU, APU and PPU
+///
+/// All cycles are converted to CPU cycles equivalents
+///
+struct CyclesCounter {
+    current: u32,
+    previous: u32,
+    debt: u32,
+}
+
+impl CyclesCounter {
+    fn new(current: u32) -> CyclesCounter {
+        CyclesCounter {
+            current,
+            previous: current,
+            debt: 0,
+        }
+    }
+
+    fn ahead(&self, other: &CyclesCounter, threshold: u32) -> bool {
+        (self.current - other.current) >= threshold
+    }
+}
 
 pub struct NesConsole {
     cpu: Rc<RefCell<dyn CPU>>,
@@ -45,9 +82,9 @@ pub struct NesConsole {
     apu: Rc<RefCell<dyn APU>>,
     controller: Rc<RefCell<dyn Controller>>,
     entry_point: Option<u16>,
-    cycles_counter: u32,
-    previous_cycles_counter: u32,
-    cycles_debt: u32,
+    cpu_counter: CyclesCounter,
+    apu_counter: CyclesCounter,
+    ppu_counter: CyclesCounter,
 }
 
 impl NesConsole {
@@ -58,9 +95,9 @@ impl NesConsole {
             apu,
             controller,
             entry_point,
-            previous_cycles_counter: CYCLE_START_SEQUENCE,
-            cycles_counter: CYCLE_START_SEQUENCE,
-            cycles_debt: 0,
+            cpu_counter: CyclesCounter::new(CYCLE_START_SEQUENCE),
+            apu_counter: CyclesCounter::new(0),
+            ppu_counter: CyclesCounter::new(0),
         }
     }
 
@@ -75,28 +112,66 @@ impl NesConsole {
         Ok(vec)
     }
 
-    pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
-        let credits = CYCLE_CREDITS;
+    pub fn catch_up_ppu_and_apu(&mut self, ppu_threshold: u32, apu_threshold: u32) -> Result<(Option<NesFrame>, Option<NesSamples>), NesConsoleError> {
         let mut out_frame: Option<NesFrame> = None;
-        let mut out_samples: NesSamples = NesSamples::default();
+        let mut out_samples: Option<NesSamples> = None;
 
-        loop {
-            self.cycles_counter = self.cpu.borrow_mut().run(self.cycles_counter, credits - self.cycles_debt)?;
-            self.cycles_debt = (self.cycles_counter - self.previous_cycles_counter) - (credits - self.cycles_debt);
-
-            let (_, ppu_frame) = self.ppu.borrow_mut().run(self.cycles_counter, credits)?;
+        if self.cpu_counter.ahead(&self.ppu_counter, ppu_threshold) {
+            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.cpu_counter.current, ppu_threshold)?;
             if let Some(f) = ppu_frame {
                 out_frame = Some(f);
             }
 
-            let (_, apu_samples) = self.apu.borrow_mut().run(self.cycles_counter, credits)?;
-            if let Some(s) = apu_samples {
+            self.ppu_counter.current = ppu_cycles;
+            self.ppu_counter.previous = self.ppu_counter.current;
+        }
+
+        if self.cpu_counter.ahead(&self.apu_counter, apu_threshold) {
+            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.cpu_counter.current, apu_threshold)?;
+            out_samples = apu_samples;
+
+            self.apu_counter.current = apu_cycles;
+            self.apu_counter.previous = self.apu_counter.current;
+        }
+
+        Ok((out_frame, out_samples))
+    }
+
+    ///
+    /// Execute a single CPU instruction and:  
+    ///     - catch up the PPU and APU if necessary  
+    ///     - fetch a CPU snapshot  
+    ///     - returns an optional frame, an optional sound samples buffer, and a CPU snapshot  
+    /// 
+    pub fn step_instruction(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>, Box<dyn CpuSnapshot>), NesConsoleError> {
+
+        self.cpu_counter.current = self.cpu.borrow_mut().step_instruction()?;
+        let snapshot = self.cpu.borrow().snapshot();
+        
+        let (out_frame ,out_samples) = self.catch_up_ppu_and_apu(PPU_CYCLES_THRESHOLD, APU_CYCLES_THRESHOLD)?;
+        self.cpu_counter.previous = self.cpu_counter.current;
+
+        Ok((out_frame, out_samples, snapshot))
+    }
+
+    pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
+        let credits = CYCLE_CREDITS;
+        let out_frame: Option<NesFrame>;
+        let mut out_samples: NesSamples = NesSamples::default();
+
+        loop {
+            self.cpu_counter.current = self.cpu.borrow_mut().run(self.cpu_counter.current, credits - self.cpu_counter.debt)?;
+            self.cpu_counter.debt = (self.cpu_counter.current - self.cpu_counter.previous) - (credits - self.cpu_counter.debt);
+
+            let (frame, samples) = self.catch_up_ppu_and_apu(PPU_CYCLES_THRESHOLD, APU_CYCLES_THRESHOLD)?;
+            self.cpu_counter.previous = self.cpu_counter.current;
+
+            if let Some(s) = samples {
                 out_samples.append(s);
             }
 
-            self.previous_cycles_counter = self.cycles_counter;
-
-            if out_frame.is_some() {
+            if frame.is_some() {
+                out_frame = frame;
                 break;
             }
         };
@@ -301,7 +376,7 @@ impl NesConsoleBuilder {
 
         let result: Result<Rc<RefCell<dyn CPU>>, NesConsoleError> = match &self.cpu_type {
             Some(CpuType::NES6502) => {
-                let mut cpu = Cpu6502::new(bus, self.cpu_tracing, self.cpu_trace_file.take());
+                let mut cpu = Cpu6502::new(bus);
                 cpu.initialize()?;
                 Ok(Rc::new(RefCell::new(cpu)))
             },

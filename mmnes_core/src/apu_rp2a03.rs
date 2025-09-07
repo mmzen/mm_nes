@@ -1339,7 +1339,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
      * https://forums.nesdev.org/viewtopic.php?t=8602
      *
      ***/
-    fn run(&mut self, _: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError> {
+    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError> {
 
         for counter in 0..credits {
 
@@ -1366,7 +1366,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
             }
         }
 
-
         let buffer = self.sound_player.samples();
         let samples = if buffer.is_empty() {
             None
@@ -1374,6 +1373,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
             Some(NesSamples::new(buffer))
         };
 
-        Ok((credits, samples))
+        Ok((start_cycle + credits, samples))
     }
 }

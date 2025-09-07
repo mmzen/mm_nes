@@ -6,6 +6,8 @@ use log::{error, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use clap::{Parser};
 use clap_num::maybe_hex;
+use eframe::egui::{vec2, ViewportBuilder};
+use eframe::NativeOptions;
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_front_end::NesFrontEnd;
 use crate::nes_front_ui::NesFrontUI;
@@ -22,8 +24,12 @@ const APP_NAME: &str = "MMNES";
 const FRAME_BUFFER_WIDTH: usize = 256;
 const FRAME_BUFFER_HEIGHT: usize = 240;
 const CHANNEL_BOUND_SIZE: usize = 10;
+const DEBUG_CHANNEL_BOUND_SIZE: usize = 100;
 const FRAMES_PER_SECOND: f64 = 60.098_8;
 const SPIN_BEFORE: Duration = Duration::from_micros(500);
+
+const VIEWPORT_HEIGHT: f32 = 600.0;
+const VIEWPORT_WIDTH: f32 = 900.0;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -80,10 +86,10 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-fn spawn_emulator_thread(args: Args, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
+fn spawn_emulator_thread(args: Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
 
     let handle = spawn(move || -> Result<(), NesConsoleError> {
-        let mut front = NesFrontEnd::new(args, tx, rx).map_err(|e| {
+        let mut front = NesFrontEnd::new(args, frame_tx, command_rx, debug_tx).map_err(|e| {
             error!("fatal error while creating emulator: {}", e);
             e
         })?;
@@ -102,11 +108,18 @@ fn main() -> Result<(), NesConsoleError> {
 
     logger_init(args.debug);
 
-    let native_options = eframe::NativeOptions::default();
-    let (tx0, rx0) = sync_channel::<NesMessage>(CHANNEL_BOUND_SIZE);
-    let (tx1, rx1) = sync_channel::<NesMessage>(CHANNEL_BOUND_SIZE);
+    let native_options = NativeOptions {
+        viewport: ViewportBuilder::default()
+            .with_inner_size(vec2(VIEWPORT_WIDTH, VIEWPORT_HEIGHT))
+            .with_resizable(true),
+        ..Default::default()
+    };
 
-    let _ = spawn_emulator_thread(args, tx0, rx1)?;
+    let (frame_tx, frame_rx) = sync_channel::<NesMessage>(CHANNEL_BOUND_SIZE);
+    let (command_tx, command_rx) = sync_channel::<NesMessage>(CHANNEL_BOUND_SIZE);
+    let (debug_tx, debug_rx) = sync_channel::<NesMessage>(DEBUG_CHANNEL_BOUND_SIZE);
+
+    let _ = spawn_emulator_thread(args, frame_tx, command_rx, debug_tx)?;
 
     let _ = eframe::run_native(
         APP_NAME,
@@ -114,7 +127,7 @@ fn main() -> Result<(), NesConsoleError> {
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            let nes_front_ui = NesFrontUI::new(cc, tx1, rx0, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
+            let nes_front_ui = NesFrontUI::new(cc, command_tx, frame_rx, debug_rx, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
             Ok(Box::new(nes_front_ui))
         },),
     );

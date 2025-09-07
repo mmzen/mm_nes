@@ -50,6 +50,12 @@ impl PartialEq for PpuType {
 pub trait PPU: BusDevice + DmaDevice {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
+
+    /// Run the PPU for 114 cycles (completing 1 scanline), returning the new cycle count after execution and a full frame if available (after having rendered 240 scanlines).
+    /// The current implementation ignore the credits input, and will always render a full scanline, updating
+    /// the current cycle count by 114.
+    /// ```start_cycle```: current cycle of execution,
+    /// ```credits```: the number of cycles available to execute instructions (ignored)
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesFrame>), PpuError>;
     fn frame(&self) -> NesFrame;
 }

@@ -2,19 +2,21 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
-use eframe::egui::{vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Margin, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
+use eframe::egui::{pos2, vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
 use egui_file_dialog::FileDialog;
 use log::{error, warn};
+use mmnes_core::cpu_debugger::CpuSnapshot;
 use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
-use crate::nes_message::NesMessage::{Keys, LoadRom, Pause, Reset};
+use crate::nes_message::NesMessage::{DebugStepInstruction, Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
 
 pub struct NesFrontUI {
-    rx: Receiver<NesMessage>,
-    tx: SyncSender<NesMessage>,
+    frame_rx: Receiver<NesMessage>,
+    command_tx: SyncSender<NesMessage>,
+    debug_rx: Receiver<NesMessage>,
     texture: TextureHandle,
     texture_options: TextureOptions,
     height: usize,
@@ -46,7 +48,7 @@ impl NesFrontUI {
     }
 
 
-    pub fn new(cc: &eframe::CreationContext<'_>, tx: SyncSender<NesMessage>, rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
+    pub fn new(cc: &eframe::CreationContext<'_>, command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
         let vec = NesFrontUI::create_default_texture(width, height, Color32::DARK_GRAY);
 
         let texture_options = TextureOptions {
@@ -72,8 +74,9 @@ impl NesFrontUI {
         };
 
         NesFrontUI {
-            rx,
-            tx,
+            frame_rx,
+            command_tx,
+            debug_rx,
             texture,
             texture_options,
             height,
@@ -89,7 +92,7 @@ impl NesFrontUI {
             rom_file_dialog: FileDialog::new(),
             rom_file: None,
             error: None,
-            nes_frame: None
+            nes_frame: None,
         }
     }
 
@@ -133,7 +136,7 @@ impl NesFrontUI {
 
     fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
 
-        while let Ok(message) = self.rx.try_recv() {
+        while let Ok(message) = self.frame_rx.try_recv() {
             match message {
                 NesMessage::Error(e) => {
                     error!("received error from NES backend: {}", e);
@@ -156,8 +159,25 @@ impl NesFrontUI {
         Ok(())
     }
 
+    fn read_debug_messages(&mut self) -> Vec<Box<dyn CpuSnapshot>> {
+        let mut snapshots: Vec<Box<dyn CpuSnapshot>> = Vec::new();
+
+        while let Ok(message) = self.debug_rx.try_recv() {
+            let snapshot = match message {
+                NesMessage::CpuSnapshot(snapshot) => {
+                    snapshot
+                },
+                _ => { panic!("unexpected message: {:?}", message); }
+            };
+
+            snapshots.push(snapshot);
+        }
+
+        snapshots
+    }
+
     fn send_message(&mut self, message: NesMessage) -> Result<(), NesConsoleError> {
-        match self.tx.try_send(message) {
+        match self.command_tx.try_send(message) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_frame)) => {
                 warn!("NES UI channel is full, dropping message ...");
@@ -170,7 +190,7 @@ impl NesFrontUI {
     }
 
     fn send_input_to_emulator(&mut self) {
-        if let Ok(()) = self.tx.try_send(Keys(self.input.clone())) {
+        if let Ok(()) = self.command_tx.try_send(Keys(self.input.clone())) {
             self.input.clear();
         }
     }
@@ -238,6 +258,11 @@ impl App for NesFrontUI {
                 if ui.button("Pause").clicked() {
                     let _ = self.send_message(Pause);
                 }
+
+                if ui.button("step instruction").clicked() {
+                    let _ = self.send_message(DebugStepInstruction);
+                }
+
                 ui.end_row();
             });
         });
@@ -248,22 +273,41 @@ impl App for NesFrontUI {
             ));
         });
 
-        CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |ui| {
-            let img_px = vec2(self.width as f32, self.height as f32);
-            let available_size = ui.available_size();
-            let scale = (available_size.x / img_px.x).min(available_size.y / img_px.y);
-            let size  = img_px * scale;
 
-            egui::Frame::new()
-                .inner_margin(Margin::same(16.0 as i8))
-                .show(ui, |ui| {
-                    ui.vertical_centered_justified(|ui| {
-                        let (_, duration) = measure_exec_time(|| {
-                            ui.add(Image::new((self.texture.id(), size)));
+        CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |_| {
+            egui::Window::new("emulator")
+                .default_pos(pos2(0.0, 22.0))
+                .show(ctx, |ui| {
+                    let img_px = vec2(self.width as f32, self.height as f32);
+                    let available_size = ui.available_size();
+                    let scale = (available_size.x / img_px.x).min(available_size.y / img_px.y);
+                    let size  = img_px * scale;
+                        ui.vertical_centered_justified(|ui| {
+                            let (_, duration) = measure_exec_time(|| {
+                                ui.add(Image::new((self.texture.id(), size)));
+                            });
+                            self.compute_fps();
+                            self.rendering_duration_ms = duration.as_secs_f64() * 1000.0;
                         });
-                        self.compute_fps();
-                        self.rendering_duration_ms = duration.as_secs_f64() * 1000.0;
+                });
+
+
+            egui::Window::new("debug")
+                .default_pos(pos2(300.0, 22.0))
+                .resizable(true)
+                .show(ctx, |ui| {
+                    let mut snapshots = self.read_debug_messages();
+                    let len = snapshots.len();
+                    let skip = if len > 10 { len - 10 } else { 0 };
+
+                    Grid::new("some_unique_id").show(ui, |ui| {
+                        snapshots.iter().enumerate().skip(skip).for_each(|(n, snapshot)| {
+                            ui.label(format!("{}", snapshot));
+                            ui.end_row();
+                        });
                     });
+
+                    snapshots.clear();
                 });
         });
 

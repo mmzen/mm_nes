@@ -25,7 +25,6 @@ const MAPPER_NAME: &str = "MMC1";
  * https://www.nesdev.org/wiki/MMC1
  * SxROM board types
  *
- * additional specifications: https://www.raphnet.net/electronique/nes_cart/mmc1.txt
  *
  * XXX NOT IMPLEMENTED:
  *  - Consecutive writes that are too close together are ignored.

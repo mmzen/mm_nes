@@ -14,7 +14,8 @@ use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::ppu::PpuNameTableMirroring;
 
-const NROM_PRG_MEMORY_BANK_SIZE: usize = 32 * 1024;
+const NROM_PRG_MEMORY_BANK_SIZE_16K: usize = 16 * 1024;
+const NROM_PRG_MEMORY_BANK_SIZE_32K: usize = 32 * 1024;
 const NROM_CHR_MEMORY_BANK_SIZE: usize = 8 * 1024;
 const MAPPER_NAME: &str = "NROM";
 
@@ -39,9 +40,11 @@ impl NromCartridge {
                 format!("NROM cartridge does not support both CHR-ROM (detected: {} bytes) and CHR-RAM (detected: {} bytes)", chr_rom_size, chr_ram_size)))?
         }
 
-        let prg_memory_banks = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
-        let prg_rom = cartridge::get_first_bank_or_fail(prg_memory_banks, prg_rom_size, NROM_PRG_MEMORY_BANK_SIZE, true)?;
-        debug!("NROM: prg rom size: {}, number of bank: {}", prg_rom_size, 1);
+        let prg_memory_bank_size = if prg_rom_size <= NROM_PRG_MEMORY_BANK_SIZE_16K { NROM_PRG_MEMORY_BANK_SIZE_16K } else { NROM_PRG_MEMORY_BANK_SIZE_32K };
+        let prg_memory_banks = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, prg_memory_bank_size, CPU_ADDRESS_SPACE)?;
+
+        let prg_rom = cartridge::get_first_bank_or_fail(prg_memory_banks, prg_rom_size, prg_memory_bank_size, true)?;
+        debug!("NROM: prg rom size: {}, prg rom bank size: {}, number of bank: {}", prg_rom_size, prg_memory_bank_size, 1);
 
         let (chr_memory_size, is_chr_rom) = cartridge::get_chr_memory_size_and_type(chr_rom_size, chr_ram_size);
         let rom_data = if is_chr_rom { Some(&mut data) } else { None };

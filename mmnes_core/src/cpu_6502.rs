@@ -1,6 +1,6 @@
 use std::{fmt, io};
 use std::cell::RefCell;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
@@ -8,6 +8,7 @@ use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError, Interruptible};
+use crate::cpu_debugger::{Breakpoints, CpuSnapshot, DebugStopReason};
 use crate::memory::{MemoryError};
 
 //const CLOCK_HZ: usize = 1_789_773;
@@ -184,14 +185,40 @@ impl InterruptMask {
     }
 }
 
+#[derive(Clone, Debug)]
+struct Cpu6502Snapshot {
+    a: u8,
+    x: u8,
+    y: u8,
+    p: u8,
+    sp: u8,
+    pc: u16,
+    total_cycles: u64,
+}
+
+impl CpuSnapshot for Cpu6502Snapshot {
+    fn pc(&self) -> u16 { self.pc }
+    fn a(&self) -> u8 { self.a }
+    fn x(&self) -> u8 { self.x }
+    fn y(&self) -> u8 { self.y }
+    fn sp(&self) -> u8 { self.sp }
+    fn p(&self) -> u8 { self.p }
+    fn total_cycles(&self) -> u64 { self.total_cycles }
+}
+
+impl Display for Cpu6502Snapshot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "cpu snapshot {{ pc: 0x{:04X}, a: 0x{:02X}, x: 0x{:02X}, y: 0x{:02X}, sp: 0x{:02X}, p: 0x{:02X}, total_cycles: {} }}",
+               self.pc, self.a, self.x, self.y, self.sp, self.p, self.total_cycles)
+    }
+}
+
 
 #[derive(Debug)]
 pub struct Cpu6502 {
     registers: Registers,
     bus: Rc<RefCell<dyn Bus>>,
     instructions_executed: u64,
-    tracing: bool,
-    tracer: Tracer,
     interrupt: InterruptMask
 }
 
@@ -286,63 +313,58 @@ impl CPU for Cpu6502 {
         self.bus.borrow().dump();
     }
 
+    fn step_instruction(&mut self) -> Result<u32, CpuError> {
+        let byte = self.bus.borrow().read_byte(self.registers.pc)?;
+        let instruction = Cpu6502::decode_instruction(byte)?;
+        let operand = self.fetch_operand(instruction)?;
+
+        let additional_cycles = self.execute_instruction(&instruction, &operand)?;
+        let cycles = instruction.cycles + additional_cycles;
+
+        if self.registers.is_pc_dirty == false {
+            self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
+        } else {
+            self.registers.is_pc_dirty = false;
+        }
+
+        self.instructions_executed += 1;
+        self.interrupt()?;
+
+        Ok(cycles)
+    }
 
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError> {
         let mut cycles = start_cycle;
         let cycles_threshold = start_cycle + credits;
 
-        /***
-         * debug!("CPU: running CPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
-         *
-         * let start = Instant::now();
-         * let previous_instructions_executed = self.instructions_executed;
-         * let previous_cycles = cycles;
-         ***/
-
         loop {
-            //debug!("CPU: program counter: 0x{:04X}", self.registers.pc);
-
-            let byte = self.bus.borrow().read_byte(self.registers.pc)?;
-            let instruction = Cpu6502::decode_instruction(byte)?;
-            let operand = self.fetch_operand(instruction)?;
-
-            if self.tracing {
-                self.tracer.trace(&self, &instruction, &operand, cycles)?;
-            }
-
-            let additional_cycles = self.execute_instruction(&instruction, &operand)?;
-            cycles = cycles + instruction.cycles + additional_cycles;
-
-            if self.registers.is_pc_dirty == false {
-                self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
-            } else {
-                self.registers.is_pc_dirty = false;
-            }
-
-            self.instructions_executed += 1;
-            self.interrupt()?;
+            cycles += self.step_instruction()?;
 
             if cycles >= cycles_threshold {
                 break;
             }
         }
 
-        /***
-         * let duration = Instant::now() - start;
-         * let duration_micro_sec = duration.as_micros();
-         * let instruction_executed = self.instructions_executed - previous_instructions_executed;
-         * let instructions_per_sec = instruction_executed as f64 / duration.as_secs_f64();
-         * let cycles_consumed = cycles - previous_cycles;
-         * let cycle_per_sec = cycles_consumed as f64 / duration.as_secs_f64();
-         *
-         * debug!("CPU: executed {} instructions in {} μs ({:.0} / sec)",
-         *    instruction_executed, duration_micro_sec, instructions_per_sec);
-         *
-         * debug!("CPU: {} cycles in {} μs ({:.0} / sec)",
-         *    cycles_consumed, duration_micro_sec, cycle_per_sec);
-         ***/
-
         Ok(cycles)
+    }
+
+    fn run_until_breakpoint(&mut self, start_cycle: u32, credits: u32, breakpoints: Box<dyn Breakpoints>) -> Result<(u32, bool), CpuError> {
+        let mut cycles = start_cycle;
+        let cycles_threshold = start_cycle + credits;
+
+        loop {
+            if breakpoints.contains(self.registers.pc) {
+                return Ok((cycles, true));
+            } else {
+                cycles +=self.step_instruction()?;
+
+                if cycles >= cycles_threshold {
+                    break;
+                }
+            }
+        }
+
+        Ok((cycles, false))
     }
 
     fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError> {
@@ -359,10 +381,24 @@ impl CPU for Cpu6502 {
 
         Ok(())
     }
+
+    fn snapshot(&self) -> Box<dyn CpuSnapshot> {
+        let snapshot = Cpu6502Snapshot {
+            a: self.registers.a,
+            x: self.registers.x,
+            y: self.registers.y,
+            p: self.registers.p,
+            sp: self.registers.sp,
+            pc: self.registers.pc,
+            total_cycles: 0,
+        };
+
+        Box::new(snapshot)
+    }
 }
 
 impl Cpu6502 {
-    pub fn new(bus: Rc<RefCell<dyn Bus>>, tracing: bool, trace_file: Option<File>) -> Self {
+    pub fn new(bus: Rc<RefCell<dyn Bus>>) -> Self {
         Cpu6502 {
             registers: Registers {
                 a: 0,
@@ -375,8 +411,6 @@ impl Cpu6502 {
             },
             bus,
             instructions_executed: 0,
-            tracing,
-            tracer: Tracer::new_with_file(trace_file),
             interrupt: InterruptMask::default()
         }
     }
@@ -407,7 +441,7 @@ impl Cpu6502 {
 
         //debug!("CPU: dumping instruction table:");
         //for (index, p) in table.iter().enumerate() {
-            //debug!("CPU:    0x{:02X}: {:?}, {} bytes, {} cycles", index, p.opcode, p.bytes, p.cycles);
+        //debug!("CPU:    0x{:02X}: {:?}, {} bytes, {} cycles", index, p.opcode, p.bytes, p.cycles);
         //}
 
         table
@@ -691,7 +725,7 @@ impl Cpu6502 {
     }
 
     fn execute_instruction(&mut self, instruction: &Instruction, operand: &Operand) -> Result<u32, CpuError> {
-        
+
         //debug!("CPU: executing instruction: opcode: {:?}, addressing mode: {:?}, operand: {}",
         //    instruction.opcode, instruction.addressing_mode, operand);
 
@@ -736,6 +770,7 @@ impl Cpu6502 {
     }
 }
 
+#[allow(dead_code)]
 pub struct Tracer {
     trace: RefCell<Box<dyn Write>>,
 }
@@ -746,6 +781,7 @@ impl Debug for Tracer {
     }
 }
 
+#[allow(dead_code)]
 impl Tracer {
     fn new_with_file(trace_file: Option<File>) -> Tracer {
         let writer: Box<dyn Write> = if let Some(trace_file) = trace_file {

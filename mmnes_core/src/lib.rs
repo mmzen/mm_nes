@@ -42,3 +42,5 @@ mod input_external;
 mod sound_playback_passive;
 pub mod nes_samples;
 mod mmc1_cartridge;
+pub mod cpu_debugger;
+mod cpu_6502_debugger;

@@ -67,5 +67,9 @@ impl Display for ApuError {
 pub trait APU {
     fn reset(&mut self) -> Result<(), ApuError>;
     fn panic(&self, error: &ApuError);
+
+    /// Run the APU for exactly the specified number of cycles, returning the new cycle count after execution and an optional NesSample buffer containing samples.  
+    /// ```start_cycle```: current cycle of execution,  
+    /// ```credits```: the number of cycles available to execute instructions
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError>;
 }
