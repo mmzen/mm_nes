@@ -10,7 +10,7 @@ use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
-use crate::nes_message::NesMessage::{DebugStepInstruction, Keys, LoadRom, Pause, Reset};
+use crate::nes_message::NesMessage::{DebugRun, DebugStepInstruction, DebugStop, Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
 
 pub struct NesFrontUI {
@@ -32,7 +32,8 @@ pub struct NesFrontUI {
     rom_file_dialog: FileDialog,
     rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
-    nes_frame: Option<ColorImage>
+    nes_frame: Option<ColorImage>,
+    debug_window: bool,
 }
 
 impl NesFrontUI {
@@ -93,6 +94,7 @@ impl NesFrontUI {
             rom_file: None,
             error: None,
             nes_frame: None,
+            debug_window: false,
         }
     }
 
@@ -259,8 +261,8 @@ impl App for NesFrontUI {
                     let _ = self.send_message(Pause);
                 }
 
-                if ui.button("step instruction").clicked() {
-                    let _ = self.send_message(DebugStepInstruction);
+                if ui.button("attach debugger").clicked() {
+                    self.debug_window = !self.debug_window;
                 }
 
                 ui.end_row();
@@ -291,11 +293,38 @@ impl App for NesFrontUI {
                         });
                 });
 
-
             egui::Window::new("debug")
                 .default_pos(pos2(300.0, 22.0))
                 .resizable(true)
+                .open(&mut (self.debug_window.clone()))
                 .show(ctx, |ui| {
+                    Grid::new("edit_grid").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
+                        if ui.button("Run").clicked() {
+                            let _ = self.send_message(DebugRun);
+                        }
+
+                        if ui.button("Stop").clicked() {
+                            let _ = self.send_message(DebugStop);
+                        }
+
+                        if ui.button("Step Instruction").clicked() {
+                            let _ = self.send_message(DebugStepInstruction);
+                        }
+
+                        if ui.button("Step Into").clicked() {
+                        }
+
+                        if ui.button("Step Out").clicked() {
+                        }
+
+                        if ui.button("Step Over").clicked() {
+                        }
+
+                        ui.end_row();
+                    });
+
+
+
                     let mut snapshots = self.read_debug_messages();
                     let len = snapshots.len();
                     let skip = if len > 10 { len - 10 } else { 0 };

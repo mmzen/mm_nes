@@ -1,5 +1,7 @@
 use std::fs::File;
 use std::hint::spin_loop;
+use std::ops::ControlFlow;
+use std::ops::ControlFlow::{Break, Continue};
 use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread::sleep;
@@ -27,6 +29,23 @@ enum NesFrontEndState {
     RunningDebugStepInstruction, // XXX to change for a global state: RunningDebug, and specific state in the debugger
     Paused,
     Idle,
+}
+
+impl NesFrontEndState {
+    fn toggle_pause(&self) -> Option<Self> {
+        match self {
+            NesFrontEndState::Running => Some(NesFrontEndState::Paused),
+            NesFrontEndState::Paused  => Some(NesFrontEndState::Running),
+            _ => None,
+        }
+    }
+
+    fn toggle_debug_step(&self) -> Self {
+        match self {
+            NesFrontEndState::RunningDebugStepInstruction => NesFrontEndState::Running,
+            _ => NesFrontEndState::RunningDebugStepInstruction,
+        }
+    }
 }
 
 pub struct NesFrontEnd {
@@ -159,67 +178,64 @@ impl NesFrontEnd {
         Ok(())
     }
 
+    fn process_message(&mut self, message: NesMessage) -> Result<ControlFlow<NesFrontEndState, ()>, NesConsoleError> {
+        match message {
+            NesMessage::Keys(key_events) => {
+                self.nes.set_input(key_events)?;
+                Ok(Continue(()))
+            },
 
-    /***
-     * this crap needs to be changed by a proper design pattern
-     ***/
+            NesMessage::Reset => {
+                self.nes.reset()?;
+                Ok(Break(self.state.clone()))
+            },
+
+            NesMessage::Pause => {
+                let state = self.state.toggle_pause();
+
+                if let Some(s) = state {
+                    Ok(Break(s))
+                } else {
+                    Ok(Continue(()))
+                }
+            },
+
+            NesMessage::LoadRom(rom_file) => {
+                self.args.rom_file = rom_file;
+
+                match NesFrontEnd::create_emulator(&self.args) {
+                    Ok(nes) => {
+                        self.nes = nes;
+                        Ok(Break(NesFrontEndState::Running))
+                    }
+                    Err(e) => {
+                        self.send_error(e);
+                        Ok(Break(NesFrontEndState::Idle))
+                    }
+                }
+            },
+
+            NesMessage::DebugStepInstruction => {
+                let state = self.state.toggle_debug_step();
+                Ok(Break(state))
+            },
+
+            other => {
+                warn!("unexpected message: {:?}", other);
+                Ok(Continue(()))
+            }
+        }
+    }
+
     fn read_and_process_messages(&mut self) -> Result<NesFrontEndState, NesConsoleError> {
         while let Ok(message) = self.command_rx.try_recv() {
-            match message {
-                NesMessage::Keys(key_events) => {
-                    self.nes.set_input(key_events)?;
-                },
-
-                NesMessage::Reset => {
-                    self.nes.reset()?;
-                    return Ok(self.state.clone());
-                },
-
-                NesMessage::Pause => {
-                    match self.state {
-                        NesFrontEndState::Running => {
-                            return Ok(NesFrontEndState::Paused);
-                        },
-                        NesFrontEndState::Paused => {
-                            return Ok(NesFrontEndState::Running);
-                        },
-                        _ => {
-                            continue;
-                        }
-                    }
-                },
-
-                NesMessage::LoadRom(rom_file) => {
-                    self.args.rom_file = rom_file;
-                    let result = NesFrontEnd::create_emulator(&self.args);
-
-                    return match result {
-                        Ok(nes) => {
-                            self.nes = nes;
-                            Ok(NesFrontEndState::Running)
-                        },
-                        Err(e) => {
-                            self.send_error(e);
-                            Ok(NesFrontEndState::Idle)
-                        },
-                    }
-                },
-
-                NesMessage::DebugStepInstruction => {
-                    match self.state {
-                        NesFrontEndState::RunningDebugStepInstruction => {
-                            return Ok(NesFrontEndState::Running);
-                        },
-                        _ => {
-                            return Ok(NesFrontEndState::RunningDebugStepInstruction);
-                        }
-                    }
-                },
-
-                _ => {
-                    warn!("unexpected message: {:?}", message);
+            match self.process_message(message)? {
+                Continue(()) => {}
+                Break(next_state) => {
+                    self.state = next_state.clone();
+                    return Ok(next_state);
                 }
-            };
+            }
         }
 
         Ok(self.state.clone())
@@ -247,7 +263,7 @@ impl NesFrontEnd {
 
                     if let Some(frame) = frame {
                         self.process_frame(frame)?;
-                        next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+                        //next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration); // XXX probably wrong
                     }
 
                     if let Some(samples) = samples {

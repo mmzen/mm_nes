@@ -12,6 +12,8 @@ pub enum NesMessage {
     Pause,
     Reset,
     DebugStepInstruction,
+    DebugRun,
+    DebugStop,
     Error(NesConsoleError),
     CpuSnapshot(Box<dyn CpuSnapshot>),
 }

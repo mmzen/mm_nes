@@ -213,7 +213,6 @@ impl Display for Cpu6502Snapshot {
     }
 }
 
-
 #[derive(Debug)]
 pub struct Cpu6502 {
     registers: Registers,
