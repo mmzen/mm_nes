@@ -327,7 +327,7 @@ impl CPU for Cpu6502 {
         }
 
         self.instructions_executed += 1;
-        self.interrupt()?;
+        self.interrupt()?;  // some additional cycles are probably needed here (7?)
 
         Ok(cycles)
     }

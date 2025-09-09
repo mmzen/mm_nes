@@ -13,6 +13,7 @@ use mmnes_core::bus_device::BusDeviceType::{APU, CARTRIDGE, CONTROLLER, PPU, WRA
 use mmnes_core::cartridge::CartridgeType::NROM;
 use mmnes_core::controller::ControllerType::StandardController;
 use mmnes_core::cpu::CpuType::NES6502;
+use mmnes_core::cpu_debugger::DebugCommand;
 use mmnes_core::loader::LoaderType::INESV2;
 use mmnes_core::memory::MemoryType::StandardMemory;
 use mmnes_core::nes_console::{NesConsole, NesConsoleBuilder, NesConsoleError};
@@ -26,7 +27,7 @@ use crate::sound_player::SoundPlayer;
 #[derive(Debug, Clone, PartialEq)]
 enum NesFrontEndState {
     Running,
-    RunningDebugStepInstruction, // XXX to change for a global state: RunningDebug, and specific state in the debugger
+    Debug(DebugCommand),
     Paused,
     Idle,
 }
@@ -37,13 +38,6 @@ impl NesFrontEndState {
             NesFrontEndState::Running => Some(NesFrontEndState::Paused),
             NesFrontEndState::Paused  => Some(NesFrontEndState::Running),
             _ => None,
-        }
-    }
-
-    fn toggle_debug_step(&self) -> Self {
-        match self {
-            NesFrontEndState::RunningDebugStepInstruction => NesFrontEndState::Running,
-            _ => NesFrontEndState::RunningDebugStepInstruction,
         }
     }
 }
@@ -136,30 +130,25 @@ impl NesFrontEnd {
             next
         }
     }
-    fn send_message(&self, message: NesMessage) -> Result<(), NesConsoleError> {
-        match self.frame_tx.try_send(message) {
+    fn try_send_common(tx: &SyncSender<NesMessage>, label: &str, message: NesMessage) -> Result<(), NesConsoleError> {
+        match tx.try_send(message) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(_message)) => {
-                warn!("NES frontend channel is full, dropping message ...");
+            Err(TrySendError::Full(_)) => {
+                warn!("NES frontend {} channel is full, dropping message ...", label);
                 Ok(())
-            },
-            Err(TrySendError::Disconnected(message)) => {
-                Err(NesConsoleError::ChannelCommunication(format!("UI is gone ... {:?}", message)))
             }
+            Err(TrySendError::Disconnected(msg)) => Err(
+                NesConsoleError::ChannelCommunication(format!("UI is gone ... {:?}", msg))
+            ),
         }
     }
 
+    fn send_message(&self, message: NesMessage) -> Result<(), NesConsoleError> {
+        NesFrontEnd::try_send_common(&self.frame_tx, "frame", message)
+    }
+
     fn send_debug_message(&self, message: NesMessage) -> Result<(), NesConsoleError> {
-        match self.debug_tx.try_send(message) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_message)) => {
-                warn!("NES frontend debug channel is full, dropping message ...");
-                Ok(())
-            },
-            Err(TrySendError::Disconnected(message)) => {
-                Err(NesConsoleError::ChannelCommunication(format!("UI is gone ... {:?}", message)))
-            }
-        }
+        NesFrontEnd::try_send_common(&self.debug_tx, "debug", message)
     }
 
     fn send_error(&self, error: NesConsoleError) {
@@ -215,8 +204,8 @@ impl NesFrontEnd {
                 }
             },
 
-            NesMessage::DebugStepInstruction => {
-                let state = self.state.toggle_debug_step();
+            NesMessage::Debug(command) => {
+                let state = NesFrontEndState::Debug(command);
                 Ok(Break(state))
             },
 
@@ -258,12 +247,12 @@ impl NesFrontEnd {
                     next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
                 },
 
-                NesFrontEndState::RunningDebugStepInstruction => {
+                NesFrontEndState::Debug(DebugCommand::StepInstruction) => {
                     let (frame, samples, snapshot) = self.nes.step_instruction()?;
 
                     if let Some(frame) = frame {
                         self.process_frame(frame)?;
-                        //next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration); // XXX probably wrong
+                        next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
                     }
 
                     if let Some(samples) = samples {
@@ -271,11 +260,22 @@ impl NesFrontEnd {
                     }
 
                     self.send_debug_message(NesMessage::CpuSnapshot(snapshot))?;
+                    self.state = NesFrontEndState::Debug(DebugCommand::Stop);
+                },
 
-                    //println!("snapshot: {}", snapshot);
-                    //sleep(Duration::from_secs(1));
-                }
-                _ => {}
+                NesFrontEndState::Debug(DebugCommand::Stop) => {},
+
+                NesFrontEndState::Debug(DebugCommand::Run) => {
+                    self.state = NesFrontEndState::Running;
+                },
+
+                NesFrontEndState::Debug(command) => {
+                    warn!("unsupported debug command: {:?}", command);
+                    self.state = NesFrontEndState::Debug(DebugCommand::Stop);
+                },
+
+                NesFrontEndState::Paused => {},
+                NesFrontEndState::Idle => {}
             }
         }
     }

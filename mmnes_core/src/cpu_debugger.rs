@@ -9,6 +9,20 @@ pub enum DebugStopReason {
     CreditsConsumed(u32),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DebugCommand {
+    StepInstruction,
+    Stop,
+    Run,
+    StepInto,
+    StepOut,
+    StepOver,
+    AddBreakpoint(u16),
+    DeleteBreakpoint(u16),
+    DeleteAllBreakpoints,
+    ListBreakpoints,
+}
+
 pub trait CpuSnapshot: Debug + Display + Send {
     fn pc(&self) -> u16;
     fn a(&self) -> u8;

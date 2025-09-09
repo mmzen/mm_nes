@@ -5,13 +5,15 @@ use eframe::{egui, App, Frame};
 use eframe::egui::{pos2, vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
 use egui_file_dialog::FileDialog;
 use log::{error, warn};
-use mmnes_core::cpu_debugger::CpuSnapshot;
+use mmnes_core::cpu_debugger::{CpuSnapshot, DebugCommand};
 use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
-use crate::nes_message::NesMessage::{DebugRun, DebugStepInstruction, DebugStop, Keys, LoadRom, Pause, Reset};
+use crate::nes_message::NesMessage::{Debug, Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
+
+const MAX_CPU_SNAPSHOTS: usize = 12;
 
 pub struct NesFrontUI {
     frame_rx: Receiver<NesMessage>,
@@ -34,6 +36,7 @@ pub struct NesFrontUI {
     error: Option<NesConsoleError>,
     nes_frame: Option<ColorImage>,
     debug_window: bool,
+    cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
 }
 
 impl NesFrontUI {
@@ -95,6 +98,7 @@ impl NesFrontUI {
             error: None,
             nes_frame: None,
             debug_window: false,
+            cpu_snapshots: Vec::new(),
         }
     }
 
@@ -150,6 +154,7 @@ impl NesFrontUI {
                     self.error = Some(e);
                     self.nes_frame = Some(image);
                 },
+
                 NesMessage::Frame(nes_frame) => {
                     self.frame_counter = nes_frame.count();
                     self.nes_frame = Some(ColorImage::from_rgba_unmultiplied([nes_frame.width(), nes_frame.height()], nes_frame.pixels()))
@@ -161,7 +166,7 @@ impl NesFrontUI {
         Ok(())
     }
 
-    fn read_debug_messages(&mut self) -> Vec<Box<dyn CpuSnapshot>> {
+    fn read_debug_messages(&mut self) -> Result<(), NesConsoleError> {
         let mut snapshots: Vec<Box<dyn CpuSnapshot>> = Vec::new();
 
         while let Ok(message) = self.debug_rx.try_recv() {
@@ -175,7 +180,14 @@ impl NesFrontUI {
             snapshots.push(snapshot);
         }
 
-        snapshots
+        self.cpu_snapshots.append(&mut snapshots);
+        let len = self.cpu_snapshots.len();
+        if len > MAX_CPU_SNAPSHOTS {
+            let idx = len - MAX_CPU_SNAPSHOTS - 1;
+            self.cpu_snapshots.drain(0..idx);
+        }
+
+        Ok(())
     }
 
     fn send_message(&mut self, message: NesMessage) -> Result<(), NesConsoleError> {
@@ -298,45 +310,44 @@ impl App for NesFrontUI {
                 .resizable(true)
                 .open(&mut (self.debug_window.clone()))
                 .show(ctx, |ui| {
-                    Grid::new("edit_grid").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
+                    Grid::new("debug_command").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
                         if ui.button("Run").clicked() {
-                            let _ = self.send_message(DebugRun);
+                            let _ = self.send_message(Debug(DebugCommand::Run));
                         }
 
                         if ui.button("Stop").clicked() {
-                            let _ = self.send_message(DebugStop);
+                            let _ = self.send_message(Debug(DebugCommand::Stop));
                         }
 
                         if ui.button("Step Instruction").clicked() {
-                            let _ = self.send_message(DebugStepInstruction);
+                            let _ = self.send_message(Debug(DebugCommand::StepInstruction));
                         }
 
                         if ui.button("Step Into").clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepInto));
                         }
 
                         if ui.button("Step Out").clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepOut));
                         }
 
                         if ui.button("Step Over").clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepOver));
                         }
 
                         ui.end_row();
                     });
 
-
-
-                    let mut snapshots = self.read_debug_messages();
-                    let len = snapshots.len();
+                    let _ = self.read_debug_messages();
+                    let len = self.cpu_snapshots.len();
                     let skip = if len > 10 { len - 10 } else { 0 };
 
-                    Grid::new("some_unique_id").show(ui, |ui| {
-                        snapshots.iter().enumerate().skip(skip).for_each(|(n, snapshot)| {
+                    Grid::new("cpu_snapshots").show(ui, |ui| {
+                        self.cpu_snapshots.iter().enumerate().skip(skip).for_each(|(_, snapshot)| {
                             ui.label(format!("{}", snapshot));
                             ui.end_row();
                         });
                     });
-
-                    snapshots.clear();
                 });
         });
 

@@ -72,7 +72,7 @@ impl CyclesCounter {
     }
 
     fn ahead(&self, other: &CyclesCounter, threshold: u32) -> bool {
-        (self.current - other.current) >= threshold
+        self.current.saturating_sub(other.current) >= threshold
     }
 }
 
@@ -145,9 +145,9 @@ impl NesConsole {
     /// 
     pub fn step_instruction(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>, Box<dyn CpuSnapshot>), NesConsoleError> {
 
-        self.cpu_counter.current = self.cpu.borrow_mut().step_instruction()?;
+        self.cpu_counter.current += self.cpu.borrow_mut().step_instruction()?;
         let snapshot = self.cpu.borrow().snapshot();
-        
+
         let (out_frame ,out_samples) = self.catch_up_ppu_and_apu(PPU_CYCLES_THRESHOLD, APU_CYCLES_THRESHOLD)?;
         self.cpu_counter.previous = self.cpu_counter.current;
 
@@ -194,11 +194,18 @@ impl NesConsole {
         Ok(())
     }
 
+    fn reset_counters(&mut self) {
+        self.cpu_counter = CyclesCounter::new(CYCLE_START_SEQUENCE);
+        self.apu_counter = CyclesCounter::new(0);
+        self.ppu_counter = CyclesCounter::new(0);
+    }
+
     pub fn reset(&mut self) -> Result<(), NesConsoleError> {
         self.cpu.borrow_mut().reset()?;
         self.ppu.borrow_mut().reset()?;
         self.apu.borrow_mut().reset()?;
 
+        self.reset_counters();
         self.reset_entry_point()?;
 
         Ok(())
