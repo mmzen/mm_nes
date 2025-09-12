@@ -77,7 +77,7 @@ impl<B: Breakpoints + Default, C: CpuSnapshot> Cpu6502Debugger<B, C> {
         if let Some(ref snapshot) = self.cpu_snapshot {
             println!("PC={:04X} A={:02X} X={:02X} Y={:02X} SP={:04X} P={:02X} CYCLES={}",
                      snapshot.pc(), snapshot.a(), snapshot.x(), snapshot.y(), snapshot.sp(), snapshot.p(),
-                     snapshot.total_cycles());
+                     snapshot.cycles());
         } else {
             println!("No CPU snapshot available");
         }

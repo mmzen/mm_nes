@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Display};
 
-
 #[derive(Debug, Clone, Copy)]
 pub enum DebugStopReason {
     None,
@@ -23,14 +22,18 @@ pub enum DebugCommand {
     ListBreakpoints,
 }
 
-pub trait CpuSnapshot: Debug + Display + Send {
+pub trait CpuSnapshot: Debug + Send {
     fn pc(&self) -> u16;
     fn a(&self) -> u8;
     fn x(&self) -> u8;
     fn y(&self) -> u8;
     fn sp(&self) -> u8;
     fn p(&self) -> u8;
-    fn total_cycles(&self) -> u64;
+    fn instruction(&self) -> Vec<u8>;
+    fn mnemonic(&self) -> String;
+    fn is_illegal(&self) -> bool;
+    fn operand(&self) -> String;
+    fn cycles(&self) -> u32;
 }
 
 pub trait Breakpoints: Debug {

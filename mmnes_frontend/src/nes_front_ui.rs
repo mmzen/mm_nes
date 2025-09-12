@@ -2,8 +2,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
+use eframe::egui::{pos2, vec2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui};
 use egui_file_dialog::FileDialog;
+use egui_extras::{Column, TableBody, TableBuilder, TableRow};
 use log::{error, warn};
 use mmnes_core::cpu_debugger::{CpuSnapshot, DebugCommand};
 use mmnes_core::util::measure_exec_time;
@@ -13,7 +14,7 @@ use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Debug, Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
 
-const MAX_CPU_SNAPSHOTS: usize = 12;
+const MAX_CPU_SNAPSHOTS: usize = 256;
 
 pub struct NesFrontUI {
     frame_rx: Receiver<NesMessage>,
@@ -36,6 +37,7 @@ pub struct NesFrontUI {
     error: Option<NesConsoleError>,
     nes_frame: Option<ColorImage>,
     debug_window: bool,
+    debug_is_running: bool,
     cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
 }
 
@@ -98,6 +100,7 @@ impl NesFrontUI {
             error: None,
             nes_frame: None,
             debug_window: false,
+            debug_is_running: false,
             cpu_snapshots: Vec::new(),
         }
     }
@@ -239,6 +242,223 @@ impl NesFrontUI {
 
         title
     }
+
+    fn monospace(s: &str) -> RichText {
+        RichText::new(s).monospace()
+    }
+
+    fn header(s: &str) -> RichText {
+        RichText::new(s).monospace().strong()
+    }
+
+    fn disasm_line(field: &str, is_current: bool) -> RichText {
+        let mut rt = NesFrontUI::monospace(field);
+        if is_current {
+            rt = rt.color(Color32::from_rgb(255, 128, 0));
+        };
+
+        rt
+    }
+
+    fn debugger_header_bar(&self, ui: &mut Ui) {
+        let rom = self.rom_file
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("(no ROM)");
+
+        let pc  = self.cpu_snapshots.last()
+            .map(|s| format!("0x{:04X}", s.pc()))
+            .unwrap_or_else(|| "------".to_string());
+
+        ui.horizontal(|ui| {
+             ui.label(RichText::new("  NES Debugger").strong());
+            ui.separator();
+
+            ui.label(RichText::new(format!("ROM: {}", rom)).monospace());
+
+            ui.separator();
+            ui.label(RichText::new(format!("PC: {}", pc)).monospace());
+        });
+    }
+
+    fn debugger_icon_button(&self, ui: &mut Ui, glyph: &str, tooltip: &str, fill: Color32) -> Response {
+        let rt  = RichText::new(glyph).monospace().size(16.0);
+        let button = Button::new(rt).fill(fill).min_size(vec2(28.0, 24.0));
+        let response = ui.add(button);
+        response.on_hover_text(tooltip)
+    }
+
+    fn debugger_toolbar(&mut self, ui: &mut Ui) {
+        ui.input(|i| {
+            if i.modifiers.shift && i.key_pressed(Key::F5) {
+                self.debug_is_running = false;
+                let _ = self.send_message(Debug(DebugCommand::Stop));
+            } else if i.key_pressed(Key::F5) {
+                self.debug_is_running = true;
+                let _ = self.send_message(Debug(DebugCommand::Run));
+            }
+            if i.modifiers.shift && i.key_pressed(Key::F11) {
+                let _ = self.send_message(Debug(DebugCommand::StepOut));
+            } else if i.key_pressed(Key::F11) {
+                let _ = self.send_message(Debug(DebugCommand::StepInto));
+            }
+            if i.key_pressed(Key::F10) {
+                let _ = self.send_message(Debug(DebugCommand::StepOver));
+            }
+            if i.key_pressed(Key::F7) {
+                let _ = self.send_message(Debug(DebugCommand::StepInstruction));
+            }
+        });
+
+        let run_fill  = Color32::from_rgb( 34, 132,  76);
+        let stop_fill = Color32::from_rgb(178,  54,  54);
+        let default_fill = Color32::from_rgb(66, 66, 72);
+
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+
+            // Group 1: Run / Stop
+            egui::Frame::group(ui.style())
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        let run_color = if self.debug_is_running { run_fill } else { Color32::from_rgb(42, 96, 66) };
+                        if self.debugger_icon_button(ui, "▶", "Run / Continue (F5)", run_color).clicked() {
+                            self.debug_is_running = true;
+                            let _ = self.send_message(Debug(DebugCommand::Run));
+                        }
+
+                        if self.debugger_icon_button(ui, "⏹", "Stop (Shift+F5)", stop_fill).clicked() {
+                            self.debug_is_running = false;
+                            let _ = self.send_message(Debug(DebugCommand::Stop));
+                        }
+                    });
+                });
+
+            // Group 2: Stepping
+            egui::Frame::group(ui.style())
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        if self.debugger_icon_button(ui, "⤼", "Step Over (F10)", default_fill).clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepOver));
+                        }
+                        if self.debugger_icon_button(ui, "↘", "Step Into (F11)", default_fill).clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepInto));
+                        }
+                        if self.debugger_icon_button(ui, "↗", "Step Out (Shift+F11)", default_fill).clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepOut));
+                        }
+                        if self.debugger_icon_button(ui, "⏭", "Step Instruction (F7)", default_fill).clicked() {
+                            let _ = self.send_message(Debug(DebugCommand::StepInstruction));
+                        }
+                    });
+                });
+
+            // Group 3: Others
+            egui::Frame::group(ui.style())
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        if self.debugger_icon_button(ui, "❌", "Clear Screen", default_fill).clicked() {
+                            self.cpu_snapshots.clear();
+                        }
+                    });
+                });
+        });
+    }
+
+    fn debugger_table_header(&self, mut header: TableRow) {
+        for item in ["", "PC", "BYTES", "OP", "OPERAND", "A", "X", "Y", "P", "SP", "CYCLES"] {
+            header.col(|ui| {ui.label(NesFrontUI::header(item)); });
+        }
+    }
+
+    fn debugger_table_body(&self, mut body: TableBody) {
+        let len  = self.cpu_snapshots.len();
+        let from = len.saturating_sub(MAX_CPU_SNAPSHOTS);
+
+        for (row_idx, snapshot) in self.cpu_snapshots.iter().enumerate().skip(from) {
+            let is_current = row_idx == len.saturating_sub(1);
+
+            let pc = format!("{:04X}", snapshot.pc());
+            let mut bytes = String::new();
+
+            for i in 0..snapshot.instruction().len() {
+                let o = format!(" {:02X}", i);
+                bytes.push_str(&o);
+            }
+
+            let mut op = snapshot.mnemonic();
+            let illegal  = snapshot.is_illegal();
+            if illegal {
+                op.push('*');
+            }
+            let operand  = snapshot.operand();
+            let a = format!("{:02X}", snapshot.a());
+            let x = format!("{:02X}", snapshot.x());
+            let y = format!("{:02X}", snapshot.y());
+            let p = format!("{:02X}", snapshot.p());
+            let sp = format!("{:02X}", snapshot.sp());
+            let cycles = format!("{}", snapshot.cycles());
+
+            body.row(20.0, |mut row| {
+                row.col(|ui| {
+                    let arrow = if is_current { "▶" } else { " " };
+                    ui.label(NesFrontUI::monospace(arrow));
+                });
+
+                for item in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter() {
+                    row.col(|ui| {
+                        let rt = NesFrontUI::disasm_line(&item, is_current);
+                        ui.label(rt);
+                    });
+                }
+            });
+        }
+    }
+
+    fn debugger_window(&mut self, ui: &mut Ui) {
+        let _ = self.read_debug_messages();
+
+        self.debugger_header_bar(ui);
+        ui.separator();
+        self.debugger_toolbar(ui);
+
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .id_salt("instructions_scroll")
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.scope(|ui| {
+                    ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+                    TableBuilder::new(ui)
+                        .striped(true)
+                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                        .column(Column::initial(16.0).at_least(16.0))   // ▶
+                        .column(Column::initial(60.0).at_least(60.0))   // PC
+                        .column(Column::initial(120.0).at_least(90.0))  // BYTES
+                        .column(Column::initial(72.0).at_least(60.0))   // MNEMONIC
+                        .column(Column::remainder())                          // OPERAND
+                        .column(Column::initial(38.0))                  // A
+                        .column(Column::initial(38.0))                  // X
+                        .column(Column::initial(38.0))                  // Y
+                        .column(Column::initial(46.0))                  // P
+                        .column(Column::initial(46.0))                  // SP
+                        .column(Column::remainder())                          // CYCLES
+                        .header(22.0, |header| {
+                            self.debugger_table_header(header);
+                        })
+                        .body(|body| {
+                            self.debugger_table_body(body);
+                        });
+                });
+            });
+    }
 }
 
 impl App for NesFrontUI {
@@ -305,49 +525,13 @@ impl App for NesFrontUI {
                         });
                 });
 
-            egui::Window::new("debug")
+            egui::Window::new("NES Debugger")
+                .title_bar(false)
                 .default_pos(pos2(300.0, 22.0))
                 .resizable(true)
-                .open(&mut (self.debug_window.clone()))
+                .open(&mut self.debug_window.clone())
                 .show(ctx, |ui| {
-                    Grid::new("debug_command").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
-                        if ui.button("Run").clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::Run));
-                        }
-
-                        if ui.button("Stop").clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::Stop));
-                        }
-
-                        if ui.button("Step Instruction").clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepInstruction));
-                        }
-
-                        if ui.button("Step Into").clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepInto));
-                        }
-
-                        if ui.button("Step Out").clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepOut));
-                        }
-
-                        if ui.button("Step Over").clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepOver));
-                        }
-
-                        ui.end_row();
-                    });
-
-                    let _ = self.read_debug_messages();
-                    let len = self.cpu_snapshots.len();
-                    let skip = if len > 10 { len - 10 } else { 0 };
-
-                    Grid::new("cpu_snapshots").show(ui, |ui| {
-                        self.cpu_snapshots.iter().enumerate().skip(skip).for_each(|(_, snapshot)| {
-                            ui.label(format!("{}", snapshot));
-                            ui.end_row();
-                        });
-                    });
+                   self.debugger_window(ui);
                 });
         });
 

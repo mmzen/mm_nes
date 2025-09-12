@@ -4,11 +4,12 @@ use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError, Interruptible};
-use crate::cpu_debugger::{Breakpoints, CpuSnapshot, DebugStopReason};
+use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
 use crate::memory::{MemoryError};
 
 //const CLOCK_HZ: usize = 1_789_773;
@@ -46,7 +47,13 @@ enum OpCode {
     SBX, SEC, SED, SEI, SHA, SHX, SHY, SLO, SRE, STA, STX, STY, TAX, TAY, TSX, TXA, TXS, TYA, XXX
 }
 
-#[derive(Debug)]
+impl Display for OpCode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone)]
 enum Operand {
     Byte(u8),
     Address(u16),
@@ -110,7 +117,7 @@ impl StatusFlag {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Registers  {
     a: u8,      // Accumulator register
     x: u8,      // Index register X
@@ -187,29 +194,133 @@ impl InterruptMask {
 
 #[derive(Clone, Debug)]
 struct Cpu6502Snapshot {
-    a: u8,
-    x: u8,
-    y: u8,
-    p: u8,
-    sp: u8,
-    pc: u16,
-    total_cycles: u64,
+    registers: Registers,
+    instruction: Vec<u8>,
+    mnemonic: String,
+    is_illegal: bool,
+    operand: String,
+    cycles: u32,
 }
 
 impl CpuSnapshot for Cpu6502Snapshot {
-    fn pc(&self) -> u16 { self.pc }
-    fn a(&self) -> u8 { self.a }
-    fn x(&self) -> u8 { self.x }
-    fn y(&self) -> u8 { self.y }
-    fn sp(&self) -> u8 { self.sp }
-    fn p(&self) -> u8 { self.p }
-    fn total_cycles(&self) -> u64 { self.total_cycles }
+    fn pc(&self) -> u16 { self.registers.pc }
+    fn a(&self) -> u8 { self.registers.a }
+    fn x(&self) -> u8 { self.registers.x }
+    fn y(&self) -> u8 { self.registers.y }
+    fn sp(&self) -> u8 { self.registers.sp }
+    fn p(&self) -> u8 { self.registers.p }
+
+    fn instruction(&self) -> Vec<u8> {
+        self.instruction.clone()
+    }
+
+    fn mnemonic(&self) -> String {
+        self.mnemonic.clone()
+    }
+
+    fn is_illegal(&self) -> bool {
+        self.is_illegal
+    }
+
+    fn operand(&self) -> String {
+        self.operand.clone()
+    }
+
+    fn cycles(&self) -> u32 {
+        self.cycles
+    }
 }
 
-impl Display for Cpu6502Snapshot {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "pc: 0x{:04X}, a: 0x{:02X}, x: 0x{:02X}, y: 0x{:02X}, sp: 0x{:02X}, p: 0x{:02X}, total_cycles: {}",
-               self.pc, self.a, self.x, self.y, self.sp, self.p, self.total_cycles)
+impl Cpu6502Snapshot {
+    
+    fn new(registers: Registers, bus: Rc<RefCell<dyn Bus>>, cycles: u32) -> Result<Cpu6502Snapshot, CpuError> {
+        let byte = bus.borrow().read_byte(registers.pc)?;
+        let instr0 = Cpu6502::decode_instruction(byte)?;
+        let instruction = Cpu6502Snapshot::build_instruction(instr0, &registers, bus.clone())?;
+        let mnemonic = instr0.opcode.to_string();
+        let oper0 = Cpu6502::fetch_operand(instr0, &registers, bus.clone())?;
+        let operand = Cpu6502Snapshot::build_operand(&instr0, &oper0, &registers, bus.clone())?;
+        
+        let snapshot = Cpu6502Snapshot {
+            registers,
+            instruction,
+            mnemonic,
+            is_illegal: instr0.category == InstructionCategory::Illegal,
+            operand,
+            cycles,
+        };
+        
+        Ok(snapshot)
+    }
+    
+    fn build_instruction(instruction: &Instruction, registers: &Registers, bus: Rc<RefCell<dyn Bus>>) -> Result<Vec<u8>, CpuError> {
+        let mut bytes = Vec::<u8>::new();
+        let byte0 = bus.borrow().trace_read_byte(registers.pc)?;
+        bytes.push(byte0);
+
+        for i in 1..instruction.bytes {
+            let byte = bus.borrow().trace_read_byte(registers.safe_pc_add(i as i16)?)?;
+            bytes.push(byte);
+        }
+
+        Ok(bytes)
+    }
+    
+    fn build_operand(instruction: &Instruction, operand: &Operand, registers: &Registers, bus: Rc<RefCell<dyn Bus>>) -> Result<String, CpuError> {
+        let operand = match (instruction.addressing_mode, operand, instruction.opcode) {
+            (AddressingMode::Implicit, _, _) =>
+                "".to_string(),
+
+            (AddressingMode::Accumulator, _, _) =>
+                "A".to_string(),
+
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
+                format!("${:04X}", *addr),
+
+            (AddressingMode::Absolute, Operand::Address(addr), _) =>
+                format!("${:04X} = {:02X}", *addr, bus.borrow().trace_read_byte(*addr)?),
+
+            (AddressingMode::Relative, Operand::Address(addr), _) =>
+                format!("${:04X}", *addr),
+
+            (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
+                format!("${:02X} = {:02X}", *addr as u8, bus.borrow().trace_read_byte(*addr)?),
+
+            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+
+            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+
+            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+
+            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+
+            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("(${:04X}) = {:04X}", *addr, *effective),
+
+            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(registers.x),
+                        *effective, bus.borrow().trace_read_byte(*effective)?),
+
+            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
+                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, (*effective).wrapping_sub(registers.y as u16),
+                        *effective, bus.borrow().trace_read_byte(*effective)?),
+
+            (AddressingMode::Immediate, Operand::Byte(byte), _) =>
+                format!("#${:02X}", byte),
+
+            _ => {
+                return Err(CpuError::InvalidOperand(
+                    format!("could not format instruction and operand: {:?}, {:?}", instruction.addressing_mode, operand)
+                ))
+            }
+        };
+
+        Ok(operand)
     }
 }
 
@@ -218,7 +329,8 @@ pub struct Cpu6502 {
     registers: Registers,
     bus: Rc<RefCell<dyn Bus>>,
     instructions_executed: u64,
-    interrupt: InterruptMask
+    interrupt: InterruptMask,
+    cycles: u32,
 }
 
 impl Interruptible for Cpu6502 {
@@ -315,7 +427,7 @@ impl CPU for Cpu6502 {
     fn step_instruction(&mut self) -> Result<u32, CpuError> {
         let byte = self.bus.borrow().read_byte(self.registers.pc)?;
         let instruction = Cpu6502::decode_instruction(byte)?;
-        let operand = self.fetch_operand(instruction)?;
+        let operand = Cpu6502::fetch_operand(instruction, &self.registers, self.bus.clone())?;
 
         let additional_cycles = self.execute_instruction(&instruction, &operand)?;
         let cycles = instruction.cycles + additional_cycles;
@@ -327,6 +439,8 @@ impl CPU for Cpu6502 {
         }
 
         self.instructions_executed += 1;
+        self.cycles += cycles;
+
         self.interrupt()?;  // some additional cycles are probably needed here (7?)
 
         Ok(cycles)
@@ -337,7 +451,7 @@ impl CPU for Cpu6502 {
         let cycles_threshold = start_cycle + credits;
 
         loop {
-            cycles += self.step_instruction()?;
+            cycles += self.step_instruction_with_cycles(start_cycle)?;
 
             if cycles >= cycles_threshold {
                 break;
@@ -355,7 +469,7 @@ impl CPU for Cpu6502 {
             if breakpoints.contains(self.registers.pc) {
                 return Ok((cycles, true));
             } else {
-                cycles +=self.step_instruction()?;
+                cycles +=self.step_instruction_with_cycles(start_cycle)?;
 
                 if cycles >= cycles_threshold {
                     break;
@@ -381,18 +495,19 @@ impl CPU for Cpu6502 {
         Ok(())
     }
 
-    fn snapshot(&self) -> Box<dyn CpuSnapshot> {
-        let snapshot = Cpu6502Snapshot {
+    fn snapshot(&self) -> Result<Box<dyn CpuSnapshot>, CpuError> {
+        let registers = Registers {
             a: self.registers.a,
             x: self.registers.x,
             y: self.registers.y,
             p: self.registers.p,
             sp: self.registers.sp,
             pc: self.registers.pc,
-            total_cycles: 0,
+            is_pc_dirty: false,
         };
-
-        Box::new(snapshot)
+        
+        let snapshot = Cpu6502Snapshot::new(registers, self.bus.clone(), self.cycles)?;
+        Ok(Box::new(snapshot))
     }
 }
 
@@ -410,7 +525,8 @@ impl Cpu6502 {
             },
             bus,
             instructions_executed: 0,
-            interrupt: InterruptMask::default()
+            interrupt: InterruptMask::default(),
+            cycles: 0,
         }
     }
 
@@ -490,13 +606,13 @@ impl Cpu6502 {
         Ok(value)
     }
 
-    fn read_word_with_page_wrap(&self, addr: u16) -> Result<u16, MemoryError> {
-        let lo = self.bus.borrow().read_byte(addr)?;
+    fn read_word_with_page_wrap(addr: u16, bus: Rc<RefCell<dyn Bus>>) -> Result<u16, MemoryError> {
+        let lo = bus.borrow().read_byte(addr)?;
 
         let hi = if (addr & 0xFF) == 0xFF {
-            self.bus.borrow().read_byte(addr & 0xFF00)?
+            bus.borrow().read_byte(addr & 0xFF00)?
         } else {
-            self.bus.borrow().read_byte(addr.wrapping_add(1))?
+            bus.borrow().read_byte(addr.wrapping_add(1))?
         };
 
         Ok((hi as u16) << 8 | lo as u16)
@@ -586,7 +702,7 @@ impl Cpu6502 {
         value
     }
 
-    fn is_page_crossed(&self, addr1: u16, addr2: u16) -> bool {
+    fn is_page_crossed(addr1: u16, addr2: u16) -> bool {
         let page1 = addr1 & 0xFF00;
         let page2 = addr2 & 0xFF00;
 
@@ -594,7 +710,7 @@ impl Cpu6502 {
     }
 
     fn get_cycles_by_page_crossing_for_conditional_jump(&self, source: u16, destination: u16) -> u32 {
-        if self.is_page_crossed(source, destination) { 2 } else { 1 }
+        if Cpu6502::is_page_crossed(source, destination) { 2 } else { 1 }
     }
 
     fn get_cycles_by_page_crossing_for_load(&self, operand: &Operand) -> u32 {
@@ -614,7 +730,7 @@ impl Cpu6502 {
         Ok(instruction)
     }
 
-    fn fetch_operand(&self, instruction: &Instruction) -> Result<Operand, CpuError> {
+    fn fetch_operand(instruction: &Instruction, registers: &Registers, bus: Rc<RefCell<dyn Bus>>) -> Result<Operand, CpuError> {
 
         //debug!("CPU: fetching operand for instruction: {:?}, {:?}", instruction.opcode, instruction.addressing_mode);
 
@@ -628,91 +744,91 @@ impl Cpu6502 {
             },
 
             AddressingMode::Immediate => {
-                let pc = self.registers.safe_pc_add(1)?;
+                let pc = registers.safe_pc_add(1)?;
 
-                Operand::Byte(self.bus.borrow().read_byte(pc)?)
+                Operand::Byte(bus.borrow().read_byte(pc)?)
             },
 
             AddressingMode::Absolute => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_word(pc)?;
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_word(pc)?;
 
                 Operand::Address(addr)
             },
 
             AddressingMode::AbsoluteIndexedX => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_word(pc)?;
-                let effective_addr = addr.wrapping_add(self.registers.x as u16);
-                let page_crossed = self.is_page_crossed(addr, effective_addr);
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_word(pc)?;
+                let effective_addr = addr.wrapping_add(registers.x as u16);
+                let page_crossed = Cpu6502::is_page_crossed(addr, effective_addr);
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr, page_crossed)
             }
 
             AddressingMode::AbsoluteIndexedY => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_word(pc)?;
-                let effective_addr = addr.wrapping_add(self.registers.y as u16);
-                let page_crossed = self.is_page_crossed(addr, effective_addr);
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_word(pc)?;
+                let effective_addr = addr.wrapping_add(registers.y as u16);
+                let page_crossed = Cpu6502::is_page_crossed(addr, effective_addr);
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr, page_crossed)
             }
 
             AddressingMode::ZeroPage => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_byte(pc)?;
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_byte(pc)?;
 
                 Operand::Address(addr as u16)
             },
 
             AddressingMode::ZeroPageIndexedX => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_byte(pc)?;
-                let effective_addr = addr.wrapping_add(self.registers.x) as u16;
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_byte(pc)?;
+                let effective_addr = addr.wrapping_add(registers.x) as u16;
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, false)
             },
 
             AddressingMode::ZeroPageIndexedY => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_byte(pc)?;
-                let effective_addr = addr.wrapping_add(self.registers.y) as u16;
-                let page_crossed = self.is_page_crossed(addr as u16, effective_addr);
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_byte(pc)?;
+                let effective_addr = addr.wrapping_add(registers.y) as u16;
+                let page_crossed = Cpu6502::is_page_crossed(addr as u16, effective_addr);
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, page_crossed)
             },
 
             AddressingMode::Indirect => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_word(pc)?;
-                let effective_addr = self.read_word_with_page_wrap(addr)?;
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_word(pc)?;
+                let effective_addr = Cpu6502::read_word_with_page_wrap(addr, bus)?;
 
                 Operand::AddressAndEffectiveAddress(addr, effective_addr, false)
             },
 
             AddressingMode::IndirectIndexedX => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_byte(pc)?;
-                let indirect_addr = addr.wrapping_add(self.registers.x);
-                let effective_addr = self.read_word_with_page_wrap(indirect_addr as u16)?;
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_byte(pc)?;
+                let indirect_addr = addr.wrapping_add(registers.x);
+                let effective_addr = Cpu6502::read_word_with_page_wrap(indirect_addr as u16, bus)?;
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, false)
             },
 
             AddressingMode::IndirectIndexedY => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let addr = self.bus.borrow().read_byte(pc)?;
-                let indirect_addr = self.read_word_with_page_wrap(addr as u16)?;
-                let effective_addr = indirect_addr.wrapping_add(self.registers.y as u16);
-                let page_crossed = self.is_page_crossed(indirect_addr, effective_addr);
+                let pc = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().read_byte(pc)?;
+                let indirect_addr = Cpu6502::read_word_with_page_wrap(addr as u16, bus)?;
+                let effective_addr = indirect_addr.wrapping_add(registers.y as u16);
+                let page_crossed = Cpu6502::is_page_crossed(indirect_addr, effective_addr);
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, page_crossed)
             },
 
             AddressingMode::Relative => {
-                let pc = self.registers.safe_pc_add(1)?;
-                let offset = self.bus.borrow().read_byte(pc)? as i8;
-                let addr = self.registers.safe_pc_add(2)?;
+                let pc = registers.safe_pc_add(1)?;
+                let offset = bus.borrow().read_byte(pc)? as i8;
+                let addr = registers.safe_pc_add(2)?;
                 let addr= addr.wrapping_add_signed(offset as i16);
 
                 Operand::Address(addr)
@@ -721,6 +837,13 @@ impl Cpu6502 {
 
         //debug!("CPU: fetched operand: {}", operand);
         Ok(operand)
+    }
+
+    fn step_instruction_with_cycles(&mut self, start_cycle: u32) -> Result<u32, CpuError> {
+        let cycles = self.step_instruction()?;
+        self.cycles = start_cycle + cycles;
+
+        Ok(cycles)
     }
 
     fn execute_instruction(&mut self, instruction: &Instruction, operand: &Operand) -> Result<u32, CpuError> {
@@ -769,117 +892,7 @@ impl Cpu6502 {
     }
 }
 
-#[allow(dead_code)]
-pub struct Tracer {
-    trace: RefCell<Box<dyn Write>>,
-}
-
-impl Debug for Tracer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Tracer").finish()
-    }
-}
-
-#[allow(dead_code)]
-impl Tracer {
-    fn new_with_file(trace_file: Option<File>) -> Tracer {
-        let writer: Box<dyn Write> = if let Some(trace_file) = trace_file {
-            Box::new(trace_file)
-        } else {
-            Box::new(io::stdout())
-        };
-
-        Tracer { trace: RefCell::new(writer) }
-    }
-
-    fn trace(&self, cpu: &Cpu6502, instruction: &Instruction, operand: &Operand, cycle: u32) -> Result<(), CpuError> {
-        let a = format!("{:04X}", cpu.registers.pc);
-
-        let mut b = format!("{:02X}", cpu.bus.borrow().trace_read_byte(cpu.registers.pc)?);
-        for i in 1..instruction.bytes {
-            let o = format!(" {:02X}", cpu.bus.borrow().trace_read_byte(cpu.registers.safe_pc_add(i as i16)?)?);
-            b.push_str(&o);
-        }
-
-        let c0 = if instruction.category == InstructionCategory::Illegal { "*" } else { " " };
-        let c1 = format!("{:?}", &instruction.opcode);
-
-        let c2 = match (&instruction.addressing_mode, operand, &instruction.opcode) {
-            (AddressingMode::Implicit, _, _) => { "".to_string() },
-
-            (AddressingMode::Accumulator, _, _) =>
-                "A".to_string(),
-
-            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
-            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
-                format!("${:04X}", *addr),
-
-            (AddressingMode::Absolute, Operand::Address(addr), _) =>
-                format!("${:04X} = {:02X}", *addr, cpu.bus.borrow().trace_read_byte(*addr)?),
-
-            (AddressingMode::Relative, Operand::Address(addr), _) =>
-                format!("${:04X}", *addr),
-
-            (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
-                format!("${:02X} = {:02X}", *addr as u8, cpu.bus.borrow().trace_read_byte(*addr)?),
-
-            (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
-
-            (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
-
-            (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
-
-            (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
-
-            (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("(${:04X}) = {:04X}", *addr, effective),
-
-            (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(cpu.registers.x),
-                        *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
-
-            (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, effective.wrapping_sub(cpu.registers.y as u16),
-                        *effective, cpu.bus.borrow().trace_read_byte(*effective)?),
-
-            (AddressingMode::Immediate, Operand::Byte(byte), _) =>
-                format!("#${:02X}", byte),
-
-            _ => {
-                return Err(CpuError::InvalidOperand(
-                    format!("could not format instruction and operand: {:?}, {:?}",
-                            &instruction.addressing_mode, operand)
-                ))
-            }
-        };
-        let c = format!("{}{} {}", c0, c1, c2);
-
-        let d = format!("A:{:02X} X:{:02X} Y:{:02X} P:{:02X} SP:{:02X}",
-                        cpu.registers.a, cpu.registers.x, cpu.registers.y, cpu.registers.p, cpu.registers.sp);
-
-        let e = format!("PPU:{:>3},{:>3}", 0, 0);
-
-        let f = format!("CYC:{}", cycle);
-
-        let mut output = self.trace.borrow_mut();
-
-        write!(output, "{:<6}{:<9}", a, b)?;
-        write!(output, "{:<padding$}", c, padding = 33)?;
-        write!(output, "{:<26}", d)?;
-        write!(output, "{:<12}", e)?;
-        write!(output, "{}", f)?;
-
-        writeln!(output)?;
-
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Instruction {
     opcode: OpCode,
     addressing_mode: AddressingMode,

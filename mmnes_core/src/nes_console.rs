@@ -146,7 +146,7 @@ impl NesConsole {
     pub fn step_instruction(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>, Box<dyn CpuSnapshot>), NesConsoleError> {
 
         self.cpu_counter.current += self.cpu.borrow_mut().step_instruction()?;
-        let snapshot = self.cpu.borrow().snapshot();
+        let snapshot = self.cpu.borrow().snapshot()?;
 
         let (out_frame ,out_samples) = self.catch_up_ppu_and_apu(PPU_CYCLES_THRESHOLD, APU_CYCLES_THRESHOLD)?;
         self.cpu_counter.previous = self.cpu_counter.current;

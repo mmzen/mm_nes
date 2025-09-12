@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
 #[cfg(test)]
 use mockall::mock;
-use crate::cpu_debugger::{Breakpoints, CpuSnapshot, DebugStopReason};
+use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
 
 #[derive(Default, Debug, Clone)]
 pub enum CpuType {
@@ -37,7 +37,7 @@ pub trait CPU: Interruptible + Debug {
     
     fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError>;
     fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
-    fn snapshot(&self) -> Box<dyn CpuSnapshot>;
+    fn snapshot(&self) -> Result<Box<dyn CpuSnapshot>, CpuError>;
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ mock! {
         fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError>;
         fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError>;
         fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
-        fn snapshot(&self) -> Box<dyn CpuSnapshot>;
+        fn snapshot(&self) -> Result<Box<dyn CpuSnapshot>, CpuError>;
         fn step_instruction(&mut self) -> Result<u32, CpuError>;
         fn run_until_breakpoint(&mut self, start_cycle: u32, credits: u32, breakpoints: Box<dyn Breakpoints>) -> Result<(u32, bool), CpuError>;
     }
