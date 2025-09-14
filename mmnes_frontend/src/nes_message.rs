@@ -14,4 +14,5 @@ pub enum NesMessage {
     Debug(DebugCommand),
     Error(NesConsoleError),
     CpuSnapshot(Box<dyn CpuSnapshot>),
+    CpuSnapshotSet(Vec<Box<dyn CpuSnapshot>>)
 }

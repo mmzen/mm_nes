@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui};
+use eframe::egui::{pos2, vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui};
 use egui_file_dialog::FileDialog;
 use egui_extras::{Column, TableBody, TableBuilder, TableRow};
 use log::{error, warn};
@@ -38,7 +38,7 @@ pub struct NesFrontUI {
     nes_frame: Option<ColorImage>,
     debug_window: bool,
     debug_is_running: bool,
-    cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
+    cpu_snapshots: Vec<Box<dyn CpuSnapshot>>
 }
 
 impl NesFrontUI {
@@ -101,7 +101,7 @@ impl NesFrontUI {
             nes_frame: None,
             debug_window: false,
             debug_is_running: false,
-            cpu_snapshots: Vec::new(),
+            cpu_snapshots: Vec::new()
         }
     }
 
@@ -170,24 +170,19 @@ impl NesFrontUI {
     }
 
     fn read_debug_messages(&mut self) -> Result<(), NesConsoleError> {
-        let mut snapshots: Vec<Box<dyn CpuSnapshot>> = Vec::new();
-
         while let Ok(message) = self.debug_rx.try_recv() {
-            let snapshot = match message {
-                NesMessage::CpuSnapshot(snapshot) => {
-                    snapshot
-                },
-                _ => { panic!("unexpected message: {:?}", message); }
+            match message {
+                NesMessage::CpuSnapshot(snap) => self.cpu_snapshots.push(snap),
+                NesMessage::CpuSnapshotSet(snaps) => self.cpu_snapshots.extend(snaps),
+                _ => panic!("unexpected message: {:?}", message),
             };
-
-            snapshots.push(snapshot);
         }
 
-        self.cpu_snapshots.append(&mut snapshots);
+        let hard_cap = MAX_CPU_SNAPSHOTS;
         let len = self.cpu_snapshots.len();
-        if len > MAX_CPU_SNAPSHOTS {
-            let idx = len - MAX_CPU_SNAPSHOTS - 1;
-            self.cpu_snapshots.drain(0..idx);
+        if len > hard_cap {
+            let keep_from = len - hard_cap;
+            self.cpu_snapshots.drain(0..keep_from);
         }
 
         Ok(())
@@ -375,12 +370,16 @@ impl NesFrontUI {
         }
     }
 
-    fn debugger_table_body(&self, mut body: TableBody) {
-        let len  = self.cpu_snapshots.len();
-        let from = len.saturating_sub(MAX_CPU_SNAPSHOTS);
+    fn debugger_table_body(&mut self, body: TableBody) {
+        let total = self.cpu_snapshots.len();
+        if total == 0 {
+            return;
+        }
 
-        for (row_idx, snapshot) in self.cpu_snapshots.iter().enumerate().skip(from) {
-            let is_current = row_idx == len.saturating_sub(1);
+        body.rows(20.0, total, |mut row| {
+            let idx = row.index();
+            let snapshot = &self.cpu_snapshots[row.index()];
+            let is_current = (idx + 1) == total;
 
             let pc = format!("{:04X}", snapshot.pc());
             let mut bytes = String::new();
@@ -391,11 +390,11 @@ impl NesFrontUI {
             }
 
             let mut op = snapshot.mnemonic();
-            let illegal  = snapshot.is_illegal();
-            if illegal {
+            if snapshot.is_illegal() {
                 op.push('*');
             }
-            let operand  = snapshot.operand();
+
+            let operand = snapshot.operand();
             let a = format!("{:02X}", snapshot.a());
             let x = format!("{:02X}", snapshot.x());
             let y = format!("{:02X}", snapshot.y());
@@ -403,20 +402,17 @@ impl NesFrontUI {
             let sp = format!("{:02X}", snapshot.sp());
             let cycles = format!("{}", snapshot.cycles());
 
-            body.row(20.0, |mut row| {
-                row.col(|ui| {
-                    let arrow = if is_current { "▶" } else { " " };
-                    ui.label(NesFrontUI::monospace(arrow));
-                });
-
-                for item in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter() {
-                    row.col(|ui| {
-                        let rt = NesFrontUI::disasm_line(&item, is_current);
-                        ui.label(rt);
-                    });
-                }
+            row.col(|ui| {
+                ui.label(Self::monospace(if is_current { "▶" } else { " " }));
             });
-        }
+
+            for item in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter() {
+                row.col(|ui| {
+                    let rt = NesFrontUI::disasm_line(&item, is_current);
+                    ui.label(rt);
+                });
+            }
+        });
     }
 
     fn debugger_window(&mut self, ui: &mut Ui) {
@@ -493,7 +489,7 @@ impl App for NesFrontUI {
                     let _ = self.send_message(Pause);
                 }
 
-                if ui.button("attach debugger").clicked() {
+                if ui.button("Debugger").clicked() {
                     self.debug_window = !self.debug_window;
                 }
 
@@ -554,7 +550,7 @@ impl App for NesFrontUI {
                     Key::ArrowRight => { self.input.push_back(KeyEvent { key: NES_CONTROLLER_KEY_RIGHT, pressed: *pressed }); true }
                     _ => false,
                 };
-                return !handled; // drop handled events so egui won’t react
+                return !handled;
             }
             true
         });

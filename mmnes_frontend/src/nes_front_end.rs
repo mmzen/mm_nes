@@ -230,6 +230,7 @@ impl NesFrontEnd {
         Ok(self.state.clone())
     }
 
+
     pub fn run(&mut self) -> Result<(), NesConsoleError> {
         let frame_duration = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
         let mut next_frame = Instant::now() + frame_duration;
@@ -266,7 +267,12 @@ impl NesFrontEnd {
                 NesFrontEndState::Debug(DebugCommand::Stop) => {},
 
                 NesFrontEndState::Debug(DebugCommand::Run) => {
-                    self.state = NesFrontEndState::Running;
+                    let (frame, samples, snapshots) = self.nes.step_frame_debug()?;
+                    self.process_frame(frame)?;
+                    self.process_samples(samples, &mut sound_player)?;
+
+                    next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+                    self.send_debug_message(NesMessage::CpuSnapshotSet(snapshots))?;
                 },
 
                 NesFrontEndState::Debug(command) => {

@@ -153,6 +153,28 @@ impl NesConsole {
 
         Ok((out_frame, out_samples, snapshot))
     }
+    
+    pub fn step_frame_debug(&mut self) -> Result<(NesFrame, NesSamples, Vec<Box<dyn CpuSnapshot>>), NesConsoleError> {
+        let out_frame: Option<NesFrame>;
+        let mut out_samples: NesSamples = NesSamples::default();
+        let mut snapshots: Vec<Box<dyn CpuSnapshot>> = Vec::new();
+
+        loop {
+            let (frame, samples, snapshot) = self.step_instruction()?;
+            snapshots.push(snapshot);
+            
+            if let Some(s) = samples {
+                out_samples.append(s);
+            }
+
+            if frame.is_some() {
+                out_frame = frame;
+                break;
+            }
+        };
+
+        Ok((out_frame.unwrap(), out_samples, snapshots))
+    }
 
     pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
         let credits = CYCLE_CREDITS;
