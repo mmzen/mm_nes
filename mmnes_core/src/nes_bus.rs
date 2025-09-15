@@ -157,10 +157,6 @@ impl BusDevice for OpenBus {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         (0x000, 0x0000 + (BUS_ADDRESSABLE_SIZE - 1) as u16)
     }
-
-    fn is_addr_in_address_space(&self, _: u16) -> bool {
-        panic!("open bus does not have an address range");
-    }
 }
 
 impl Memory for OpenBus {

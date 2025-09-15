@@ -160,10 +160,6 @@ impl BusDevice for UnromCartridge {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         CPU_ADDRESS_SPACE
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        CPU_ADDRESS_SPACE.0 <= addr && addr <= CPU_ADDRESS_SPACE.1
-    }
 }
 
 impl Cartridge for UnromCartridge {

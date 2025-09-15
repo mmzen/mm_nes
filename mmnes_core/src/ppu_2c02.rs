@@ -600,10 +600,6 @@ impl BusDevice for Ppu2c02 {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         PPU_EXTERNAL_ADDRESS_SPACE
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        PPU_EXTERNAL_ADDRESS_SPACE.0 <= addr && addr <= PPU_EXTERNAL_ADDRESS_SPACE.1
-    }
 }
 
 impl DmaDevice for Ppu2c02 {

@@ -94,10 +94,6 @@ impl BusDevice for MemoryBank {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         self.address_space
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        self.address_space.0 <= addr && addr <= self.address_space.1
-    }
 }
 
 impl MemoryBank {

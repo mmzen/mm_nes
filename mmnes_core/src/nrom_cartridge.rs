@@ -146,10 +146,6 @@ impl BusDevice for NromCartridge {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         CPU_ADDRESS_SPACE
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        self.prg_rom.borrow().is_addr_in_address_space(addr)
-    }
 }
 
 impl Cartridge for NromCartridge {

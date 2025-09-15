@@ -86,9 +86,4 @@ impl BusDevice for MemoryMirror {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         self.address_space
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        debug!("==> 0x{:04X}: 0x{:04X} - 0x{:04X}", addr, self.address_space.0, self.address_space.1);
-        self.address_space.0 <= addr && addr <= self.address_space.1
-    }
 }

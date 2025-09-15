@@ -117,10 +117,6 @@ impl<T: Input> BusDevice for StandardController<T> {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         CONTROLLER_ADDRESS_SPACE
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        CONTROLLER_ADDRESS_SPACE.0 <= addr && addr <= CONTROLLER_ADDRESS_SPACE.1
-    }
 }
 
 impl<T: Input> StandardController<T> {

@@ -43,8 +43,6 @@ fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2
     chr_rom.expect_get_virtual_address_range().returning(|| CHR_MEMORY_RANGE);
     chr_rom.expect_get_device_type().returning(|| BusDeviceType::WRAM(MemoryType::StandardMemory));
     chr_rom.expect_get_name().returning(|| CHR_NAME.to_string());
-    chr_rom.expect_is_addr_in_address_space().returning(|addr|
-        addr == VALID_CH_ROM_ADDRESS || addr == VALID_CH_ROM_ADDRESS + 1);
     chr_rom.expect_read_byte().returning(move |addr| {
         if addr == VALID_CH_ROM_ADDRESS || addr == VALID_CH_ROM_ADDRESS + 1 {
             Ok(VALID_DATA_VALUE) }
@@ -87,17 +85,6 @@ fn test_initialize_ppu() {
 
     let mut ppu = create_ppu();
     assert_eq!(ppu.initialize().unwrap(), PPU_EXTERNAL_MEMORY_SIZE);
-}
-
-#[test]
-fn is_in_boundary_works() {
-    init();
-
-    let ppu = create_ppu();
-
-    assert_eq!(ppu.is_addr_in_address_space(0x0000), false);
-    assert_eq!(ppu.is_addr_in_address_space(0x4000), false);
-    assert_eq!(ppu.is_addr_in_address_space(0x2008), true);
 }
 
 #[test]

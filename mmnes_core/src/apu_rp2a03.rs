@@ -724,10 +724,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03
     fn get_virtual_address_range(&self) -> (u16, u16) {
         APU_EXTERNAL_ADDRESS_SPACE
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        APU_EXTERNAL_ADDRESS_SPACE.0 <= addr && addr <= APU_EXTERNAL_ADDRESS_SPACE.1
-    }
 }
 
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, U, V> {

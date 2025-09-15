@@ -60,10 +60,6 @@ impl BusDevice for MemoryPalette {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         self.memory.get_virtual_address_range()
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        self.memory.is_addr_in_address_space(addr)
-    }
 }
 
 impl MemoryPalette {

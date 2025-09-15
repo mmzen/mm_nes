@@ -1561,8 +1561,16 @@ impl Instruction {
         Ok(0)
     }
 
-    fn ane_or_x_plus_and_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn ane_or_x_plus_and_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        let value = cpu.get_operand_byte_value(operand)?;
+        let result = 0xFF & cpu.registers.x & value;
+
+        cpu.registers.a = result;
+
+        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
+
+        Ok(0)
     }
 
     fn arr_and_oper_plus_ror(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
@@ -1605,8 +1613,11 @@ impl Instruction {
         Err(CpuError::Halted(cpu.registers.pc))
     }
 
-    fn las_lda_tsx_oper(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn las_lda_tsx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        self.lda_load_accumulator_with_memory(cpu, operand)?;
+        self.tsx_transfer_stack_pointer_to_index_x(cpu, operand)?;
+
+        Ok(0)
     }
 
     fn lax_lda_oper_plus_ldx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
@@ -1660,31 +1671,58 @@ impl Instruction {
         Ok(0)
     }
 
-    fn sha_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    /***
+     * holy shit
+     * https://github.com/100thCoin/TriCNES/blob/main/Emulator.cs#L6379
+     * missing:
+     *  - Sometimes the actual value is stored in memory and the AND with <addrhi+1> part drops
+     *   off (ex. SHY becomes true STY). This happens when the RDY line is used to stop the CPU
+     *   (pulled low), i.e. either a 'bad line' or sprite DMA starts, in the second half of the cycle
+     *   following the opcode fetch. 'For example, it never seems to occur if either the screen is
+     *   blanked or C128 2MHz mode is enabled.' For this reason you will have to choose a
+     *   suitable target address based on what kind of values you want to store. 'For $fe00
+     *   there's no problem, since anding with $ff is the same as not anding. And if your values don't
+     *   mind whether they are anded, e.g. if they are all $00-$7f for shy $7e00,x, there is also no
+     *   difference whether the and works or not.'
+     *  - https://hitmen.c02.at/files/docs/c64/NoMoreSecrets-NMOS6510UnintendedOpcodes-20162412.pdf
+     ***/
+    fn sha_stores_a_and_x_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+
+        let (addr, page_crossed) = match (self.addressing_mode, operand) {
+            (_, Operand::AddressAndEffectiveAddress(_, effective_addr, page_crossed)) => (effective_addr, *page_crossed),
+            (_, Operand::Address(addr)) => (addr, false),
+            _ => { unreachable!() }
+        };
+        let hi = (*addr >> 8) as u8;
+
+        if page_crossed == true {
+            let hi_unstable = hi & cpu.registers.x;
+            let target = (*addr & 0x00FF) | ((hi_unstable as u16) << 8);
+            let value = cpu.registers.a & (cpu.registers.x | 0xF5) & hi;
+            cpu.bus.borrow_mut().write_byte(target, value)?;
+        } else {
+            let value = cpu.registers.a & cpu.registers.x & hi.wrapping_add(1);
+            cpu.bus.borrow_mut().write_byte(*addr, value)?;
+        };
+
+        Ok(0)
     }
 
     fn shx_stores_x_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
-        let lo = (addr & 0xFF) as u8;
-        let hi = (addr >> 8) as u8;
-        let result = cpu.registers.x & hi.wrapping_add(1);
-        let target = ((result as u16) << 8) | lo as u16;
+        let strange_h1 = ((addr >> 8) as u8).wrapping_add(1);
+        let result = cpu.registers.x & strange_h1;
 
-        cpu.bus.borrow_mut().write_byte(target, result)?;
-
+        cpu.bus.borrow_mut().write_byte(addr, result)?;
         Ok(0)
     }
 
     fn shy_stores_y_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         let addr = cpu.get_operand_word_value(operand)?;
-        let lo = (addr & 0xFF) as u8;
-        let hi = (addr >> 8) as u8;
-        let result = cpu.registers.y & hi.wrapping_add(1);
-        let target = ((result as u16) << 8) | lo as u16;
+        let strange_h1 = ((addr >> 8) as u8).wrapping_add(1);
+        let result = cpu.registers.y & strange_h1;
 
-        cpu.bus.borrow_mut().write_byte(target, result)?;
-
+        cpu.bus.borrow_mut().write_byte(addr, result)?;
         Ok(0)
     }
 
@@ -1700,8 +1738,11 @@ impl Instruction {
         Ok(0)
     }
 
-    fn tax_puts_a_and_x_in_sp_and_stores_a_and_x_and_at_addr(&self, _: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        Err(CpuError::Unimplemented(format!("{:?}", self.opcode)))
+    fn tax_puts_a_and_x_in_sp_and_stores_a_and_x_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        self.sha_stores_a_and_x_and_at_addr(cpu, operand)?;
+        cpu.registers.sp = cpu.registers.a & cpu.registers.x;
+
+        Ok(0)
     }
 
     fn usbc_sbc_oper_plus_nop(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {

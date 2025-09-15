@@ -147,10 +147,6 @@ impl BusDevice for SwitchableMemory {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         self.virtual_addr_space
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        self.phys_addr_half_lo.0 <= addr && addr <= self.phys_addr_half_hi.1
-    }
 }
 
 #[derive(Debug)]
@@ -467,10 +463,6 @@ impl BusDevice for Mmc1Cartridge {
 
     fn get_virtual_address_range(&self) -> (u16, u16) {
         (PRG_ROM_ADDRESS_SPACE.0, PRG_ROM_ADDRESS_SPACE.1)
-    }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        PRG_ROM_ADDRESS_SPACE.0 <= addr && addr <= PRG_ROM_ADDRESS_SPACE.1
     }
 }
 

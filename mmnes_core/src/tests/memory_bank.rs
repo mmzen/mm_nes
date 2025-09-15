@@ -31,17 +31,6 @@ fn test_initialize_memory_with_specified_size() {
 }
 
 #[test]
-fn is_in_boundary_works() {
-    init();
-
-    let memory_bank = create_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
-
-    assert_eq!(memory_bank.is_addr_in_address_space(0x0000), false);
-    assert_eq!(memory_bank.is_addr_in_address_space(0x2000), false);
-    assert_eq!(memory_bank.is_addr_in_address_space(0x1ABC), true);
-}
-
-#[test]
 fn read_byte_out_of_range_error() {
     init();
 

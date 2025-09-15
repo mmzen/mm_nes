@@ -55,10 +55,6 @@ impl BusDevice for PpuDma {
     fn get_virtual_address_range(&self) -> (u16, u16) {
         PPU_DMA_ADDRESS_SPACE
     }
-
-    fn is_addr_in_address_space(&self, addr: u16) -> bool {
-        PPU_DMA_ADDRESS_SPACE.0 <= addr && addr <= PPU_DMA_ADDRESS_SPACE.1
-    }
 }
 
 impl Memory for PpuDma {

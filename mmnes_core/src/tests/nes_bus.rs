@@ -36,45 +36,37 @@ fn create_bus_device_with_expectations(memory_size: usize, memory_range: (u16, u
 
     match (request, length) {
         (RequestType::Read, RequestData::Byte(value)) => {
-            device.expect_is_addr_in_address_space().returning(|_| true);
             device.expect_read_byte().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
         },
 
         (RequestType::Write, RequestData::Byte(value)) => {
-            device.expect_is_addr_in_address_space().returning(|_| true);
             device.expect_write_byte().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::Read, RequestData::Word(value)) => {
-            device.expect_is_addr_in_address_space().returning(|_| true);
             device.expect_read_word().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
         },
 
         (RequestType::Write, RequestData::Word(value)) => {
-            device.expect_is_addr_in_address_space().returning(|_| true);
             device.expect_write_word().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Byte(value)) => {
-            device.expect_is_addr_in_address_space().returning(|_| true);
             device.expect_read_byte().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
             device.expect_write_byte().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Word(value)) => {
-            device.expect_is_addr_in_address_space().returning(|_| true);
             device.expect_read_word().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
             device.expect_write_word().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
         },
 
         (RequestType::Unmapped, _) => {
-            device.expect_is_addr_in_address_space().returning(|_| false);
             device.expect_read_byte().times(0);
             device.expect_write_byte().times(0);
         },
 
         (RequestType::None, _) => {
-            device.expect_is_addr_in_address_space().returning(|_| false);
         },
 
         _ => {}
