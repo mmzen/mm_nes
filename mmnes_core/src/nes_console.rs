@@ -117,7 +117,7 @@ impl NesConsole {
         let mut out_samples: Option<NesSamples> = None;
 
         if self.cpu_counter.ahead(&self.ppu_counter, ppu_threshold) {
-            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.cpu_counter.current, ppu_threshold)?;
+            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, ppu_threshold)?;
             if let Some(f) = ppu_frame {
                 out_frame = Some(f);
             }
@@ -127,7 +127,7 @@ impl NesConsole {
         }
 
         if self.cpu_counter.ahead(&self.apu_counter, apu_threshold) {
-            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.cpu_counter.current, apu_threshold)?;
+            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, apu_threshold)?;
             out_samples = apu_samples;
 
             self.apu_counter.current = apu_cycles;

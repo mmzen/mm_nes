@@ -229,7 +229,7 @@ impl CpuSnapshot for Cpu6502Snapshot {
 }
 
 impl Cpu6502Snapshot {
-    
+
     fn new(registers: Registers, bus: Rc<RefCell<dyn Bus>>, cycles: u32) -> Result<Cpu6502Snapshot, CpuError> {
         let byte = bus.borrow().read_byte(registers.pc)?;
         let instr0 = Cpu6502::decode_instruction(byte)?;
@@ -502,7 +502,7 @@ impl CPU for Cpu6502 {
             pc: self.registers.pc,
             is_pc_dirty: false,
         };
-        
+
         let snapshot = Cpu6502Snapshot::new(registers, self.bus.clone(), self.cycles)?;
         Ok(Box::new(snapshot))
     }
