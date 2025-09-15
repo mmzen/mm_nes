@@ -261,10 +261,10 @@ impl NesFrontEnd {
                     }
 
                     self.send_debug_message(NesMessage::CpuSnapshot(snapshot))?;
-                    self.state = NesFrontEndState::Debug(DebugCommand::Stop);
+                    self.state = NesFrontEndState::Debug(DebugCommand::Paused);
                 },
 
-                NesFrontEndState::Debug(DebugCommand::Stop) => {},
+                NesFrontEndState::Debug(DebugCommand::Paused) => {},
 
                 NesFrontEndState::Debug(DebugCommand::Run) => {
                     let (frame, samples, snapshots) = self.nes.step_frame_debug()?;
@@ -275,9 +275,13 @@ impl NesFrontEnd {
                     self.send_debug_message(NesMessage::CpuSnapshotSet(snapshots))?;
                 },
 
+                NesFrontEndState::Debug(DebugCommand::Detach) => {
+                    self.state = NesFrontEndState::Running;
+                },
+
                 NesFrontEndState::Debug(command) => {
                     warn!("unsupported debug command: {:?}", command);
-                    self.state = NesFrontEndState::Debug(DebugCommand::Stop);
+                    self.state = NesFrontEndState::Debug(DebugCommand::Paused);
                 },
 
                 NesFrontEndState::Paused => {},

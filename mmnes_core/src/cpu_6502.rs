@@ -875,7 +875,17 @@ impl Cpu6502 {
 
     fn irq(&mut self) -> Result<(), CpuError> {
         self.interrupt_preamble()?;
-        self.registers.pc = self.bus.borrow().read_word(IRQ_VECTOR)?;
+
+        let addr = if self.is_asserted_nmi()? {
+            self.clear_nmi()?;
+            self.bus.borrow().read_word(NMI_VECTOR)?
+        } else {
+            self.bus.borrow().read_word(BRK_VECTOR)?
+        };
+
+        self.registers.pc = addr;
+
+        //self.registers.pc = self.bus.borrow().read_word(IRQ_VECTOR)?;
         //debug!("CPU: IRQ interrupt: program counter: 0x{:04X}", self.registers.pc);
 
         Ok(())
@@ -1063,12 +1073,9 @@ impl Instruction {
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
 
-        // XXX not sure about this
         let addr = if cpu.is_asserted_nmi()? {
             cpu.clear_nmi()?;
             cpu.bus.borrow().read_word(NMI_VECTOR)?
-        } else if cpu.is_asserted_irq()? && !cpu.registers.get_status(StatusFlag::InterruptDisable) {
-            cpu.bus.borrow().read_word(IRQ_VECTOR)?
         } else {
             cpu.bus.borrow().read_word(BRK_VECTOR)?
         };

@@ -1,4 +1,4 @@
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy)]
 pub enum DebugStopReason {
@@ -11,7 +11,7 @@ pub enum DebugStopReason {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DebugCommand {
     StepInstruction,
-    Stop,
+    Paused,
     Run,
     StepInto,
     StepOut,
@@ -20,6 +20,7 @@ pub enum DebugCommand {
     DeleteBreakpoint(u16),
     DeleteAllBreakpoints,
     ListBreakpoints,
+    Detach
 }
 
 pub trait CpuSnapshot: Debug + Send {

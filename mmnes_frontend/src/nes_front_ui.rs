@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui};
+use eframe::egui::{pos2, vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui, UiKind};
 use egui_file_dialog::FileDialog;
 use egui_extras::{Column, TableBody, TableBuilder, TableRow};
 use log::{error, warn};
@@ -37,7 +37,8 @@ pub struct NesFrontUI {
     error: Option<NesConsoleError>,
     nes_frame: Option<ColorImage>,
     debug_window: bool,
-    debug_is_running: bool,
+    is_debug_running: bool,
+    is_debugger_attached: bool,
     cpu_snapshots: Vec<Box<dyn CpuSnapshot>>
 }
 
@@ -100,7 +101,8 @@ impl NesFrontUI {
             error: None,
             nes_frame: None,
             debug_window: false,
-            debug_is_running: false,
+            is_debug_running: false,
+            is_debugger_attached: false,
             cpu_snapshots: Vec::new()
         }
     }
@@ -274,6 +276,9 @@ impl NesFrontUI {
 
             ui.separator();
             ui.label(RichText::new(format!("PC: {}", pc)).monospace());
+
+            ui.separator();
+            ui.label(RichText::new(format!("ATTACHED: {}", self.is_debugger_attached.to_string().to_uppercase())).monospace());
         });
     }
 
@@ -287,10 +292,10 @@ impl NesFrontUI {
     fn debugger_toolbar(&mut self, ui: &mut Ui) {
         ui.input(|i| {
             if i.modifiers.shift && i.key_pressed(Key::F5) {
-                self.debug_is_running = false;
-                let _ = self.send_message(Debug(DebugCommand::Stop));
+                self.is_debug_running = false;
+                let _ = self.send_message(Debug(DebugCommand::Paused));
             } else if i.key_pressed(Key::F5) {
-                self.debug_is_running = true;
+                self.is_debug_running = true;
                 let _ = self.send_message(Debug(DebugCommand::Run));
             }
             if i.modifiers.shift && i.key_pressed(Key::F11) {
@@ -307,7 +312,7 @@ impl NesFrontUI {
         });
 
         let run_fill  = Color32::from_rgb( 34, 132,  76);
-        let stop_fill = Color32::from_rgb(178,  54,  54);
+        let pause_fill = Color32::from_rgb(178, 54, 54);
         let default_fill = Color32::from_rgb(66, 66, 72);
 
         ui.horizontal(|ui| {
@@ -318,15 +323,18 @@ impl NesFrontUI {
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
-                        let run_color = if self.debug_is_running { run_fill } else { Color32::from_rgb(42, 96, 66) };
+                        let run_color = if self.is_debug_running { run_fill } else { Color32::from_rgb(42, 96, 66) };
+
                         if self.debugger_icon_button(ui, "▶", "Run / Continue (F5)", run_color).clicked() {
-                            self.debug_is_running = true;
+                            self.is_debug_running = true;
+                            self.is_debugger_attached = true;
                             let _ = self.send_message(Debug(DebugCommand::Run));
                         }
 
-                        if self.debugger_icon_button(ui, "⏹", "Stop (Shift+F5)", stop_fill).clicked() {
-                            self.debug_is_running = false;
-                            let _ = self.send_message(Debug(DebugCommand::Stop));
+                        if self.debugger_icon_button(ui, "⏸", "Pause (Shift+F5)", pause_fill).clicked() {
+                            self.is_debug_running = false;
+                            self.is_debugger_attached = true;
+                            let _ = self.send_message(Debug(DebugCommand::Paused));
                         }
                     });
                 });
@@ -336,7 +344,7 @@ impl NesFrontUI {
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
-                        if self.debugger_icon_button(ui, "⤼", "Step Over (F10)", default_fill).clicked() {
+                        if self.debugger_icon_button(ui, "↔", "Step Over (F10)", default_fill).clicked() {
                             let _ = self.send_message(Debug(DebugCommand::StepOver));
                         }
                         if self.debugger_icon_button(ui, "↘", "Step Into (F11)", default_fill).clicked() {
@@ -346,6 +354,8 @@ impl NesFrontUI {
                             let _ = self.send_message(Debug(DebugCommand::StepOut));
                         }
                         if self.debugger_icon_button(ui, "⏭", "Step Instruction (F7)", default_fill).clicked() {
+                            self.is_debug_running = false;
+                            self.is_debugger_attached = true;
                             let _ = self.send_message(Debug(DebugCommand::StepInstruction));
                         }
                     });
@@ -356,8 +366,33 @@ impl NesFrontUI {
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.horizontal_centered(|ui| {
-                        if self.debugger_icon_button(ui, "❌", "Clear Screen", default_fill).clicked() {
+                        if self.debugger_icon_button(ui, "🚫", "Clear Screen", default_fill).clicked() {
                             self.cpu_snapshots.clear();
+                        }
+
+                        if self.debugger_icon_button(ui, "🔌", "Attach / Detach", default_fill).clicked() {
+                            self.is_debug_running = !self.is_debug_running;
+                            self.is_debugger_attached = !self.is_debugger_attached;
+
+                            let _ = if self.is_debugger_attached {
+                                self.send_message(Debug(DebugCommand::Paused))
+                            } else {
+                                self.send_message(Debug(DebugCommand::Detach))
+                            };
+                        }
+                    });
+                });
+
+            // Group 4: Quit
+            egui::Frame::group(ui.style())
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        if self.debugger_icon_button(ui, "❌", "Quit", default_fill).clicked() {
+                            self.is_debug_running = false;
+                            self.is_debugger_attached = false;
+                            self.debug_window = false;
+                            let _ = self.send_message(Debug(DebugCommand::Detach));
                         }
                     });
                 });
@@ -498,8 +533,10 @@ impl App for NesFrontUI {
         });
 
         TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.label(format!("rendering: {:.3} ms | UI: {:>5.1} fps | Emulator: {:>5.1} fps",
-                self.rendering_duration_ms, self.ui_fps, self.emulator_fps
+            let debugger = if self.is_debugger_attached { "attached" } else { "disabled" };
+
+            ui.label(format!("debugger: {} | rendering: {:.3} ms | UI: {:>5.1} fps | Emulator: {:>5.1} fps",
+                             debugger, self.rendering_duration_ms, self.ui_fps, self.emulator_fps
             ));
         });
 
