@@ -105,18 +105,11 @@ impl MemoryBank {
         }
     }
 
-    /***
-     * XXX
-     * WRONG WRONG WRONG
-     * comparison should be made against size, not virtual address space
-     * which is not relevant in this case
-     ***/
     fn wrapping_add(&self, addr: u16, n: u16) -> u16 {
-        if addr == self.address_space.1 {
-            self.address_space.0
-        } else {
-            addr + n
-        }
+        let size = self.size() as u32;
+
+        let sum = addr as u32 + (n as u32 % size);
+        (sum % size) as u16
     }
 
     fn addr_is_in_boundary(&self, addr: u16) -> bool {

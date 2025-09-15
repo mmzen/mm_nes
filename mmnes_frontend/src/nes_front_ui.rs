@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui, UiKind};
+use eframe::egui::{pos2, vec2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui};
 use egui_file_dialog::FileDialog;
 use egui_extras::{Column, TableBody, TableBuilder, TableRow};
 use log::{error, warn};

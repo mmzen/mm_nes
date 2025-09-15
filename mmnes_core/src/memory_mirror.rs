@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;

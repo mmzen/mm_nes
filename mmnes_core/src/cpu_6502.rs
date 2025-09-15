@@ -1,10 +1,7 @@
-use std::{fmt, io};
+use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
-use std::fs::File;
-use std::io::Write;
 use std::rc::Rc;
-use std::sync::Arc;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
@@ -880,7 +877,7 @@ impl Cpu6502 {
             self.clear_nmi()?;
             self.bus.borrow().read_word(NMI_VECTOR)?
         } else {
-            self.bus.borrow().read_word(BRK_VECTOR)?
+            self.bus.borrow().read_word(IRQ_VECTOR)?
         };
 
         self.registers.pc = addr;
