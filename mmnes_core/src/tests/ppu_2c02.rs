@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
 use crate::bus::MockBusStub;
-use crate::bus_device::{BusDevice, BusDeviceType, MockBusDeviceStub};
+use crate::bus_device::{BusDeviceType, MockBusDeviceStub};
 use crate::cpu::MockCpuStub;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::ppu::PpuNameTableMirroring;

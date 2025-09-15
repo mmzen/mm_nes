@@ -1877,7 +1877,6 @@ dependencies = [
  "log",
  "mockall",
  "once_cell",
- "sdl2",
  "simplelog",
  "tempfile",
 ]
