@@ -13,6 +13,8 @@ use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Debug, Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
+use crate::tooltip::ToolTip;
+use crate::tooltip_6502::ToolTip6502;
 
 const MAX_CPU_SNAPSHOTS: usize = 256;
 
@@ -419,7 +421,7 @@ impl NesFrontUI {
             let pc = format!("{:04X}", snapshot.pc());
             let mut bytes = String::new();
 
-            for i in 0..snapshot.instruction().len() {
+            for i in snapshot.instruction().iter() {
                 let o = format!(" {:02X}", i);
                 bytes.push_str(&o);
             }
@@ -441,10 +443,15 @@ impl NesFrontUI {
                 ui.label(Self::monospace(if is_current { "▶" } else { " " }));
             });
 
-            for item in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter() {
+            for (i, item) in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter().enumerate() {
                 row.col(|ui| {
                     let rt = NesFrontUI::disasm_line(&item, is_current);
-                    ui.label(rt);
+
+                    if i == 2 && let Some(tooltip) = ToolTip6502::tooltip(&item) {
+                        ui.label(rt).on_hover_text(RichText::new(tooltip).monospace());
+                    } else {
+                        ui.label(rt);
+                    }
                 });
             }
         });

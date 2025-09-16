@@ -1893,6 +1893,7 @@ dependencies = [
  "font8x8",
  "log",
  "mmnes_core",
+ "once_cell",
  "sdl2",
  "simplelog",
 ]
