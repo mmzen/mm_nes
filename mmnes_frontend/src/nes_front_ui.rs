@@ -381,6 +381,9 @@ impl NesFrontUI {
                                 self.send_message(Debug(DebugCommand::Detach))
                             };
                         }
+
+                        if self.debugger_icon_button(ui, "✨", "Explain", default_fill).clicked() {
+                        }
                     });
                 });
 
