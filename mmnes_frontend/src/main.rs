@@ -19,7 +19,6 @@ mod nes_message;
 mod nes_front_end;
 mod text_8x8_generator;
 mod tooltip_6502;
-mod tooltip;
 
 const APP_NAME: &str = "MMNES";
 

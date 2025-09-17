@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::Instant;
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, TextureHandle, TextureOptions, TopBottomPanel, Ui};
+use eframe::egui::{pos2, vec2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, Shadow, Stroke, TextStyle, TextureHandle, TextureOptions, TopBottomPanel, Ui};
 use egui_file_dialog::FileDialog;
 use egui_extras::{Column, TableBody, TableBuilder, TableRow};
 use log::{error, warn};
@@ -13,7 +13,6 @@ use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Debug, Keys, LoadRom, Pause, Reset};
 use crate::text_8x8_generator::Test8x8Generator;
-use crate::tooltip::ToolTip;
 use crate::tooltip_6502::ToolTip6502;
 
 const MAX_CPU_SNAPSHOTS: usize = 256;
@@ -448,7 +447,56 @@ impl NesFrontUI {
                     let rt = NesFrontUI::disasm_line(&item, is_current);
 
                     if i == 2 && let Some(tooltip) = ToolTip6502::tooltip(&item) {
-                        ui.label(rt).on_hover_text(RichText::new(tooltip).monospace());
+                        //ui.label(rt).on_hover_text(RichText::new(tooltip).monospace());
+                        let resp = ui.label(rt);
+
+                        resp.on_hover_ui_at_pointer(|ui| {
+                            egui::Frame::popup(ui.style())
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .stroke(Stroke::new(0.0, Color32::PLACEHOLDER))
+                                .shadow(Shadow::NONE)
+                                .show(ui, |ui| {
+                                    ui.style_mut().override_text_style = Some(TextStyle::Monospace);
+                                    ui.set_min_width(420.0);
+
+                                    ui.label(RichText::new(tooltip.title).strong().monospace());
+                                    if let Some(summary) = tooltip.summary {
+                                        ui.add_space(4.0);
+                                        ui.label(RichText::new(summary).monospace());
+                                    }
+
+                                    if let Some(flags) = tooltip.flags_note {
+                                        ui.add_space(4.0);
+                                        ui.label(RichText::new(flags).monospace().monospace());
+                                    }
+
+                                    ui.add_space(8.0);
+                                    Grid::new("instruction_tooltip_grid")
+                                        .num_columns(5)
+                                        .spacing([12.0, 4.0])
+                                        .show(ui, |ui| {
+                                            for h in ["addressing", "assembler", "opc", "bytes", "cycles"] {
+                                                ui.label(RichText::new(h).monospace().strong());
+                                            }
+                                            ui.end_row();
+
+                                            for row in &tooltip.rows {
+                                                ui.label(RichText::new(row.addressing).monospace());
+                                                ui.label(RichText::new(row.assembler).monospace());
+                                                ui.label(RichText::new(row.opc).monospace());
+                                                ui.label(RichText::new(row.bytes).monospace());
+                                                ui.label(RichText::new(row.cycles).monospace());
+                                                ui.end_row();
+                                            }
+                                        });
+
+                                    if let Some(exception) = tooltip.exception {
+                                        ui.add_space(8.0);
+                                        ui.label(RichText::new(exception).monospace().monospace());
+                                    }
+                                });
+                        });
+
                     } else {
                         ui.label(rt);
                     }

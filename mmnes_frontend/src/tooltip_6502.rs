@@ -1,580 +1,684 @@
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use crate::tooltip::ToolTip;
 
-pub struct ToolTip6502 {}
+pub struct InstructionDetails {
+    pub(crate) addressing: &'static str,
+    pub(crate) assembler: &'static str,
+    pub(crate) opc: &'static str,
+    pub(crate) bytes: &'static str,
+    pub(crate) cycles: &'static str,
+}
 
-impl ToolTip for ToolTip6502 {
-    fn tooltip(mnemonic: &str) -> Option<&'static str> {
-        TOOLTIP_MAP.get(mnemonic).copied()
+pub struct ToolTip6502 {
+    pub(crate) title: &'static str,
+    pub(crate) summary: Option<&'static str>,
+    pub(crate) flags_note: Option<&'static str>,
+    pub(crate) rows: Vec<InstructionDetails>,
+    pub(crate) exception: Option<&'static str>,
+}
+
+impl ToolTip6502 {
+    pub(crate) fn tooltip(mnemonic: &str) -> Option<&ToolTip6502> {
+        TOOLTIP_6502.get(mnemonic)
     }
 }
 
-
-pub static TOOLTIP_MAP: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
+pub static TOOLTIP_6502: Lazy<HashMap<&'static str, ToolTip6502>> = Lazy::new(|| {
     let mut m = HashMap::new();
-    
-    m.insert("ADC", r#"ADC
-
-    Add with Carry (A ← A + M + C), affects N,Z,C,V
-
-    Flags: N,Z,C,V set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	ADC #oper	69	2	2
-    zero page	ADC oper	65	2	3
-    zero page,X	ADC oper,X	75	2	4
-    absolute	ADC oper	6D	3	4
-    absolute,X	ADC oper,X	7D	3	4*
-    absolute,Y	ADC oper,Y	79	3	4*
-    (indirect,X)	ADC (oper,X)	61	2	6
-    (indirect),Y	ADC (oper),Y	71	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("AND", r#"AND
-
-    Logical AND (A ← A & M), affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	AND #oper	29	2	2
-    zero page	AND oper	25	2	3
-    zero page,X	AND oper,X	35	2	4
-    absolute	AND oper	2D	3	4
-    absolute,X	AND oper,X	3D	3	4*
-    absolute,Y	AND oper,Y	39	3	4*
-    (indirect,X)	AND (oper,X)	21	2	6
-    (indirect),Y	AND (oper),Y	31	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("ASL", r#"ASL
-
-    Arithmetic Shift Left (C ← b7; A/M ← A/M<<1), affects N,Z,C
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    accumulator	ASL A	0A	1	2
-    zero page	ASL oper	06	2	5
-    zero page,X	ASL oper,X	16	2	6
-    absolute	ASL oper	0E	3	6
-    absolute,X	ASL oper,X	1E	3	7
-"#);
-    m.insert("BCC", r#"BCC
-
-    Branch if Carry Clear (C=0)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BCC oper	90	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BCS", r#"BCS
-
-    Branch if Carry Set (C=1)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BCS oper	B0	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BEQ", r#"BEQ
-
-    Branch if Zero Set (Z=1)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BEQ oper	F0	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BIT", r#"BIT
-
-    Bit Test (Z ← A&M==0; N ← M7; V ← M6)
-
-    Flags: Z,N,V set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    zero page	BIT oper	24	2	3
-    absolute	BIT oper	2C	3	4
-"#);
-    m.insert("BMI", r#"BMI
-
-    Branch if Negative Set (N=1)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BMI oper	30	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BNE", r#"BNE
-
-    Branch if Zero Clear (Z=0)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BNE oper	D0	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BPL", r#"BPL
-
-    Branch if Negative Clear (N=0)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BPL oper	10	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BRK", r#"BRK
-
-    Force Interrupt (push PC+2,P; set I; jump via IRQ/BRK vector)
-
-    Flags: I set; B used on stack.
-    addressing	assembler	opc	bytes	cycles
-    implied	BRK	00	1	7
-"#);
-    m.insert("BVC", r#"BVC
-
-    Branch if Overflow Clear (V=0)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BVC oper	50	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("BVS", r#"BVS
-
-    Branch if Overflow Set (V=1)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    relative	BVS oper	70	2	2 (+1 if branch taken, +1 if page boundary crossed)
-"#);
-    m.insert("CLC", r#"CLC
-
-    Clear Carry flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	CLC	18	1	2
-"#);
-    m.insert("CLD", r#"CLD
-
-    Clear Decimal flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	CLD	D8	1	2
-"#);
-    m.insert("CLI", r#"CLI
-
-    Clear Interrupt Disable flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	CLI	58	1	2
-"#);
-    m.insert("CLV", r#"CLV
-
-    Clear Overflow flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	CLV	B8	1	2
-"#);
-    m.insert("CMP", r#"CMP
-
-    Compare A with memory (sets Z,N,C like subtraction)
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	CMP #oper	C9	2	2
-    zero page	CMP oper	C5	2	3
-    zero page,X	CMP oper,X	D5	2	4
-    absolute	CMP oper	CD	3	4
-    absolute,X	CMP oper,X	DD	3	4*
-    absolute,Y	CMP oper,Y	D9	3	4*
-    (indirect,X)	CMP (oper,X)	C1	2	6
-    (indirect),Y	CMP (oper),Y	D1	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("CPX", r#"CPX
-
-    Compare X with memory (sets Z,N,C like subtraction)
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	CPX #oper	E0	2	2
-    zero page	CPX oper	E4	2	3
-    absolute	CPX oper	EC	3	4
-"#);
-    m.insert("CPY", r#"CPY
-
-    Compare Y with memory (sets Z,N,C like subtraction)
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	CPY #oper	C0	2	2
-    zero page	CPY oper	C4	2	3
-    absolute	CPY oper	CC	3	4
-"#);
-    m.insert("DEC", r#"DEC
-
-    Decrement memory by one
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    zero page	DEC oper	C6	2	5
-    zero page,X	DEC oper,X	D6	2	6
-    absolute	DEC oper	CE	3	6
-    absolute,X	DEC oper,X	DE	3	7
-"#);
-    m.insert("DEX", r#"DEX
-
-    Decrement X by one
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	DEX	CA	1	2
-"#);
-    m.insert("DEY", r#"DEY
-
-    Decrement Y by one
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	DEY	88	1	2
-"#);
-    m.insert("EOR", r#"EOR
-
-    Exclusive OR (A ← A ^ M), affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	EOR #oper	49	2	2
-    zero page	EOR oper	45	2	3
-    zero page,X	EOR oper,X	55	2	4
-    absolute	EOR oper	4D	3	4
-    absolute,X	EOR oper,X	5D	3	4*
-    absolute,Y	EOR oper,Y	59	3	4*
-    (indirect,X)	EOR (oper,X)	41	2	6
-    (indirect),Y	EOR (oper),Y	51	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("INC", r#"INC
-
-    Increment memory by one
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    zero page	INC oper	E6	2	5
-    zero page,X	INC oper,X	F6	2	6
-    absolute	INC oper	EE	3	6
-    absolute,X	INC oper,X	FE	3	7
-"#);
-    m.insert("INX", r#"INX
-
-    Increment X by one
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	INX	E8	1	2
-"#);
-    m.insert("INY", r#"INY
-
-    Increment Y by one
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	INY	C8	1	2
-"#);
-    m.insert("JMP", r#"JMP
-
-    Jump to address (absolute or indirect)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    absolute	JMP oper	4C	3	3
-    indirect	JMP (oper)	6C	3	5
-"#);
-    m.insert("JSR", r#"JSR
-
-    Jump to Subroutine (push return-1)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    absolute	JSR oper	20	3	6
-"#);
-    m.insert("LDA", r#"LDA
-
-    Load Accumulator with memory; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	LDA #oper	A9	2	2
-    zero page	LDA oper	A5	2	3
-    zero page,X	LDA oper,X	B5	2	4
-    absolute	LDA oper	AD	3	4
-    absolute,X	LDA oper,X	BD	3	4*
-    absolute,Y	LDA oper,Y	B9	3	4*
-    (indirect,X)	LDA (oper,X)	A1	2	6
-    (indirect),Y	LDA (oper),Y	B1	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("LDX", r#"LDX
-
-    Load X with memory; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	LDX #oper	A2	2	2
-    zero page	LDX oper	A6	2	3
-    zero page,Y	LDX oper,Y	B6	2	4
-    absolute	LDX oper	AE	3	4
-    absolute,Y	LDX oper,Y	BE	3	4*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("LDY", r#"LDY
-
-    Load Y with memory; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	LDY #oper	A0	2	2
-    zero page	LDY oper	A4	2	3
-    zero page,X	LDY oper,X	B4	2	4
-    absolute	LDY oper	AC	3	4
-    absolute,X	LDY oper,X	BC	3	4*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("LSR", r#"LSR
-
-    Logical Shift Right (C ← b0; A/M ← A/M>>1; bit7←0)
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    accumulator	LSR A	4A	1	2
-    zero page	LSR oper	46	2	5
-    zero page,X	LSR oper,X	56	2	6
-    absolute	LSR oper	4E	3	6
-    absolute,X	LSR oper,X	5E	3	7
-"#);
-    m.insert("NOP", r#"NOP
-
-    No Operation
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	NOP	EA	1	2
-"#);
-    m.insert("ORA", r#"ORA
-
-    Logical Inclusive OR (A ← A | M), affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	ORA #oper	09	2	2
-    zero page	ORA oper	05	2	3
-    zero page,X	ORA oper,X	15	2	4
-    absolute	ORA oper	0D	3	4
-    absolute,X	ORA oper,X	1D	3	4*
-    absolute,Y	ORA oper,Y	19	3	4*
-    (indirect,X)	ORA (oper,X)	01	2	6
-    (indirect),Y	ORA (oper),Y	11	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("PHA", r#"PHA
-
-    Push Accumulator on stack
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	PHA	48	1	3
-"#);
-    m.insert("PHP", r#"PHP
-
-    Push Processor Status on stack (B flag set in pushed value)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	PHP	08	1	3
-"#);
-    m.insert("PLA", r#"PLA
-
-    Pull Accumulator from stack; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	PLA	68	1	4
-"#);
-    m.insert("PLP", r#"PLP
-
-    Pull Processor Status from stack
-
-    Flags: P restored.
-    addressing	assembler	opc	bytes	cycles
-    implied	PLP	28	1	4
-"#);
-    m.insert("ROL", r#"ROL
-
-    Rotate Left through Carry (C ↔ b0; A/M ← (A/M<<1)|C)
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    accumulator	ROL A	2A	1	2
-    zero page	ROL oper	26	2	5
-    zero page,X	ROL oper,X	36	2	6
-    absolute	ROL oper	2E	3	6
-    absolute,X	ROL oper,X	3E	3	7
-"#);
-    m.insert("ROR", r#"ROR
-
-    Rotate Right through Carry (C ↔ b7; A/M ← (A/M>>1)|C<<7)
-
-    Flags: N,Z,C set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    accumulator	ROR A	6A	1	2
-    zero page	ROR oper	66	2	5
-    zero page,X	ROR oper,X	76	2	6
-    absolute	ROR oper	6E	3	6
-    absolute,X	ROR oper,X	7E	3	7
-"#);
-    m.insert("RTI", r#"RTI
-
-    Return from Interrupt (pull P then PC)
-
-    Flags: P restored.
-    addressing	assembler	opc	bytes	cycles
-    implied	RTI	40	1	6
-"#);
-    m.insert("RTS", r#"RTS
-
-    Return from Subroutine (pull PC then PC←PC+1)
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	RTS	60	1	6
-"#);
-    m.insert("SBC", r#"SBC
-
-    Subtract with Carry (A ← A - M - (1-C)), affects N,Z,C,V
-
-    Flags: N,Z,C,V set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    immediate	SBC #oper	E9	2	2
-    zero page	SBC oper	E5	2	3
-    zero page,X	SBC oper,X	F5	2	4
-    absolute	SBC oper	ED	3	4
-    absolute,X	SBC oper,X	FD	3	4*
-    absolute,Y	SBC oper,Y	F9	3	4*
-    (indirect,X)	SBC (oper,X)	E1	2	6
-    (indirect),Y	SBC (oper),Y	F1	2	5*
-
-  * * (+1 if page boundary crossed)
-"#);
-    m.insert("SEC", r#"SEC
-
-    Set Carry flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	SEC	38	1	2
-"#);
-    m.insert("SED", r#"SED
-
-    Set Decimal flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	SED	F8	1	2
-"#);
-    m.insert("SEI", r#"SEI
-
-    Set Interrupt Disable flag
-
-    Flags: only specified flag affected.
-    addressing	assembler	opc	bytes	cycles
-    implied	SEI	78	1	2
-"#);
-    m.insert("STA", r#"STA
-
-    Store Accumulator to memory
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    zero page	STA oper	85	2	3
-    zero page,X	STA oper,X	95	2	4
-    absolute	STA oper	8D	3	4
-    absolute,X	STA oper,X	9D	3	5
-    absolute,Y	STA oper,Y	99	3	5
-    (indirect,X)	STA (oper,X)	81	2	6
-    (indirect),Y	STA (oper),Y	91	2	6
-"#);
-    m.insert("STX", r#"STX
-
-    Store X to memory
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    zero page	STX oper	86	2	3
-    zero page,Y	STX oper,Y	96	2	4
-    absolute	STX oper	8E	3	4
-"#);
-    m.insert("STY", r#"STY
-
-    Store Y to memory
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    zero page	STY oper	84	2	3
-    zero page,X	STY oper,X	94	2	4
-    absolute	STY oper	8C	3	4
-"#);
-    m.insert("TAX", r#"TAX
-
-    Transfer A → X; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	TAX	AA	1	2
-"#);
-    m.insert("TAY", r#"TAY
-
-    Transfer A → Y; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	TAY	A8	1	2
-"#);
-    m.insert("TSX", r#"TSX
-
-    Transfer SP → X; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	TSX	BA	1	2
-"#);
-    m.insert("TXA", r#"TXA
-
-    Transfer X → A; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	TXA	8A	1	2
-"#);
-    m.insert("TXS", r#"TXS
-
-    Transfer X → SP
-
-    Flags: unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	TXS	9A	1	2
-"#);
-    m.insert("TYA", r#"TYA
-
-    Transfer Y → A; affects N,Z
-
-    Flags: N,Z set; others unchanged.
-    addressing	assembler	opc	bytes	cycles
-    implied	TYA	98	1	2
-"#);
+
+    // --- ADC ---
+    m.insert("ADC", ToolTip6502 {
+        title: "ADC",
+        summary: Some("Add with Carry (A ← A + M + C)"),
+        flags_note: Some("Affects N,Z,C,V; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "ADC #oper",     opc: "69", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "ADC oper",      opc: "65", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "ADC oper,X",    opc: "75", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "ADC oper",      opc: "6D", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "ADC oper,X",    opc: "7D", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "ADC oper,Y",    opc: "79", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "ADC (oper,X)",  opc: "61", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "ADC (oper),Y",  opc: "71", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    // --- AND ---
+    m.insert("AND", ToolTip6502 {
+        title: "AND",
+        summary: Some("AND with Accumulator (A ← A & M)"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "AND #oper",     opc: "29", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "AND oper",      opc: "25", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "AND oper,X",    opc: "35", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "AND oper",      opc: "2D", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "AND oper,X",    opc: "3D", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "AND oper,Y",    opc: "39", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "AND (oper,X)",  opc: "21", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "AND (oper),Y",  opc: "31", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    // --- ASL ---
+    m.insert("ASL", ToolTip6502 {
+        title: "ASL",
+        summary: Some("Arithmetic Shift Left"),
+        flags_note: Some("Affects N,Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "Accumulator",   assembler: "ASL A",         opc: "0A", bytes: "1", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "ASL oper",      opc: "06", bytes: "2", cycles: "5"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "ASL oper,X",    opc: "16", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "ASL oper",      opc: "0E", bytes: "3", cycles: "6"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "ASL oper,X",    opc: "1E", bytes: "3", cycles: "7"   },
+        ],
+        exception: None,
+    });
+
+    // --- BIT ---
+    m.insert("BIT", ToolTip6502 {
+        title: "BIT",
+        summary: Some("Test Bits (sets Z from A&M; N from M7; V from M6)"),
+        flags_note: Some("Affects N,V,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "zero Page",     assembler: "BIT oper",      opc: "24", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "BIT oper",      opc: "2C", bytes: "3", cycles: "4"   },
+        ],
+        exception: None,
+    });
+
+    // --- BRK ---
+    m.insert("BRK", ToolTip6502 {
+        title: "BRK",
+        summary: Some("Force Interrupt; push PC+2 and P; I=1"),
+        flags_note: Some("Flags pushed; on pull, B cleared; U=1."),
+        rows: vec![
+            InstructionDetails { addressing: "implied",       assembler: "BRK",          opc: "00", bytes: "1", cycles: "7"   },
+        ],
+        exception: None,
+    });
+
+    // --- Branches ---
+    m.insert("BCC", ToolTip6502 {
+        title: "BCC",
+        summary: Some("Branch on Carry Clear"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BCC oper", opc: "90", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BCS", ToolTip6502 {
+        title: "BCS",
+        summary: Some("Branch on Carry Set"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BCS oper", opc: "B0", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BEQ", ToolTip6502 {
+        title: "BEQ",
+        summary: Some("Branch on Zero Set"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BEQ oper", opc: "F0", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BMI", ToolTip6502 {
+        title: "BMI",
+        summary: Some("Branch on Negative Set"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BMI oper", opc: "30", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BNE", ToolTip6502 {
+        title: "BNE",
+        summary: Some("Branch on Zero Clear"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BNE oper", opc: "D0", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BPL", ToolTip6502 {
+        title: "BPL",
+        summary: Some("Branch on Negative Clear"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BPL oper", opc: "10", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BVC", ToolTip6502 {
+        title: "BVC",
+        summary: Some("Branch on Overflow Clear"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BVC oper", opc: "50", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    m.insert("BVS", ToolTip6502 {
+        title: "BVS",
+        summary: Some("Branch on Overflow Set"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "relative", assembler: "BVS oper", opc: "70", bytes: "2", cycles: "2**" }
+        ],
+        exception: Some("** add 1 to cycles if branch occurs on same page, add 2 to cycles if branch occurs to different page")
+    });
+
+    // --- Flag ops ---
+    m.insert("CLC", ToolTip6502 {
+        title: "CLC",
+        summary: Some("Clear Carry"),
+        flags_note: Some("C=0; others unchanged."),
+        rows: vec![ InstructionDetails {
+            addressing: "implied", assembler: "CLC", opc: "18", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("CLD", ToolTip6502 {
+        title: "CLD",
+        summary: Some("Clear Decimal"),
+        flags_note: Some("D=0; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "CLD", opc: "D8", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("CLI", ToolTip6502 {
+        title: "CLI", summary: Some("Clear Interrupt Disable"),
+        flags_note: Some("I=0; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "CLI", opc: "58", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("CLV", ToolTip6502 {
+        title: "CLV", summary: Some("Clear Overflow"),
+        flags_note: Some("V=0; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "CLV", opc: "B8", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("SEC", ToolTip6502 {
+        title: "SEC", summary: Some("Set Carry"),
+        flags_note: Some("C=1; others unchanged."), rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "SEC", opc: "38", bytes: "1", cycles: "2" }
+        ] ,
+        exception: None,
+    });
+
+    m.insert("SED", ToolTip6502 {
+        title: "SED", summary: Some("Set Decimal"),
+        flags_note: Some("D=1; others unchanged."), rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "SED", opc: "F8", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("SEI", ToolTip6502 {
+        title: "SEI", summary: Some("Set Interrupt Disable"),
+        flags_note: Some("I=1; others unchanged."), rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "SEI", opc: "78", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    // --- CMP / CPX / CPY ---
+    m.insert("CMP", ToolTip6502 {
+        title: "CMP",
+        summary: Some("Compare A with M (A-M)"),
+        flags_note: Some("Affects N,Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "CMP #oper",     opc: "C9", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "CMP oper",      opc: "C5", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "CMP oper,X",    opc: "D5", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "CMP oper",      opc: "CD", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "CMP oper,X",    opc: "DD", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "CMP oper,Y",    opc: "D9", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "CMP (oper,X)",  opc: "C1", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "CMP (oper),Y",  opc: "D1", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    m.insert("CPX", ToolTip6502 {
+        title: "CPX",
+        summary: Some("Compare X with M (X-M)"),
+        flags_note: Some("Affects N,Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "CPX #oper",     opc: "E0", bytes: "2", cycles: "2" },
+            InstructionDetails { addressing: "zero Page",     assembler: "CPX oper",      opc: "E4", bytes: "2", cycles: "3" },
+            InstructionDetails { addressing: "Absolute",      assembler: "CPX oper",      opc: "EC", bytes: "3", cycles: "4" },
+        ],
+        exception: None,
+    });
+
+    m.insert("CPY", ToolTip6502 {
+        title: "CPY",
+        summary: Some("Compare Y with M (Y-M)"),
+        flags_note: Some("Affects N,Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "CPY #oper",     opc: "C0", bytes: "2", cycles: "2" },
+            InstructionDetails { addressing: "zero Page",     assembler: "CPY oper",      opc: "C4", bytes: "2", cycles: "3" },
+            InstructionDetails { addressing: "Absolute",      assembler: "CPY oper",      opc: "CC", bytes: "3", cycles: "4" },
+        ],
+        exception: None,
+    });
+
+    // --- DEC / DEX / DEY ---
+    m.insert("DEC", ToolTip6502 {
+        title: "DEC",
+        summary: Some("Decrement Memory"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "zero Page",     assembler: "DEC oper",      opc: "C6", bytes: "2", cycles: "5" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "DEC oper,X",    opc: "D6", bytes: "2", cycles: "6" },
+            InstructionDetails { addressing: "Absolute",      assembler: "DEC oper",      opc: "CE", bytes: "3", cycles: "6" },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "DEC oper,X",    opc: "DE", bytes: "3", cycles: "7" },
+        ],
+        exception: None,
+    });
+
+    m.insert("DEX", ToolTip6502 {
+        title: "DEX",
+        summary: Some("Decrement X"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "DEX", opc: "CA", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("DEY", ToolTip6502 {
+        title: "DEY",
+        summary: Some("Decrement Y"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "DEY", opc: "88", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    // --- EOR ---
+    m.insert("EOR", ToolTip6502 {
+        title: "EOR",
+        summary: Some("Exclusive OR (A ← A ^ M)"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "EOR #oper",     opc: "49", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "EOR oper",      opc: "45", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "EOR oper,X",    opc: "55", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "EOR oper",      opc: "4D", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "EOR oper,X",    opc: "5D", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "EOR oper,Y",    opc: "59", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "EOR (oper,X)",  opc: "41", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "EOR (oper),Y",  opc: "51", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    // --- INC / INX / INY ---
+    m.insert("INC", ToolTip6502 {
+        title: "INC",
+        summary: Some("Increment Memory"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "zero Page",     assembler: "INC oper",      opc: "E6", bytes: "2", cycles: "5" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "INC oper,X",    opc: "F6", bytes: "2", cycles: "6" },
+            InstructionDetails { addressing: "Absolute",      assembler: "INC oper",      opc: "EE", bytes: "3", cycles: "6" },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "INC oper,X",    opc: "FE", bytes: "3", cycles: "7" },
+        ],
+        exception: None,
+    });
+
+    m.insert("INX", ToolTip6502 {
+        title: "INX",
+        summary: Some("Increment X"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "INX", opc: "E8", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("INY", ToolTip6502 {
+        title: "INY",
+        summary: Some("Increment Y"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "INY", opc: "C8", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    // --- JMP / JSR ---
+    m.insert("JMP", ToolTip6502 {
+        title: "JMP",
+        summary: Some("Jump"),
+        flags_note: Some("Flags unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "Absolute",      assembler: "JMP oper",      opc: "4C", bytes: "3", cycles: "3" },
+            InstructionDetails { addressing: "(indirect)",    assembler: "JMP (oper)",    opc: "6C", bytes: "3", cycles: "5" },
+        ],
+        exception: None,
+    });
+
+    m.insert("JSR", ToolTip6502 {
+        title: "JSR",
+        summary: Some("Jump to Subroutine"),
+        flags_note: Some("Push return address; flags unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "Absolute",      assembler: "JSR oper",      opc: "20", bytes: "3", cycles: "6" },
+        ],
+        exception: None,
+    });
+
+    // --- LDA / LDX / LDY ---
+    m.insert("LDA", ToolTip6502 {
+        title: "LDA",
+        summary: Some("Load Accumulator"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "LDA #oper",     opc: "A9", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "LDA oper",      opc: "A5", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "LDA oper,X",    opc: "B5", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "LDA oper",      opc: "AD", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "LDA oper,X",    opc: "BD", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "LDA oper,Y",    opc: "B9", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "LDA (oper,X)",  opc: "A1", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "LDA (oper),Y",  opc: "B1", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    m.insert("LDX", ToolTip6502 {
+        title: "LDX",
+        summary: Some("Load X"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "LDX #oper",     opc: "A2", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "LDX oper",      opc: "A6", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,Y",   assembler: "LDX oper,Y",    opc: "B6", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "LDX oper",      opc: "AE", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "LDX oper,Y",    opc: "BE", bytes: "3", cycles: "4*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    m.insert("LDY", ToolTip6502 {
+        title: "LDY",
+        summary: Some("Load Y"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "LDY #oper",     opc: "A0", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "LDY oper",      opc: "A4", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "LDY oper,X",    opc: "B4", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "LDY oper",      opc: "AC", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "LDY oper,X",    opc: "BC", bytes: "3", cycles: "4*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    // --- LSR ---
+    m.insert("LSR", ToolTip6502 {
+        title: "LSR",
+        summary: Some("Logical Shift Right"),
+        flags_note: Some("Affects N(=0),Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "Accumulator",   assembler: "LSR A",         opc: "4A", bytes: "1", cycles: "2" },
+            InstructionDetails { addressing: "zero Page",     assembler: "LSR oper",      opc: "46", bytes: "2", cycles: "5" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "LSR oper,X",    opc: "56", bytes: "2", cycles: "6" },
+            InstructionDetails { addressing: "Absolute",      assembler: "LSR oper",      opc: "4E", bytes: "3", cycles: "6" },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "LSR oper,X",    opc: "5E", bytes: "3", cycles: "7" },
+        ],
+        exception: None,
+    });
+
+    // --- NOP ---
+    m.insert("NOP", ToolTip6502 {
+        title: "NOP",
+        summary: Some("No Operation"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "NOP", opc: "EA", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    // --- ORA ---
+    m.insert("ORA", ToolTip6502 {
+        title: "ORA",
+        summary: Some("OR with Accumulator (A ← A | M)"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "ORA #oper",     opc: "09", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "ORA oper",      opc: "05", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "ORA oper,X",    opc: "15", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "ORA oper",      opc: "0D", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "ORA oper,X",    opc: "1D", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "ORA oper,Y",    opc: "19", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "ORA (oper,X)",  opc: "01", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "ORA (oper),Y",  opc: "11", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    // --- PHA / PHP / PLA / PLP ---
+    m.insert("PHA", ToolTip6502 {
+        title: "PHA",
+        summary: Some("Push A"),
+        flags_note: Some("Flags unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "PHA", opc: "48", bytes: "1", cycles: "3" }
+        ],
+        exception: None,
+    });
+
+    m.insert("PHP", ToolTip6502 {
+        title: "PHP",
+        summary: Some("Push Processor Status (with B=1,U=1)"),
+        flags_note: Some("Stack write; flags unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "PHP", opc: "08", bytes: "1", cycles: "3" }
+        ],
+        exception: None,
+    });
+
+    m.insert("PLA", ToolTip6502 {
+        title: "PLA",
+        summary: Some("Pull A"),
+        flags_note: Some("Affects N,Z from A."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "PLA", opc: "68", bytes: "1", cycles: "4" }
+        ],
+        exception: None,
+    });
+
+    m.insert("PLP", ToolTip6502 {
+        title: "PLP", summary: Some("Pull Processor Status"),
+        flags_note: Some("Restores flags (B cleared on storage)."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "PLP", opc: "28", bytes: "1", cycles: "4" }
+        ],
+        exception: None,
+    });
+
+    // --- ROL / ROR ---
+    m.insert("ROL", ToolTip6502 {
+        title: "ROL",
+        summary: Some("Rotate Left through Carry"),
+        flags_note: Some("Affects N,Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "Accumulator",   assembler: "ROL A",         opc: "2A", bytes: "1", cycles: "2" },
+            InstructionDetails { addressing: "zero Page",     assembler: "ROL oper",      opc: "26", bytes: "2", cycles: "5" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "ROL oper,X",    opc: "36", bytes: "2", cycles: "6" },
+            InstructionDetails { addressing: "Absolute",      assembler: "ROL oper",      opc: "2E", bytes: "3", cycles: "6" },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "ROL oper,X",    opc: "3E", bytes: "3", cycles: "7" },
+        ],
+        exception: None,
+    });
+
+    m.insert("ROR", ToolTip6502 {
+        title: "ROR",
+        summary: Some("Rotate Right through Carry"),
+        flags_note: Some("Affects N,Z,C; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "Accumulator",   assembler: "ROR A",         opc: "6A", bytes: "1", cycles: "2" },
+            InstructionDetails { addressing: "zero Page",     assembler: "ROR oper",      opc: "66", bytes: "2", cycles: "5" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "ROR oper,X",    opc: "76", bytes: "2", cycles: "6" },
+            InstructionDetails { addressing: "Absolute",      assembler: "ROR oper",      opc: "6E", bytes: "3", cycles: "6" },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "ROR oper,X",    opc: "7E", bytes: "3", cycles: "7" },
+        ],
+        exception: None,
+    });
+
+    // --- RTI / RTS ---
+    m.insert("RTI", ToolTip6502 {
+        title: "RTI", summary: Some("Return from Interrupt"),
+        flags_note: Some("Pull P then PC."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "RTI", opc: "40", bytes: "1", cycles: "6" }
+        ],
+        exception: None,
+    });
+
+    m.insert("RTS", ToolTip6502 {
+        title: "RTS",
+        summary: Some("Return from Subroutine"),
+        flags_note: Some("Pull PC then increment."),
+        rows: vec![
+            InstructionDetails { addressing: "implied", assembler: "RTS", opc: "60", bytes: "1", cycles: "6" }
+        ],
+        exception: None,
+    });
+
+    // --- SBC ---
+    m.insert("SBC", ToolTip6502 {
+        title: "SBC",
+        summary: Some("Subtract with Borrow (A ← A - M - (1-C))"),
+        flags_note: Some("Affects N,Z,C,V; others unchanged."),
+        rows: vec![
+            InstructionDetails { addressing: "immediate",     assembler: "SBC #oper",     opc: "E9", bytes: "2", cycles: "2"   },
+            InstructionDetails { addressing: "zero Page",     assembler: "SBC oper",      opc: "E5", bytes: "2", cycles: "3"   },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "SBC oper,X",    opc: "F5", bytes: "2", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute",      assembler: "SBC oper",      opc: "ED", bytes: "3", cycles: "4"   },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "SBC oper,X",    opc: "FD", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "SBC oper,Y",    opc: "F9", bytes: "3", cycles: "4*"  },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "SBC (oper,X)",  opc: "E1", bytes: "2", cycles: "6"   },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "SBC (oper),Y",  opc: "F1", bytes: "2", cycles: "5*"  },
+        ],
+        exception: Some("* (+1 if page boundary crossed)"),
+    });
+
+    // --- STA / STX / STY ---
+    m.insert("STA", ToolTip6502 {
+        title: "STA",
+        summary: Some("Store Accumulator"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "zero Page",     assembler: "STA oper",      opc: "85", bytes: "2", cycles: "3" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "STA oper,X",    opc: "95", bytes: "2", cycles: "4" },
+            InstructionDetails { addressing: "Absolute",      assembler: "STA oper",      opc: "8D", bytes: "3", cycles: "4" },
+            InstructionDetails { addressing: "Absolute,X",    assembler: "STA oper,X",    opc: "9D", bytes: "3", cycles: "5" },
+            InstructionDetails { addressing: "Absolute,Y",    assembler: "STA oper,Y",    opc: "99", bytes: "3", cycles: "5" },
+            InstructionDetails { addressing: "(indirect,X)",  assembler: "STA (oper,X)",  opc: "81", bytes: "2", cycles: "6" },
+            InstructionDetails { addressing: "(indirect),Y",  assembler: "STA (oper),Y",  opc: "91", bytes: "2", cycles: "6" },
+        ],
+        exception: None,
+    });
+
+    m.insert("STX", ToolTip6502 {
+        title: "STX",
+        summary: Some("Store X"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "zero Page",     assembler: "STX oper",      opc: "86", bytes: "2", cycles: "3" },
+            InstructionDetails { addressing: "zero Page,Y",   assembler: "STX oper,Y",    opc: "96", bytes: "2", cycles: "4" },
+            InstructionDetails { addressing: "Absolute",      assembler: "STX oper",      opc: "8E", bytes: "3", cycles: "4" },
+        ],
+        exception: None,
+    });
+
+    m.insert("STY", ToolTip6502 {
+        title: "STY",
+        summary: Some("Store Y"),
+        flags_note: Some("No flags changed."),
+        rows: vec![
+            InstructionDetails { addressing: "zero Page",     assembler: "STY oper",      opc: "84", bytes: "2", cycles: "3" },
+            InstructionDetails { addressing: "zero Page,X",   assembler: "STY oper,X",    opc: "94", bytes: "2", cycles: "4" },
+            InstructionDetails { addressing: "Absolute",      assembler: "STY oper",      opc: "8C", bytes: "3", cycles: "4" },
+        ],
+        exception: None,
+    });
+
+    // --- TAX / TAY / TSX / TXA / TXS / TYA ---
+    m.insert("TAX", ToolTip6502 {
+        title: "TAX", summary: Some("Transfer A → X"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![ InstructionDetails { addressing: "implied", assembler: "TAX", opc: "AA", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("TAY", ToolTip6502 {
+        title: "TAY", summary: Some("Transfer A → Y"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![ InstructionDetails { addressing: "implied", assembler: "TAY", opc: "A8", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("TSX", ToolTip6502 {
+        title: "TSX", summary: Some("Transfer SP → X"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![ InstructionDetails { addressing: "implied", assembler: "TSX", opc: "BA", bytes: "1", cycles: "2" }
+        ],
+        exception: None,});
+
+    m.insert("TXA", ToolTip6502 {
+        title: "TXA", summary: Some("Transfer X → A"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![ InstructionDetails { addressing: "implied", assembler: "TXA", opc: "8A", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("TXS", ToolTip6502 {
+        title: "TXS", summary: Some("Transfer X → SP"),
+        flags_note: Some("Flags unchanged."),
+        rows: vec![ InstructionDetails { addressing: "implied", assembler: "TXS", opc: "9A", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
+
+    m.insert("TYA", ToolTip6502 {
+        title: "TYA", summary: Some("Transfer Y → A"),
+        flags_note: Some("Affects N,Z; others unchanged."),
+        rows: vec![ InstructionDetails { addressing: "implied", assembler: "TYA", opc: "98", bytes: "1", cycles: "2" }
+        ],
+        exception: None,
+    });
 
     m
 });
