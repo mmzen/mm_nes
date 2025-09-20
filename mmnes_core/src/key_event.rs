@@ -18,6 +18,12 @@ pub struct KeyEvent {
 #[derive(Debug, Clone)]
 pub struct KeyEvents { events: VecDeque<KeyEvent> }
 
+impl Default for KeyEvents {
+    fn default() -> Self {
+        KeyEvents::new()
+    }
+}
+
 impl KeyEvents {
     pub fn new() -> Self {
         KeyEvents { events: VecDeque::new() }

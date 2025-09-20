@@ -19,6 +19,10 @@ mod nes_message;
 mod nes_front_end;
 mod text_8x8_generator;
 mod tooltip_6502;
+mod debugger_ui;
+mod helpers_ui;
+mod nes_ui;
+mod nes_mediator;
 
 const APP_NAME: &str = "MMNES";
 

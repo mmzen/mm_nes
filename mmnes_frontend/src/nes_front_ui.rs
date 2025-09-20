@@ -1,26 +1,23 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
-use std::time::Instant;
+use std::rc::Rc;
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::time::{Instant};
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, Response, RichText, Shadow, Stroke, TextStyle, TextureHandle, TextureOptions, TopBottomPanel, Ui};
+use eframe::egui::{pos2, vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
 use egui_file_dialog::FileDialog;
-use egui_extras::{Column, TableBody, TableBuilder, TableRow};
-use log::{error, warn};
-use mmnes_core::cpu_debugger::{CpuSnapshot, DebugCommand};
+use log::{warn};
 use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
+use crate::debugger_ui::DebuggerUI;
+use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
-use crate::nes_message::NesMessage::{Debug, Keys, LoadRom, Pause, Reset};
+use crate::nes_message::NesMessage::{Keys, LoadRom, Pause, Reset};
+use crate::nes_ui::NesUI;
 use crate::text_8x8_generator::Test8x8Generator;
-use crate::tooltip_6502::ToolTip6502;
-
-const MAX_CPU_SNAPSHOTS: usize = 256;
 
 pub struct NesFrontUI {
-    frame_rx: Receiver<NesMessage>,
-    command_tx: SyncSender<NesMessage>,
-    debug_rx: Receiver<NesMessage>,
     texture: TextureHandle,
     texture_options: TextureOptions,
     height: usize,
@@ -37,10 +34,8 @@ pub struct NesFrontUI {
     rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
     nes_frame: Option<ColorImage>,
-    debug_window: bool,
-    is_debug_running: bool,
-    is_debugger_attached: bool,
-    cpu_snapshots: Vec<Box<dyn CpuSnapshot>>
+    debugger_ui: Box<dyn NesUI>,
+    nes_mediator: Rc<RefCell<NesMediator>>
 }
 
 impl NesFrontUI {
@@ -81,10 +76,10 @@ impl NesFrontUI {
             shadow: Default::default(),
         };
 
+        let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx)));
+        let debugger_ui = Box::new(DebuggerUI::new(nes_mediator.clone()));
+
         NesFrontUI {
-            frame_rx,
-            command_tx,
-            debug_rx,
             texture,
             texture_options,
             height,
@@ -101,10 +96,8 @@ impl NesFrontUI {
             rom_file: None,
             error: None,
             nes_frame: None,
-            debug_window: false,
-            is_debug_running: false,
-            is_debugger_attached: false,
-            cpu_snapshots: Vec::new()
+            debugger_ui,
+            nes_mediator
         }
     }
 
@@ -146,17 +139,33 @@ impl NesFrontUI {
         self.error = None;
     }
 
-    fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
+    fn send_input_to_emulator(&mut self) -> Result<(), NesConsoleError> {
+        if self.input.is_empty() {
+            return Ok(());
+        }
 
-        while let Ok(message) = self.frame_rx.try_recv() {
+        let inputs = std::mem::take(&mut self.input);
+        self.nes_mediator.borrow_mut().send_message(Keys(inputs))
+    }
+
+    fn error_frame(&self, error: &NesConsoleError) -> ColorImage {
+        let background = Color32::DARK_GRAY;
+        let foreground = Color32::DARK_RED;
+
+        let mut image = ColorImage::new([self.width, self.height], NesFrontUI::create_default_texture(self.width, self.height, background));
+        let _ = Test8x8Generator::draw_text_wrapped_centered(&mut image, &format!("{}", error), foreground);
+
+        image
+    }
+
+    fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
+        let messages = self.nes_mediator.borrow().read_messages()?;
+
+        for message in messages {
             match message {
                 NesMessage::Error(e) => {
-                    error!("received error from NES backend: {}", e);
-                    let background = Color32::DARK_GRAY;
-                    let foreground = Color32::DARK_RED;
+                    let image = self.error_frame(&e);
 
-                    let mut image = ColorImage::new([self.width, self.height], NesFrontUI::create_default_texture(self.width, self.height, background));
-                    let _ = Test8x8Generator::draw_text_wrapped_centered(&mut image, &format!("{}", e), foreground);
                     self.error = Some(e);
                     self.nes_frame = Some(image);
                 },
@@ -164,7 +173,8 @@ impl NesFrontUI {
                 NesMessage::Frame(nes_frame) => {
                     self.frame_counter = nes_frame.count();
                     self.nes_frame = Some(ColorImage::from_rgba_unmultiplied([nes_frame.width(), nes_frame.height()], nes_frame.pixels()))
-                }
+                },
+
                 _ => { warn!("unexpected message: {:?}", message);  }
             }
         }
@@ -172,51 +182,15 @@ impl NesFrontUI {
         Ok(())
     }
 
-    fn read_debug_messages(&mut self) -> Result<(), NesConsoleError> {
-        while let Ok(message) = self.debug_rx.try_recv() {
-            match message {
-                NesMessage::CpuSnapshot(snap) => self.cpu_snapshots.push(snap),
-                NesMessage::CpuSnapshotSet(snaps) => self.cpu_snapshots.extend(snaps),
-                _ => panic!("unexpected message: {:?}", message),
-            };
-        }
-
-        let hard_cap = MAX_CPU_SNAPSHOTS;
-        let len = self.cpu_snapshots.len();
-        if len > hard_cap {
-            let keep_from = len - hard_cap;
-            self.cpu_snapshots.drain(0..keep_from);
-        }
-
-        Ok(())
-    }
-
-    fn send_message(&mut self, message: NesMessage) -> Result<(), NesConsoleError> {
-        match self.command_tx.try_send(message) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_frame)) => {
-                warn!("NES UI channel is full, dropping message ...");
-                Ok(())
-            },
-            Err(TrySendError::Disconnected(message)) => {
-                Err(NesConsoleError::ChannelCommunication(format!("NES backend is gone ... {:?}", message)))
-            }
-        }
-    }
-
-    fn send_input_to_emulator(&mut self) {
-        if let Ok(()) = self.command_tx.try_send(Keys(self.input.clone())) {
-            self.input.clear();
-        }
-    }
-
-    fn load_rom_file(&mut self) {
+    fn load_rom_file(&mut self) -> Result<(), NesConsoleError> {
         if let Some(path) = self.rom_file_dialog.take_picked() {
             self.clear_error();
 
             self.rom_file = Some(path.clone());
-            let _ = self.send_message(LoadRom(path));
+            self.nes_mediator.borrow_mut().send_message(LoadRom(path))?;
         }
+
+        Ok(())
     }
 
     fn get_window_title(&self) -> String {
@@ -240,321 +214,13 @@ impl NesFrontUI {
 
         title
     }
-
-    fn monospace(s: &str) -> RichText {
-        RichText::new(s).monospace()
-    }
-
-    fn header(s: &str) -> RichText {
-        RichText::new(s).monospace().strong()
-    }
-
-    fn disasm_line(field: &str, is_current: bool) -> RichText {
-        let mut rt = NesFrontUI::monospace(field);
-        if is_current {
-            rt = rt.color(Color32::from_rgb(255, 128, 0));
-        };
-
-        rt
-    }
-
-    fn debugger_header_bar(&self, ui: &mut Ui) {
-        let rom = self.rom_file
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("(no ROM)");
-
-        let pc  = self.cpu_snapshots.last()
-            .map(|s| format!("0x{:04X}", s.pc()))
-            .unwrap_or_else(|| "------".to_string());
-
-        ui.horizontal(|ui| {
-             ui.label(RichText::new("  NES Debugger").strong());
-            ui.separator();
-
-            ui.label(RichText::new(format!("ROM: {}", rom)).monospace());
-
-            ui.separator();
-            ui.label(RichText::new(format!("PC: {}", pc)).monospace());
-
-            ui.separator();
-            ui.label(RichText::new(format!("ATTACHED: {}", self.is_debugger_attached.to_string().to_uppercase())).monospace());
-        });
-    }
-
-    fn debugger_icon_button(&self, ui: &mut Ui, glyph: &str, tooltip: &str, fill: Color32) -> Response {
-        let rt  = RichText::new(glyph).monospace().size(16.0);
-        let button = Button::new(rt).fill(fill).min_size(vec2(28.0, 24.0));
-        let response = ui.add(button);
-        response.on_hover_text(tooltip)
-    }
-
-    fn debugger_toolbar(&mut self, ui: &mut Ui) {
-        ui.input(|i| {
-            if i.modifiers.shift && i.key_pressed(Key::F5) {
-                self.is_debug_running = false;
-                let _ = self.send_message(Debug(DebugCommand::Paused));
-            } else if i.key_pressed(Key::F5) {
-                self.is_debug_running = true;
-                let _ = self.send_message(Debug(DebugCommand::Run));
-            }
-            if i.modifiers.shift && i.key_pressed(Key::F11) {
-                let _ = self.send_message(Debug(DebugCommand::StepOut));
-            } else if i.key_pressed(Key::F11) {
-                let _ = self.send_message(Debug(DebugCommand::StepInto));
-            }
-            if i.key_pressed(Key::F10) {
-                let _ = self.send_message(Debug(DebugCommand::StepOver));
-            }
-            if i.key_pressed(Key::F7) {
-                let _ = self.send_message(Debug(DebugCommand::StepInstruction));
-            }
-        });
-
-        let run_fill  = Color32::from_rgb( 34, 132,  76);
-        let pause_fill = Color32::from_rgb(178, 54, 54);
-        let default_fill = Color32::from_rgb(66, 66, 72);
-
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-
-            // Group 1: Run / Stop
-            egui::Frame::group(ui.style())
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        let run_color = if self.is_debug_running { run_fill } else { Color32::from_rgb(42, 96, 66) };
-
-                        if self.debugger_icon_button(ui, "▶", "Run / Continue (F5)", run_color).clicked() {
-                            self.is_debug_running = true;
-                            self.is_debugger_attached = true;
-                            let _ = self.send_message(Debug(DebugCommand::Run));
-                        }
-
-                        if self.debugger_icon_button(ui, "⏸", "Pause (Shift+F5)", pause_fill).clicked() {
-                            self.is_debug_running = false;
-                            self.is_debugger_attached = true;
-                            let _ = self.send_message(Debug(DebugCommand::Paused));
-                        }
-                    });
-                });
-
-            // Group 2: Stepping
-            egui::Frame::group(ui.style())
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        if self.debugger_icon_button(ui, "↔", "Step Over (F10)", default_fill).clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepOver));
-                        }
-                        if self.debugger_icon_button(ui, "↘", "Step Into (F11)", default_fill).clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepInto));
-                        }
-                        if self.debugger_icon_button(ui, "↗", "Step Out (Shift+F11)", default_fill).clicked() {
-                            let _ = self.send_message(Debug(DebugCommand::StepOut));
-                        }
-                        if self.debugger_icon_button(ui, "⏭", "Step Instruction (F7)", default_fill).clicked() {
-                            self.is_debug_running = false;
-                            self.is_debugger_attached = true;
-                            let _ = self.send_message(Debug(DebugCommand::StepInstruction));
-                        }
-                    });
-                });
-
-            // Group 3: Others
-            egui::Frame::group(ui.style())
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        if self.debugger_icon_button(ui, "🚫", "Clear Screen", default_fill).clicked() {
-                            self.cpu_snapshots.clear();
-                        }
-
-                        if self.debugger_icon_button(ui, "🔌", "Attach / Detach", default_fill).clicked() {
-                            self.is_debug_running = !self.is_debug_running;
-                            self.is_debugger_attached = !self.is_debugger_attached;
-
-                            let _ = if self.is_debugger_attached {
-                                self.send_message(Debug(DebugCommand::Paused))
-                            } else {
-                                self.send_message(Debug(DebugCommand::Detach))
-                            };
-                        }
-
-                        if self.debugger_icon_button(ui, "✨", "Explain", default_fill).clicked() {
-                        }
-                    });
-                });
-
-            // Group 4: Quit
-            egui::Frame::group(ui.style())
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        if self.debugger_icon_button(ui, "❌", "Quit", default_fill).clicked() {
-                            self.is_debug_running = false;
-                            self.is_debugger_attached = false;
-                            self.debug_window = false;
-                            let _ = self.send_message(Debug(DebugCommand::Detach));
-                        }
-                    });
-                });
-        });
-    }
-
-    fn debugger_table_header(&self, mut header: TableRow) {
-        for item in ["", "PC", "BYTES", "OP", "OPERAND", "A", "X", "Y", "P", "SP", "CYCLES"] {
-            header.col(|ui| {ui.label(NesFrontUI::header(item)); });
-        }
-    }
-
-    fn debugger_table_body(&mut self, body: TableBody) {
-        let total = self.cpu_snapshots.len();
-        if total == 0 {
-            return;
-        }
-
-        body.rows(20.0, total, |mut row| {
-            let idx = row.index();
-            let snapshot = &self.cpu_snapshots[row.index()];
-            let is_current = (idx + 1) == total;
-
-            let pc = format!("{:04X}", snapshot.pc());
-            let mut bytes = String::new();
-
-            for i in snapshot.instruction().iter() {
-                let o = format!(" {:02X}", i);
-                bytes.push_str(&o);
-            }
-
-            let mut op = snapshot.mnemonic();
-            if snapshot.is_illegal() {
-                op.push('*');
-            }
-
-            let operand = snapshot.operand();
-            let a = format!("{:02X}", snapshot.a());
-            let x = format!("{:02X}", snapshot.x());
-            let y = format!("{:02X}", snapshot.y());
-            let p = format!("{:02X}", snapshot.p());
-            let sp = format!("{:02X}", snapshot.sp());
-            let cycles = format!("{}", snapshot.cycles());
-
-            row.col(|ui| {
-                ui.label(Self::monospace(if is_current { "▶" } else { " " }));
-            });
-
-            for (i, item) in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter().enumerate() {
-                row.col(|ui| {
-                    let rt = NesFrontUI::disasm_line(&item, is_current);
-
-                    if i == 2 && let Some(tooltip) = ToolTip6502::tooltip(&item) {
-                        //ui.label(rt).on_hover_text(RichText::new(tooltip).monospace());
-                        let resp = ui.label(rt);
-
-                        resp.on_hover_ui_at_pointer(|ui| {
-                            egui::Frame::popup(ui.style())
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .stroke(Stroke::new(0.0, Color32::PLACEHOLDER))
-                                .shadow(Shadow::NONE)
-                                .show(ui, |ui| {
-                                    ui.style_mut().override_text_style = Some(TextStyle::Monospace);
-                                    ui.set_min_width(420.0);
-
-                                    ui.label(RichText::new(tooltip.title).strong().monospace());
-                                    if let Some(summary) = tooltip.summary {
-                                        ui.add_space(4.0);
-                                        ui.label(RichText::new(summary).monospace());
-                                    }
-
-                                    if let Some(flags) = tooltip.flags_note {
-                                        ui.add_space(4.0);
-                                        ui.label(RichText::new(flags).monospace().monospace());
-                                    }
-
-                                    ui.add_space(8.0);
-                                    Grid::new("instruction_tooltip_grid")
-                                        .num_columns(5)
-                                        .spacing([12.0, 4.0])
-                                        .show(ui, |ui| {
-                                            for h in ["addressing", "assembler", "opc", "bytes", "cycles"] {
-                                                ui.label(RichText::new(h).monospace().strong());
-                                            }
-                                            ui.end_row();
-
-                                            for row in &tooltip.rows {
-                                                ui.label(RichText::new(row.addressing).monospace());
-                                                ui.label(RichText::new(row.assembler).monospace());
-                                                ui.label(RichText::new(row.opc).monospace());
-                                                ui.label(RichText::new(row.bytes).monospace());
-                                                ui.label(RichText::new(row.cycles).monospace());
-                                                ui.end_row();
-                                            }
-                                        });
-
-                                    if let Some(exception) = tooltip.exception {
-                                        ui.add_space(8.0);
-                                        ui.label(RichText::new(exception).monospace().monospace());
-                                    }
-                                });
-                        });
-
-                    } else {
-                        ui.label(rt);
-                    }
-                });
-            }
-        });
-    }
-
-    fn debugger_window(&mut self, ui: &mut Ui) {
-        let _ = self.read_debug_messages();
-
-        self.debugger_header_bar(ui);
-        ui.separator();
-        self.debugger_toolbar(ui);
-
-        ui.separator();
-
-        egui::ScrollArea::vertical()
-            .id_salt("instructions_scroll")
-            .stick_to_bottom(true)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.scope(|ui| {
-                    ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
-
-                    TableBuilder::new(ui)
-                        .striped(true)
-                        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                        .column(Column::initial(16.0).at_least(16.0))   // ▶
-                        .column(Column::initial(60.0).at_least(60.0))   // PC
-                        .column(Column::initial(120.0).at_least(90.0))  // BYTES
-                        .column(Column::initial(72.0).at_least(60.0))   // MNEMONIC
-                        .column(Column::remainder())                          // OPERAND
-                        .column(Column::initial(38.0))                  // A
-                        .column(Column::initial(38.0))                  // X
-                        .column(Column::initial(38.0))                  // Y
-                        .column(Column::initial(46.0))                  // P
-                        .column(Column::initial(46.0))                  // SP
-                        .column(Column::remainder())                          // CYCLES
-                        .header(22.0, |header| {
-                            self.debugger_table_header(header);
-                        })
-                        .body(|body| {
-                            self.debugger_table_body(body);
-                        });
-                });
-            });
-    }
 }
 
 impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
 
         self.send_input_to_emulator();
-        let _ = self.read_and_process_messages();
+        self.read_and_process_messages();
 
         if let Some(image) = self.nes_frame.take() {
             self.texture.set(image, self.texture_options);
@@ -574,16 +240,17 @@ impl App for NesFrontUI {
 
                 if ui.button("Reset").clicked() {
                     self.clear_error();
-                    let _ = self.send_message(Reset);
+                    self.nes_mediator.borrow_mut().send_message(Reset);
                 }
                 let _ = ui.button("Power Off");
 
                 if ui.button("Pause").clicked() {
-                    let _ = self.send_message(Pause);
+                    self.nes_mediator.borrow_mut().send_message(Pause);
                 }
 
                 if ui.button("Debugger").clicked() {
-                    self.debug_window = !self.debug_window;
+                    let visible = self.debugger_ui.visible();
+                    self.debugger_ui.set_visible(!visible);
                 }
 
                 ui.end_row();
@@ -591,9 +258,9 @@ impl App for NesFrontUI {
         });
 
         TopBottomPanel::bottom("status").show(ctx, |ui| {
-            let debugger = if self.is_debugger_attached { "attached" } else { "disabled" };
+            let debugger = self.debugger_ui.footer();
 
-            ui.label(format!("debugger: {} | rendering: {:.3} ms | UI: {:>5.1} fps | Emulator: {:>5.1} fps",
+            ui.label(format!("{} | rendering: {:.3} ms | UI: {:>5.1} fps | Emulator: {:>5.1} fps",
                              debugger, self.rendering_duration_ms, self.ui_fps, self.emulator_fps
             ));
         });
@@ -620,9 +287,9 @@ impl App for NesFrontUI {
                 .title_bar(false)
                 .default_pos(pos2(300.0, 22.0))
                 .resizable(true)
-                .open(&mut self.debug_window.clone())
+                .open(&mut self.debugger_ui.visible())
                 .show(ctx, |ui| {
-                   self.debugger_window(ui);
+                   self.debugger_ui.draw(ui);
                 });
         });
 
