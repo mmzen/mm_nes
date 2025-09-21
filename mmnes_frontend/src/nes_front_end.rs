@@ -46,6 +46,7 @@ pub struct NesFrontEnd {
     command_rx: Receiver<NesMessage>,
     frame_tx: SyncSender<NesMessage>,
     debug_tx: SyncSender<NesMessage>,
+    error_tx: SyncSender<NesMessage>,
     nes: NesConsole,
     args: Args,
     state: NesFrontEndState
@@ -91,7 +92,7 @@ impl NesFrontEnd {
         Ok(console)
     }
 
-    pub fn new(args: Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>) -> Result<NesFrontEnd, NesConsoleError> {
+    pub fn new(args: Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>,) -> Result<NesFrontEnd, NesConsoleError> {
         let nes = NesFrontEnd::create_emulator(&args)?;
 
         let front = NesFrontEnd {
@@ -99,6 +100,7 @@ impl NesFrontEnd {
             frame_tx,
             command_rx,
             debug_tx,
+            error_tx,
             args,
             state: NesFrontEndState::Running
         };
@@ -151,8 +153,8 @@ impl NesFrontEnd {
         NesFrontEnd::try_send_common(&self.debug_tx, "debug", message)
     }
 
-    fn send_error(&self, error: NesConsoleError) {
-        let _ = self.send_message(NesMessage::Error(error));
+    fn send_error_message(&self, error: NesConsoleError) -> Result<(), NesConsoleError> { 
+        NesFrontEnd::try_send_common(&self.error_tx, "error", NesMessage::Error(error))
     }
 
     fn process_frame(&self, frame: NesFrame) -> Result<(), NesConsoleError> {
@@ -198,7 +200,7 @@ impl NesFrontEnd {
                         Ok(Break(NesFrontEndState::Running))
                     }
                     Err(e) => {
-                        self.send_error(e);
+                        self.send_error_message(e)?;
                         Ok(Break(NesFrontEndState::Idle))
                     }
                 }

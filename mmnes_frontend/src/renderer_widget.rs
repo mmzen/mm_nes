@@ -29,6 +29,7 @@ const RENDERER_BUTTONS: [NesButton; 4] = [
 pub struct RendererWidget {
     visible: bool,
     rom_file: Option<PathBuf>,
+    error: Option<NesConsoleError>,
     height: usize,
     width: usize,
     texture: TextureHandle,
@@ -54,6 +55,10 @@ impl NesUiWidget for RendererWidget {
 
     fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
         self.rom_file = rom_file;
+    }
+
+    fn set_error(&mut self, error: Option<NesConsoleError>) {
+        self.error = error;
     }
 
     fn menu_buttons(&self) -> &[NesButton] {
@@ -107,6 +112,7 @@ impl RendererWidget {
         RendererWidget {
             visible: false,
             rom_file: None,
+            error: None,
             height,
             width,
             texture,
@@ -122,22 +128,22 @@ impl RendererWidget {
         }
     }
 
-    fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
-        let messages = self.nes_mediator.borrow().read_messages()?;
+    fn prepare_nes_frame(&mut self) -> Result<(), NesConsoleError> {
+        if let Some(error) = &self.error {
+            let image = self.error_frame(error);
+            self.nes_frame = Some(image);
+        } else {
+            let messages = self.nes_mediator.borrow().read_messages()?;
 
-        for message in messages {
-            match message {
-                NesMessage::Error(e) => {
-                    let image = self.error_frame(&e);
-                    self.nes_frame = Some(image);
-                },
+            for message in messages {
+                match message {
+                    NesMessage::Frame(nes_frame) => {
+                        self.frame_counter = nes_frame.count();
+                        self.nes_frame = Some(ColorImage::from_rgba_unmultiplied([nes_frame.width(), nes_frame.height()], nes_frame.pixels()))
+                    },
 
-                NesMessage::Frame(nes_frame) => {
-                    self.frame_counter = nes_frame.count();
-                    self.nes_frame = Some(ColorImage::from_rgba_unmultiplied([nes_frame.width(), nes_frame.height()], nes_frame.pixels()))
-                },
-
-                _ => { warn!("unexpected message: {:?}", message);  }
+                    _ => { warn!("unexpected message: {:?}", message); }
+                }
             }
         }
 
@@ -215,7 +221,7 @@ impl RendererWidget {
     }
 
     fn renderer_window(&mut self, ctx: &Context) -> Result<(), NesConsoleError> {
-        self.read_and_process_messages();
+        self.prepare_nes_frame();
 
         if let Some(image) = self.nes_frame.take() {
             self.texture.set(image, self.texture_options);

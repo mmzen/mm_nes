@@ -24,6 +24,7 @@ pub struct DebuggerWidget {
     visible: bool,
     is_debugger_attached: bool,
     rom_file: Option<PathBuf>,
+    error: Option<NesConsoleError>,
     nes_mediator: Rc<RefCell<NesMediator>>,
     cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
 }
@@ -39,6 +40,10 @@ impl NesUiWidget for DebuggerWidget {
 
     fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
         self.rom_file = rom_file;
+    }
+
+    fn set_error(&mut self, error: Option<NesConsoleError>) {
+        self.error = error;
     }
 
     fn menu_buttons(&self) -> &[NesButton] {
@@ -71,6 +76,7 @@ impl DebuggerWidget {
             visible: false,
             is_debugger_attached: false,
             rom_file: None,
+            error: None,
             nes_mediator,
             cpu_snapshots: Vec::new(),
         }

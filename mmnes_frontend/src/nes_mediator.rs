@@ -7,15 +7,17 @@ pub struct NesMediator {
     frame_rx: Receiver<NesMessage>,
     command_tx: SyncSender<NesMessage>,
     debug_rx: Receiver<NesMessage>,
+    error_rx: Receiver<NesMessage>,
 }
 
 impl NesMediator {
 
-    pub fn new(frame_rx: Receiver<NesMessage>, command_tx: SyncSender<NesMessage>, debug_rx: Receiver<NesMessage>) -> NesMediator {
+    pub fn new(frame_rx: Receiver<NesMessage>, command_tx: SyncSender<NesMessage>, debug_rx: Receiver<NesMessage>, error_rx: Receiver<NesMessage>) -> NesMediator {
         NesMediator {
             frame_rx,
             command_tx,
             debug_rx,
+            error_rx,
         }
     }
 
@@ -55,6 +57,27 @@ impl NesMediator {
                         messages.push(message);
                     },
 
+                    other => warn!("unexpected debug message: {:?}", other),
+                },
+
+                Err(TryRecvError::Empty) => break,
+
+                Err(TryRecvError::Disconnected) => {
+                    return Err(NesConsoleError::ChannelCommunication("NES backend is gone ...".to_string()));
+                }
+            }
+        }
+
+        Ok(messages)
+    }
+
+    pub fn read_error_messages(&self) -> Result<Vec<NesMessage>, NesConsoleError> {
+        let mut messages = Vec::new();
+
+        loop {
+            match self.error_rx.try_recv() {
+                Ok(message) => match message {
+                    NesMessage::Error(_) => messages.push(message),
                     other => warn!("unexpected debug message: {:?}", other),
                 },
 

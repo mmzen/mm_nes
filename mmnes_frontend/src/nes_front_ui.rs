@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
-use eframe::egui::{CentralPanel, Color32, Context, Event, Grid, Key, RawInput, TopBottomPanel};
+use eframe::egui::{Align, Align2, CentralPanel, Color32, Context, Event, Grid, Id, Key, LayerId, Modal, Order, Popup, PopupAnchor, RawInput, RichText, TopBottomPanel, Ui, Vec2};
 use egui_file_dialog::FileDialog;
+use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::debugger_widget::DebuggerWidget;
@@ -35,7 +36,7 @@ pub struct NesFrontUI {
 
 impl NesFrontUI {
 
-    pub fn new(cc: &eframe::CreationContext<'_>, command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
+    pub fn new(cc: &eframe::CreationContext<'_>, command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, error_rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
 
         let frame = egui::containers::Frame {
             inner_margin: Default::default(),
@@ -46,15 +47,15 @@ impl NesFrontUI {
             shadow: Default::default(),
         };
 
-        let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx)));
+        let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx, error_rx)));
 
         let mut widgets = Vec::<Box<dyn NesUiWidget>>::new();
 
-        let debugger_ui = DebuggerWidget::new(nes_mediator.clone());
         let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone());
+        let debugger_ui = DebuggerWidget::new(nes_mediator.clone());
 
-        widgets.push(Box::new(debugger_ui));
         widgets.push(Box::new(renderer_ui));
+        widgets.push(Box::new(debugger_ui));
 
         NesFrontUI {
             emulator_viewport_frame: frame,
@@ -74,6 +75,23 @@ impl NesFrontUI {
 
         let inputs = std::mem::take(&mut self.input);
         self.nes_mediator.borrow_mut().send_message(Keys(inputs))
+    }
+
+    pub fn read_error_messages(&mut self) -> Result<(), NesConsoleError> {
+        let messages = self.nes_mediator.borrow().read_error_messages()?;
+
+        for message in messages {
+            match message {
+                NesMessage::Error(error) => self.error = Some(error),
+                _ => warn!("unexpected message: {:?}", message),
+            };
+        }
+
+        for widget in &mut self.widgets {
+            widget.set_error(self.error.clone());
+        }
+
+        Ok(())
     }
 
     fn load_rom_file(&mut self) -> Result<(), NesConsoleError> {
@@ -111,11 +129,56 @@ impl NesFrontUI {
 
         title
     }
+
+    fn show_error_modal(&mut self, ctx: &egui::Context, error: &NesConsoleError) {
+        let mut close_requested = false;
+
+        egui::Window::new("error_modal_window")
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+
+                ui.horizontal(|ui| {
+                    let title = RichText::new("Fatalistic Error ☝").heading().color(Color32::from_rgb(230, 75, 75));
+                    ui.label(title);
+                });
+
+                ui.add_space(4.0);
+                ui.label(RichText::new(error.to_string()).strong());
+
+                ui.add_space(8.0);
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0))).clicked() {
+                            close_requested = true;
+                        }
+                    });
+                });
+
+                if ui.input(|i| i.key_pressed(Key::Escape) || i.key_pressed(Key::Enter)) {
+                    close_requested = true;
+                }
+            });
+
+        if close_requested {
+            self.error = None;
+            for widget in &mut self.widgets {
+                widget.set_error(None);
+            }
+        }
+    }
 }
 
 impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
 
+        self.read_error_messages();
         self.send_input_to_emulator();
 
         ctx.request_repaint();
@@ -151,6 +214,12 @@ impl App for NesFrontUI {
         CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |_| {
             for widget in &mut self.widgets {
                 widget.draw(ctx);
+            }
+
+            let error = self.error.clone();
+
+            if let Some(error) = error {
+                self.show_error_modal(ctx, &error);
             }
         });
         
