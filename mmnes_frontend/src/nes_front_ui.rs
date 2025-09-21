@@ -2,70 +2,40 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::time::{Instant};
 use eframe::{egui, App, Frame};
-use eframe::egui::{pos2, vec2, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, RawInput, TextureHandle, TextureOptions, TopBottomPanel};
+use eframe::egui::{CentralPanel, Color32, Context, Event, Grid, Key, RawInput, TopBottomPanel};
 use egui_file_dialog::FileDialog;
-use log::{warn};
-use mmnes_core::util::measure_exec_time;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
-use crate::debugger_ui::DebuggerUI;
+use crate::debugger_widget::DebuggerWidget;
 use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
-use crate::nes_message::NesMessage::{Keys, LoadRom, Pause, Reset};
-use crate::nes_ui::NesUI;
-use crate::text_8x8_generator::Test8x8Generator;
+use crate::nes_message::NesMessage::{Keys, LoadRom};
+use crate::nes_ui_widget::NesUiWidget;
+use crate::renderer_widget::RendererWidget;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct NesButtonId(pub u16);
+
+#[derive(Debug, Copy, Clone)]
+pub struct NesButton {
+    pub id: NesButtonId,
+    pub label: &'static str,
+}
 
 pub struct NesFrontUI {
-    texture: TextureHandle,
-    texture_options: TextureOptions,
-    height: usize,
-    width: usize,
-    last_tick: Instant,
-    last_frame_counter: u32,
-    frame_counter: u32,
-    rendering_duration_ms: f64,
-    ui_fps: f32,
-    emulator_fps: f32,
     emulator_viewport_frame: egui::containers::Frame,
     input: KeyEvents,
     rom_file_dialog: FileDialog,
     rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
-    nes_frame: Option<ColorImage>,
-    debugger_ui: Box<dyn NesUI>,
+    widgets: Vec<Box<dyn NesUiWidget>>,
     nes_mediator: Rc<RefCell<NesMediator>>
 }
 
 impl NesFrontUI {
 
-    fn create_default_texture(width: usize, height: usize, color: Color32) -> Vec<Color32> {
-        let mut vec = Vec::<Color32>::with_capacity(width * height);
-
-        for _ in 0..width * height {
-            vec.push(color);
-        }
-
-        vec
-    }
-
-
     pub fn new(cc: &eframe::CreationContext<'_>, command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
-        let vec = NesFrontUI::create_default_texture(width, height, Color32::DARK_GRAY);
-
-        let texture_options = TextureOptions {
-            minification: egui::TextureFilter::Nearest,
-            wrap_mode: Default::default(),
-            magnification: egui::TextureFilter::Nearest,
-            mipmap_mode: None,
-        };
-
-        let texture = cc.egui_ctx.load_texture(
-            "nes-emulator-viewport",
-            ColorImage::new([width, height], vec),
-            texture_options
-        );
 
         let frame = egui::containers::Frame {
             inner_margin: Default::default(),
@@ -77,66 +47,24 @@ impl NesFrontUI {
         };
 
         let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx)));
-        let debugger_ui = Box::new(DebuggerUI::new(nes_mediator.clone()));
+
+        let mut widgets = Vec::<Box<dyn NesUiWidget>>::new();
+
+        let debugger_ui = DebuggerWidget::new(nes_mediator.clone());
+        let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone());
+
+        widgets.push(Box::new(debugger_ui));
+        widgets.push(Box::new(renderer_ui));
 
         NesFrontUI {
-            texture,
-            texture_options,
-            height,
-            width,
-            last_tick: Instant::now(),
-            last_frame_counter: 0,
-            frame_counter: 0,
-            rendering_duration_ms: 0.0,
-            ui_fps: 0.0,
-            emulator_fps: 0.0,
             emulator_viewport_frame: frame,
             input: KeyEvents::new(),
             rom_file_dialog: FileDialog::new(),
             rom_file: None,
             error: None,
-            nes_frame: None,
-            debugger_ui,
-            nes_mediator
+            nes_mediator,
+            widgets
         }
-    }
-
-    fn compute_fps(&mut self) {
-        const ALPHA: f32 = 0.1;
-
-        let now = Instant::now();
-        let duration = (now - self.last_tick).as_secs_f32();
-
-        if duration > 0.0 {
-            // UI FPS: 1/duration (EMA-smoothed)
-            let ui_fps = 1.0 / duration;
-            self.ui_fps = if self.ui_fps == 0.0 {
-                ui_fps
-            } else {
-                self.ui_fps + ALPHA * (ui_fps - self.ui_fps)
-            };
-
-            // Emulator FPS: delta frames / duration
-            let delta_frames = if self.frame_counter >= self.last_frame_counter {
-                (self.frame_counter - self.last_frame_counter) as f32
-            } else {
-                0.0
-            };
-
-            let emulator_fps = delta_frames / duration;
-            self.emulator_fps = if self.emulator_fps == 0.0 {
-                emulator_fps
-            } else {
-                self.emulator_fps + ALPHA * (emulator_fps - self.emulator_fps)
-            };
-
-            self.last_frame_counter = self.frame_counter;
-            self.last_tick = now;
-        }
-    }
-
-    fn clear_error(&mut self) {
-        self.error = None;
     }
 
     fn send_input_to_emulator(&mut self) -> Result<(), NesConsoleError> {
@@ -148,45 +76,14 @@ impl NesFrontUI {
         self.nes_mediator.borrow_mut().send_message(Keys(inputs))
     }
 
-    fn error_frame(&self, error: &NesConsoleError) -> ColorImage {
-        let background = Color32::DARK_GRAY;
-        let foreground = Color32::DARK_RED;
-
-        let mut image = ColorImage::new([self.width, self.height], NesFrontUI::create_default_texture(self.width, self.height, background));
-        let _ = Test8x8Generator::draw_text_wrapped_centered(&mut image, &format!("{}", error), foreground);
-
-        image
-    }
-
-    fn read_and_process_messages(&mut self) -> Result<(), NesConsoleError> {
-        let messages = self.nes_mediator.borrow().read_messages()?;
-
-        for message in messages {
-            match message {
-                NesMessage::Error(e) => {
-                    let image = self.error_frame(&e);
-
-                    self.error = Some(e);
-                    self.nes_frame = Some(image);
-                },
-
-                NesMessage::Frame(nes_frame) => {
-                    self.frame_counter = nes_frame.count();
-                    self.nes_frame = Some(ColorImage::from_rgba_unmultiplied([nes_frame.width(), nes_frame.height()], nes_frame.pixels()))
-                },
-
-                _ => { warn!("unexpected message: {:?}", message);  }
-            }
-        }
-
-        Ok(())
-    }
-
     fn load_rom_file(&mut self) -> Result<(), NesConsoleError> {
         if let Some(path) = self.rom_file_dialog.take_picked() {
-            self.clear_error();
-
             self.rom_file = Some(path.clone());
+
+            for widget in &mut self.widgets {
+                widget.set_rom_file(self.rom_file.clone());
+            }
+            
             self.nes_mediator.borrow_mut().send_message(LoadRom(path))?;
         }
 
@@ -220,79 +117,55 @@ impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
 
         self.send_input_to_emulator();
-        self.read_and_process_messages();
-
-        if let Some(image) = self.nes_frame.take() {
-            self.texture.set(image, self.texture_options);
-        }
 
         ctx.request_repaint();
 
         TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             Grid::new("edit_grid").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
-                if ui.button("Load ROM").clicked() {
+                if ui.button("LOAD ROM").clicked() {
                     self.rom_file_dialog.pick_file();
                 }
 
                 self.load_rom_file();
-
                 self.rom_file_dialog.update(ctx);
 
-                if ui.button("Reset").clicked() {
-                    self.clear_error();
-                    self.nes_mediator.borrow_mut().send_message(Reset);
-                }
-                let _ = ui.button("Power Off");
+                for widget in &mut self.widgets {
+                    let mut clicked: Option<NesButtonId> = None;
+                    let buttons = widget.menu_buttons();
 
-                if ui.button("Pause").clicked() {
-                    self.nes_mediator.borrow_mut().send_message(Pause);
-                }
+                    for button in buttons {
+                        if ui.button(button.label).clicked() {
+                            clicked = Some(button.id);
+                        }
+                    }
 
-                if ui.button("Debugger").clicked() {
-                    let visible = self.debugger_ui.visible();
-                    self.debugger_ui.set_visible(!visible);
+                    if let Some(clicked_button_id) = clicked {
+                        widget.on_button(clicked_button_id);
+                    }
                 }
 
                 ui.end_row();
             });
         });
 
-        TopBottomPanel::bottom("status").show(ctx, |ui| {
-            let debugger = self.debugger_ui.footer();
-
-            ui.label(format!("{} | rendering: {:.3} ms | UI: {:>5.1} fps | Emulator: {:>5.1} fps",
-                             debugger, self.rendering_duration_ms, self.ui_fps, self.emulator_fps
-            ));
-        });
-
-
         CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |_| {
-            egui::Window::new("emulator")
-                .default_pos(pos2(0.0, 22.0))
-                .show(ctx, |ui| {
-                    let img_px = vec2(self.width as f32, self.height as f32);
-                    let available_size = ui.available_size();
-                    let scale = (available_size.x / img_px.x).min(available_size.y / img_px.y);
-                    let size  = img_px * scale;
-                        ui.vertical_centered_justified(|ui| {
-                            let (_, duration) = measure_exec_time(|| {
-                                ui.add(Image::new((self.texture.id(), size)));
-                            });
-                            self.compute_fps();
-                            self.rendering_duration_ms = duration.as_secs_f64() * 1000.0;
-                        });
-                });
-
-            egui::Window::new("NES Debugger")
-                .title_bar(false)
-                .default_pos(pos2(300.0, 22.0))
-                .resizable(true)
-                .open(&mut self.debugger_ui.visible())
-                .show(ctx, |ui| {
-                   self.debugger_ui.draw(ui);
-                });
+            for widget in &mut self.widgets {
+                widget.draw(ctx);
+            }
         });
+        
+        TopBottomPanel::bottom("status").show(ctx, |ui| {
+            let mut footer = String::new();
 
+            for widget in &self.widgets {
+                for field in widget.footer() {
+                    footer.push_str(&format!("{} | ", field));
+                }
+            }
+            
+            ui.label(footer);
+        });
+        
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.get_window_title()));
     }
 

@@ -1,11 +1,8 @@
-use log::{error, warn};
+use log::warn;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
-use eframe::egui::{Color32, ColorImage};
+use eframe::egui::{ColorImage};
 use mmnes_core::nes_console::NesConsoleError;
-use mmnes_core::nes_frame::NesFrame;
-use crate::nes_front_ui::NesFrontUI;
 use crate::nes_message::NesMessage;
-use crate::text_8x8_generator::Test8x8Generator;
 
 pub struct NesMediator {
     frame_rx: Receiver<NesMessage>,

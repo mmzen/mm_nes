@@ -2,30 +2,33 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use eframe::egui;
-use eframe::egui::{vec2, Button, Color32, Grid, Key, Response, RichText, Shadow, Stroke, TextStyle, Ui};
+use eframe::egui::{pos2, vec2, Button, Color32, Context, Grid, Key, Response, RichText, Shadow, Stroke, TextStyle, Ui};
 use egui_extras::{Column, TableBody, TableBuilder, TableRow};
 use log::warn;
 use mmnes_core::cpu_debugger::{CpuSnapshot, DebugCommand};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::helpers_ui::HelpersUI;
+use crate::nes_front_ui::{NesButton, NesButtonId};
 use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::Debug;
-use crate::nes_ui::NesUI;
+use crate::nes_ui_widget::NesUiWidget;
 use crate::tooltip_6502::ToolTip6502;
 
+const WINDOW_NAME: &str = "NES Debugger";
+const DEBUGGER_TOGGLE_BUTTON: NesButtonId = NesButtonId(0);
+const DEBUGGER_BUTTONS: [NesButton; 1] = [ NesButton { id: DEBUGGER_TOGGLE_BUTTON, label: "DEBUGGER" } ];
 const MAX_CPU_SNAPSHOTS: usize = 256;
 
-pub struct DebuggerUI {
+pub struct DebuggerWidget {
     visible: bool,
-    is_debugger_running: bool,
     is_debugger_attached: bool,
     rom_file: Option<PathBuf>,
     nes_mediator: Rc<RefCell<NesMediator>>,
     cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
 }
 
-impl NesUI for DebuggerUI {
+impl NesUiWidget for DebuggerWidget {
     fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
     }
@@ -34,31 +37,47 @@ impl NesUI for DebuggerUI {
         self.visible
     }
 
-    fn footer(&self) -> String {
-        let debugger_state = if self.is_debugger_attached { "attached" } else { "disabled" };
-        format!("debugger: {}", debugger_state)
+    fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
+        self.rom_file = rom_file;
     }
 
-    fn draw(&mut self, ui: &mut Ui) -> Result<(), NesConsoleError> {
-        self.debugger_window(ui)
+    fn menu_buttons(&self) -> &[NesButton] {
+        &DEBUGGER_BUTTONS
+    }
+
+    fn on_button(&mut self, id: NesButtonId) -> Result<(), NesConsoleError> {
+        match id {
+            DEBUGGER_TOGGLE_BUTTON => self.switch_visible(),
+            _ => return Err(NesConsoleError::InternalError("unknown button".to_string())),
+        }
+
+        Ok(())
+    }
+
+    fn footer(&self) -> Vec<String> {
+        let debugger_state = if self.is_debugger_attached { "attached" } else { "disabled" };
+        vec![format!("debugger: {}", debugger_state)]
+    }
+
+    fn draw(&mut self, ctx: &egui::Context) -> Result<(), NesConsoleError> {
+        self.debugger_window(ctx)
     }
 }
 
-impl DebuggerUI {
+impl DebuggerWidget {
 
-    pub fn new(nes_mediator: Rc<RefCell<NesMediator>>) -> DebuggerUI {
-        DebuggerUI {
+    pub fn new(nes_mediator: Rc<RefCell<NesMediator>>) -> DebuggerWidget {
+        DebuggerWidget {
             visible: false,
-            is_debugger_running: false,
             is_debugger_attached: false,
             rom_file: None,
             nes_mediator,
             cpu_snapshots: Vec::new(),
         }
     }
-    
-    pub fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
-        self.rom_file = rom_file;
+
+    fn switch_visible(&mut self) {
+        self.visible = !self.visible;
     }
 
     fn disasm_line(field: &str, is_current: bool) -> RichText {
@@ -285,7 +304,7 @@ impl DebuggerUI {
 
             for (i, item) in [pc, bytes, op, operand, a, x, y, p, sp, cycles].iter().enumerate() {
                 row.col(|ui| {
-                    let rt = DebuggerUI::disasm_line(&item, is_current);
+                    let rt = DebuggerWidget::disasm_line(&item, is_current);
 
                     if i == 2 && let Some(tooltip) = ToolTip6502::tooltip(&item) {
                         //ui.label(rt).on_hover_text(RichText::new(tooltip).monospace());
@@ -367,7 +386,7 @@ impl DebuggerUI {
         Ok(())
     }
 
-    fn debugger_window(&mut self, ui: &mut Ui) -> Result<(), NesConsoleError> {
+    fn debugger_window_inner(&mut self, ui: &mut Ui) -> Result<(), NesConsoleError> {
         self.read_debug_messages()?;
 
         self.debugger_header_bar(ui);
@@ -405,6 +424,19 @@ impl DebuggerUI {
                             self.debugger_table_body(body);
                         });
                 });
+            });
+
+        Ok(())
+    }
+
+    fn debugger_window(&mut self, ctx: &Context) -> Result<(), NesConsoleError> {
+        egui::Window::new(WINDOW_NAME)
+            .title_bar(false)
+            .default_pos(pos2(300.0, 22.0))
+            .resizable(true)
+            .open(&mut self.visible())
+            .show(ctx, |ui| {
+                self.debugger_window_inner(ui);
             });
 
         Ok(())
