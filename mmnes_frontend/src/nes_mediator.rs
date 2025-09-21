@@ -1,6 +1,5 @@
 use log::warn;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
-use eframe::egui::{ColorImage};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
 

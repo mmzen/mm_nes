@@ -4,6 +4,7 @@ use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_front_ui::{NesButton, NesButtonId};
 
 pub trait NesUiWidget {
+    #[allow(dead_code)]
     fn set_visible(&mut self, visible: bool);
     fn visible(&self) -> bool;
     fn set_rom_file(&mut self, rom_file: Option<PathBuf>);
