@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
-use eframe::egui::{Align, Align2, CentralPanel, Color32, Context, Event, Grid, Id, Key, LayerId, Modal, Order, Popup, PopupAnchor, RawInput, RichText, TopBottomPanel, Ui, Vec2};
+use eframe::egui::{Align, Align2, CentralPanel, Color32, Context, Event, Grid, Key, RawInput, RichText, TopBottomPanel, Vec2};
 use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
@@ -130,7 +130,7 @@ impl NesFrontUI {
         title
     }
 
-    fn show_error_modal(&mut self, ctx: &egui::Context, error: &NesConsoleError) {
+    fn show_error_modal(&mut self, ctx: &Context, error: &NesConsoleError) {
         let mut close_requested = false;
 
         egui::Window::new("error_modal_window")

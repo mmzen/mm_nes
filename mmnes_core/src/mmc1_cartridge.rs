@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::BufReader;
 use std::rc::Rc;
-use log::debug;
+use log::{debug, info};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError, PPU_ADDRESS_SPACE};
@@ -359,8 +359,27 @@ impl Mmc1Cartridge {
         Ok(())
     }
 
+    fn get_phys_addr_half_lo_by_num_memory_banks(size: usize, num_memory_banks: usize) -> (u16, u16) {
+        if num_memory_banks == 1 {
+            (0u16, (size - 1) as u16)
+        } else {
+            (0u16, ((size / 2) - 1) as u16)
+        }
+    }
+
+    fn phys_addr_half_hi_by_num_memory_banks(size: usize, num_memory_banks: usize) -> (u16, u16) {
+        if num_memory_banks == 1 {
+            (0u16, 0u16)
+        } else {
+            ((size / 2) as u16, (size - 1) as u16)
+        }
+    }
+
     fn build_switchable_memory(name: String, size: usize, memory_banks: Vec<MemoryBank>, virtual_addr_space: (u16, u16)) -> Result<SwitchableMemory, MemoryError> {
         let num_memory_banks = memory_banks.len();
+
+        let phys_addr_half_lo = Mmc1Cartridge::get_phys_addr_half_lo_by_num_memory_banks(size, num_memory_banks);
+        let phys_addr_half_hi = Mmc1Cartridge::phys_addr_half_hi_by_num_memory_banks(size, num_memory_banks);
 
         let memory = SwitchableMemory {
             name,
@@ -369,12 +388,12 @@ impl Mmc1Cartridge {
             num_memory_banks,
             current_bank_lo: 0,
             current_bank_hi: if num_memory_banks == 0 { 0 } else { num_memory_banks - 1 },
-            phys_addr_half_lo: (0, ((size / 2) - 1) as u16),
-            phys_addr_half_hi: ((size / 2) as u16, (size - 1) as u16),
+            phys_addr_half_lo,
+            phys_addr_half_hi,
             virtual_addr_space
         };
 
-        debug!("built switchable_memory: {}, virtual_addr_space: 0x{:04X} - 0x{:04X}, phys_addr_half_lo: 0x{:04X} - 0x{:04X}, phys_addr_half_hi: 0x{:04X} - 0x{:04X}, bank size: {}, number of banks: {}",
+        info!("built switchable_memory: {}, virtual_addr_space: 0x{:04X} - 0x{:04X}, phys_addr_half_lo: 0x{:04X} - 0x{:04X}, phys_addr_half_hi: 0x{:04X} - 0x{:04X}, bank size: {}, number of banks: {}",
             memory.name, memory.virtual_addr_space.0, memory.virtual_addr_space.1, memory.phys_addr_half_lo.0, memory.phys_addr_half_lo.1, memory.phys_addr_half_hi.0, memory.phys_addr_half_hi.1, size / num_memory_banks, num_memory_banks);
 
         Ok(memory)

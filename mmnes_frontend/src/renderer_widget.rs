@@ -80,7 +80,7 @@ impl NesUiWidget for RendererWidget {
     fn footer(&self) -> Vec<String> {
         let mut fields = Vec::<String>::new();
 
-        fields.push(format!("rendering: {:.3}", self.rendering_duration_ms));
+        fields.push(format!("rendering: {:.3} ms", self.rendering_duration_ms));
         fields.push(format!("UI: {:>5.1} fps", self.ui_fps));
         fields.push(format!("emulator: {:>5.1} fps", self.emulator_fps));
 
