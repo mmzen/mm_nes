@@ -10,13 +10,15 @@ pub enum MemoryType {
     #[default]
     StandardMemory,
     SwitchableMemory,
+    PpuCiramMemory,
 }
 
 impl Display for MemoryType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            MemoryType::StandardMemory => write!(f, "memory type: Standard Memory"),
-            MemoryType::SwitchableMemory => write!(f, "memory type: Switchable Memory"),
+            MemoryType::StandardMemory => write!(f, "memory type: standard Memory"),
+            MemoryType::SwitchableMemory => write!(f, "memory type: switchable Memory"),
+            MemoryType::PpuCiramMemory => write!(f, "memory type: ciram Memory"),
         }
     }
 }
@@ -32,7 +34,11 @@ pub trait Memory: Debug {
     fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         self.read_byte(addr)
     }
-    
+
+    /***
+     * XXX
+     * should be implemented by default (double call to read/write byte)
+     ***/
     fn write_byte(&mut self, _addr: u16, _value: u8) -> Result<(), MemoryError> {
         unreachable!()
     }
