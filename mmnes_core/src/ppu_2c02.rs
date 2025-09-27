@@ -9,13 +9,12 @@ use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
 use crate::nes_frame::{FrameState, NesFrame};
 use crate::memory::{Memory, MemoryError};
-use crate::memory_bank::MemoryBank;
-use crate::memory_mirror::MemoryMirror;
+use crate::memory_ciram::{CiramMemory, PpuNameTableMirroring};
 use crate::memory_palette::MemoryPalette;
 use crate::nes_bus::NESBus;
 use crate::palette::Palette;
 use crate::palette_2c02::Palette2C02;
-use crate::ppu::{PPU, PpuError, PpuNameTableMirroring, PpuType};
+use crate::ppu::{PPU, PpuError, PpuType};
 use crate::ppu_2c02::ControlFlag::{BackgroundPatternTableAddr, GenerateNmi, SpritePatternTableAddr, SpriteSize, VramIncrement};
 use crate::ppu_2c02::MaskFlag::{ShowBackground, ShowSprites};
 use crate::ppu_2c02::PpuFlag::{Control, Mask, Status};
@@ -37,9 +36,7 @@ pub const NT_BASES: [(u16,u16); 8] = [
     (0x3C00, 0x3EFF), // partial mirror of name table 4
 ];
 
-pub const NT_MAP_HORIZONTAL: [usize; 8] = [0, 0, 1, 1, 0, 0, 1, 1]; // A and B same name table; C and D same name table
-pub const NT_MAP_VERTICAL:   [usize; 8] = [0, 1, 0, 1, 0, 1, 0, 1]; // A and C same name table; B and D same name table
-pub const NT_MAP_SINGLE_SCREEN: [usize; 8] = [0, 0, 0, 0, 0, 0, 0, 0]; // A, B, C, and D same name table
+
 const NAME_TABLE_SIZE: usize = 1024;
 const ATTRIBUTE_TABLE_SIZE: usize = 64;
 const PATTERN_TABLE_LEFT_ADDR: u16 = 0x0000;
@@ -780,31 +777,9 @@ impl Ppu2c02 {
     }
 
     fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: PpuNameTableMirroring) -> Result<(), PpuError> {
-        let map = match mirroring {
-            PpuNameTableMirroring::Vertical => NT_MAP_VERTICAL,
-            PpuNameTableMirroring::Horizontal => NT_MAP_HORIZONTAL,
-            PpuNameTableMirroring::SingleScreen => NT_MAP_SINGLE_SCREEN,
-        };
-
-        let mut created_name_tables: Vec<Rc<RefCell<MemoryBank>>> = Vec::new();
-
-        for (i, &(start, end)) in NT_BASES.iter().enumerate() {
-            let group = map[i];
-
-            let new_name_table: Rc<RefCell<dyn BusDevice>> = if let Some(name_table) = created_name_tables.get(group) {
-                let m = MemoryMirror::new(name_table.clone(), (start, end))?;
-                Rc::new(RefCell::new(m))
-            } else {
-                let m0 = MemoryBank::new(NAME_TABLE_SIZE, (start, end));
-                let m1 = Rc::new(RefCell::new(m0));
-                created_name_tables.push(m1.clone());
-                m1
-            };
-
-            new_name_table.borrow_mut().initialize()?;
-            bus.add_device(new_name_table)?;
-        }
-
+        let ciram_memory = CiramMemory::new(mirroring);
+        bus.add_device(Rc::new(RefCell::new(ciram_memory)))?;
+        
         Ok(())
     }
 

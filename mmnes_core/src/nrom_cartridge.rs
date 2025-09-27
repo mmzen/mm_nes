@@ -12,7 +12,7 @@ use crate::ines_loader::{FromINes, INesRomHeader};
 use crate::loader::LoaderError;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
-use crate::ppu::PpuNameTableMirroring;
+use crate::memory_ciram::PpuNameTableMirroring;
 
 const NROM_PRG_MEMORY_BANK_SIZE_16K: usize = 16 * 1024;
 const NROM_PRG_MEMORY_BANK_SIZE_32K: usize = 32 * 1024;

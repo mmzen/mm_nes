@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::bus_device::BusDeviceType::WRAM;
@@ -6,9 +8,10 @@ use crate::memory::{Memory, MemoryError};
 use crate::memory::MemoryType::PpuCiramMemory;
 use crate::memory_bank::MemoryBank;
 
-const PPU_CIRAM_SIZE: usize = 2 * 1024;
-const PPU_CIRAM_ADDRESS_RANGE: (u16, u16) = (0x2000, 0x3FFF);
-const CIRAM_MEMORY_NAME: &str = "PPU CIRAM";
+const PPU_CIRAM_PHYSICAL_SIZE: usize = 2 * 1024;
+const PPU_CIRAM_VIRTUAL_SIZE: usize = 4 * 1024;
+const PPU_CIRAM_VIRTUAL_ADDRESS_RANGE: (u16, u16) = (0x2000, 0x3EFF);
+const PPU_CIRAM_MEMORY_NAME: &str = "PPU CIRAM";
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum PpuNameTableMirroring {
@@ -16,6 +19,17 @@ pub enum PpuNameTableMirroring {
     Horizontal,
     SingleScreenLower,
     SingleScreenUpper,
+}
+
+impl Display for PpuNameTableMirroring {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            PpuNameTableMirroring::Vertical => write!(f, "vertical mirroring"),
+            PpuNameTableMirroring::Horizontal => write!(f, "horizontal mirroring"),
+            PpuNameTableMirroring::SingleScreenLower => write!(f, "single screen lower"),
+            PpuNameTableMirroring::SingleScreenUpper => write!(f, "single screen upper")
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -26,7 +40,7 @@ pub struct CiramMemory {
 
 impl CiramMemory {
     pub fn new(mirroring: PpuNameTableMirroring) -> CiramMemory {
-        let memory = MemoryBank::new(PPU_CIRAM_SIZE, PPU_CIRAM_ADDRESS_RANGE);
+        let memory = MemoryBank::new(PPU_CIRAM_PHYSICAL_SIZE, (0, (PPU_CIRAM_PHYSICAL_SIZE - 1) as u16));
 
         CiramMemory {
             memory: Rc::new(RefCell::new(memory)),
@@ -34,21 +48,24 @@ impl CiramMemory {
         }
     }
 
+    #[cfg(test)]
     pub fn mirroring(&self) -> PpuNameTableMirroring {
         self.mirroring
     }
 
     fn remap_addr(&self, addr: u16) -> u16 {
-        let nametable_offset = addr & 0x03FF;
+        let offset = addr & 0x03FF;
 
-        let a10 = match self.mirroring {
-            PpuNameTableMirroring::Vertical => (addr >> 10) & 1,
-            PpuNameTableMirroring::Horizontal => (addr >> 11) & 1,
-            PpuNameTableMirroring::SingleScreenLower => 0,
-            PpuNameTableMirroring::SingleScreenUpper => 1,
+        let nametable = match self.mirroring {
+            PpuNameTableMirroring::Vertical  => addr & 0x400,
+            PpuNameTableMirroring::Horizontal => (addr & 0x800) >> 1,
+            PpuNameTableMirroring::SingleScreenLower => 0x000,
+            PpuNameTableMirroring::SingleScreenUpper => 0x400,
         };
 
-        (a10 << 10) | nametable_offset
+        let remapped_addr = nametable | offset;
+        //debug!("remapped address: 0x{:04X} -> 0x{:04X} ({})", addr, remapped_addr, self.mirroring);
+        remapped_addr
     }
 }
 
@@ -74,13 +91,13 @@ impl Memory for CiramMemory {
     }
 
     fn size(&self) -> usize {
-        PPU_CIRAM_SIZE
+        PPU_CIRAM_VIRTUAL_SIZE
     }
 }
 
 impl BusDevice for CiramMemory {
     fn get_name(&self) -> String {
-        PPU_CIRAM_SIZE.to_string()
+        PPU_CIRAM_MEMORY_NAME.to_string()
     }
 
     fn get_device_type(&self) -> BusDeviceType {
@@ -88,6 +105,6 @@ impl BusDevice for CiramMemory {
     }
 
     fn get_virtual_address_range(&self) -> (u16, u16) {
-        PPU_CIRAM_ADDRESS_RANGE
+        PPU_CIRAM_VIRTUAL_ADDRESS_RANGE
     }
 }

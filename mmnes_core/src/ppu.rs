@@ -8,23 +8,6 @@ use crate::dma_device::DmaDevice;
 use crate::nes_frame::NesFrame;
 use crate::memory::MemoryError;
 
-#[derive(Debug, Clone, Copy)]
-pub enum PpuNameTableMirroring {
-    Vertical,
-    Horizontal,
-    SingleScreen
-}
-
-impl Display for PpuNameTableMirroring {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            PpuNameTableMirroring::Vertical => write!(f, "vertical mirroring"),
-            PpuNameTableMirroring::Horizontal => write!(f, "horizontal mirroring"),
-            PpuNameTableMirroring::SingleScreen => { write!(f, "single screen") }
-        }
-    }
-}
-
 #[derive(Default, Debug, Clone)]
 pub enum PpuType {
     #[default]

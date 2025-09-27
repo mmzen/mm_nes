@@ -8,7 +8,7 @@ use log::debug;
 use crate::bus_device::BusDevice;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
-use crate::ppu::PpuNameTableMirroring;
+use crate::memory_ciram::PpuNameTableMirroring;
 
 pub const PPU_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x1FFF);
 pub const CPU_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);

@@ -12,7 +12,7 @@ use crate::ines_loader::{FromINes, INesRomHeader};
 use crate::loader::LoaderError;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
-use crate::ppu::PpuNameTableMirroring;
+use crate::memory_ciram::PpuNameTableMirroring;
 
 const PRG_ROM_ADDRESS_SPACE: (u16, u16) = (0x8000, 0xFFFF);
 const PRG_RAM_ADDRESS_SPACE: (u16, u16) = (0x6000, 0x7FFF);
@@ -182,14 +182,14 @@ impl Mmc1Cartridge {
 
     fn control_nametable_mirroring(&mut self) -> Result<(), MemoryError> {
         match self.control_register & 0x03 {
-            0 => { self.mirroring = PpuNameTableMirroring::SingleScreen; },
-            1 => { self.mirroring = PpuNameTableMirroring::SingleScreen; },
+            0 => { self.mirroring = PpuNameTableMirroring::SingleScreenUpper; },
+            1 => { self.mirroring = PpuNameTableMirroring::SingleScreenLower; },
             2 => { self.mirroring = PpuNameTableMirroring::Vertical; },
             3 => { self.mirroring = PpuNameTableMirroring::Horizontal; },
             _ => unreachable!(),
         }
 
-        //info!("MMC1: nametable mirroring: {:?}", self.mirroring);
+        //debug!("MMC1: nametable mirroring: {:?}", self.mirroring);
         Ok(())
     }
 

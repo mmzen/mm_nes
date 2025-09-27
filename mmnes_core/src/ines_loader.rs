@@ -8,9 +8,9 @@ use log::info;
 use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::mapper::NesMapper;
+use crate::memory_ciram::PpuNameTableMirroring;
 use crate::mmc1_cartridge::Mmc1Cartridge;
 use crate::nrom_cartridge::NromCartridge;
-use crate::ppu::PpuNameTableMirroring;
 use crate::unrom_cartridge::UnromCartridge;
 
 const HEADER_SIZE: usize = 16;

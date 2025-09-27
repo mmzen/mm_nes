@@ -5,7 +5,7 @@ use crate::bus::MockBusStub;
 use crate::bus_device::{BusDeviceType, MockBusDeviceStub};
 use crate::cpu::MockCpuStub;
 use crate::memory::{Memory, MemoryError, MemoryType};
-use crate::ppu::PpuNameTableMirroring;
+use crate::memory_ciram::PpuNameTableMirroring;
 use crate::ppu_2c02::Ppu2c02;
 use crate::tests::init;
 
