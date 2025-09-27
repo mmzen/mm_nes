@@ -776,14 +776,14 @@ impl Ppu2c02 {
         Ok(())
     }
 
-    fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: PpuNameTableMirroring) -> Result<(), PpuError> {
+    fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: Rc<RefCell<PpuNameTableMirroring>>) -> Result<(), PpuError> {
         let ciram_memory = CiramMemory::new(mirroring);
         bus.add_device(Rc::new(RefCell::new(ciram_memory)))?;
         
         Ok(())
     }
 
-    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: PpuNameTableMirroring, cpu: Rc<RefCell<dyn CPU>>) -> Result<Self, PpuError> {
+    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: Rc<RefCell<PpuNameTableMirroring>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Self, PpuError> {
         let mut bus: Box<dyn Bus> = Box::new(NESBus::new());
 
         let palette_table = Rc::new(RefCell::new(
@@ -794,7 +794,7 @@ impl Ppu2c02 {
         bus.add_device(palette_table)?;
         bus.add_device(chr_rom)?;
 
-        Ppu2c02::create_mirrored_name_tables_and_connect_to_bus(&mut bus, mirroring.clone())?;
+        Ppu2c02::create_mirrored_name_tables_and_connect_to_bus(&mut bus, mirroring)?;
 
         let ppu = Ppu2c02 {
             register: RefCell::new(Register::new()),

@@ -463,7 +463,7 @@ impl NesConsoleBuilder {
     }
 
     fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
-                        mirroring: PpuNameTableMirroring, bus: Rc<RefCell<dyn Bus>>,
+                        mirroring: Rc<RefCell<PpuNameTableMirroring>>, bus: Rc<RefCell<dyn Bus>>,
                         cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NesConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 

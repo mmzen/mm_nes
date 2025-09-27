@@ -35,11 +35,11 @@ impl Display for PpuNameTableMirroring {
 #[derive(Debug)]
 pub struct CiramMemory {
     memory: Rc<RefCell<MemoryBank>>,
-    mirroring: PpuNameTableMirroring,
+    mirroring: Rc<RefCell<PpuNameTableMirroring>>,
 }
 
 impl CiramMemory {
-    pub fn new(mirroring: PpuNameTableMirroring) -> CiramMemory {
+    pub fn new(mirroring: Rc<RefCell<PpuNameTableMirroring>>) -> CiramMemory {
         let memory = MemoryBank::new(PPU_CIRAM_PHYSICAL_SIZE, (0, (PPU_CIRAM_PHYSICAL_SIZE - 1) as u16));
 
         CiramMemory {
@@ -50,13 +50,13 @@ impl CiramMemory {
 
     #[cfg(test)]
     pub fn mirroring(&self) -> PpuNameTableMirroring {
-        self.mirroring
+        self.mirroring.borrow().clone()
     }
 
     fn remap_addr(&self, addr: u16) -> u16 {
         let offset = addr & 0x03FF;
 
-        let nametable = match self.mirroring {
+        let nametable = match *self.mirroring.borrow() {
             PpuNameTableMirroring::Vertical  => addr & 0x400,
             PpuNameTableMirroring::Horizontal => (addr & 0x800) >> 1,
             PpuNameTableMirroring::SingleScreenLower => 0x000,

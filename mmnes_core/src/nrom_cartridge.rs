@@ -24,7 +24,7 @@ pub struct NromCartridge {
     prg_rom: Rc<RefCell<MemoryBank>>,
     chr_rom: Rc<RefCell<MemoryBank>>,
     device_type: BusDeviceType,
-    mirroring: PpuNameTableMirroring,
+    mirroring: Rc<RefCell<PpuNameTableMirroring>>,
     prg_rom_size: usize,
 }
 
@@ -58,7 +58,7 @@ impl NromCartridge {
             prg_rom: Rc::new(RefCell::new(prg_rom)),
             chr_rom: Rc::new(RefCell::new(chr_mem)),
             device_type: BusDeviceType::CARTRIDGE(NROM),
-            mirroring,
+            mirroring: Rc::new(RefCell::new(mirroring)),
             prg_rom_size,
         };
 
@@ -153,7 +153,7 @@ impl Cartridge for NromCartridge {
         self.chr_rom.clone()
     }
 
-    fn get_mirroring(&self) -> PpuNameTableMirroring {
+    fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>> {
         self.mirroring.clone()
     }
 }

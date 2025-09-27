@@ -162,7 +162,7 @@ pub struct Mmc1Cartridge {
     prg_ram: Rc<RefCell<SwitchableMemory>>,
     chr_rom: Rc<RefCell<SwitchableMemory>>,
     device_type: BusDeviceType,
-    mirroring: PpuNameTableMirroring
+    mirroring: Rc<RefCell<PpuNameTableMirroring>>
 }
 
 impl Mmc1Cartridge {
@@ -182,14 +182,14 @@ impl Mmc1Cartridge {
 
     fn control_nametable_mirroring(&mut self) -> Result<(), MemoryError> {
         match self.control_register & 0x03 {
-            0 => { self.mirroring = PpuNameTableMirroring::SingleScreenUpper; },
-            1 => { self.mirroring = PpuNameTableMirroring::SingleScreenLower; },
-            2 => { self.mirroring = PpuNameTableMirroring::Vertical; },
-            3 => { self.mirroring = PpuNameTableMirroring::Horizontal; },
+            0 => { *self.mirroring.borrow_mut() = PpuNameTableMirroring::SingleScreenUpper; },
+            1 => { *self.mirroring.borrow_mut() = PpuNameTableMirroring::SingleScreenLower; },
+            2 => { *self.mirroring.borrow_mut() = PpuNameTableMirroring::Vertical; },
+            3 => { *self.mirroring.borrow_mut() = PpuNameTableMirroring::Horizontal; },
             _ => unreachable!(),
         }
 
-        //debug!("MMC1: nametable mirroring: {:?}", self.mirroring);
+        //debug!("MMC1: nametable mirroring: {}", self.mirroring.borrow());
         Ok(())
     }
 
@@ -432,7 +432,7 @@ impl Mmc1Cartridge {
             prg_ram: Rc::new(RefCell::new(Mmc1Cartridge::build_switchable_memory("prg_ram".to_string(), prg_ram_addr_size, prg_ram_memory_banks, PRG_RAM_ADDRESS_SPACE)?)),
             chr_rom: Rc::new(RefCell::new(Mmc1Cartridge::build_switchable_memory("chr_rom".to_string(), chr_addr_size, chr_memory_banks, PPU_ADDRESS_SPACE)?)),
             device_type: BusDeviceType::CARTRIDGE(MMC1),
-            mirroring,
+            mirroring: Rc::new(RefCell::new(mirroring)),
         };
 
         cartridge.apply_control()?;
@@ -535,7 +535,7 @@ impl Cartridge for Mmc1Cartridge {
         Some(self.prg_ram.clone())
     }
 
-    fn get_mirroring(&self) -> PpuNameTableMirroring {
+    fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>> {
         self.mirroring.clone()
     }
 }

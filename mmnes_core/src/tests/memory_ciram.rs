@@ -12,7 +12,8 @@ const PPU_CIRAM_SIZE: usize = 4 * 1024;
 fn create_ciram_memory_with_vertical_mirroring_and_correct_size() {
     init();
 
-    let ciram = CiramMemory::new(PpuNameTableMirroring::Vertical);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Vertical));
+    let ciram = CiramMemory::new(mirroring);
 
     assert_eq!(ciram.size(), PPU_CIRAM_SIZE);
     assert_eq!(ciram.mirroring(), PpuNameTableMirroring::Vertical);
@@ -22,7 +23,8 @@ fn create_ciram_memory_with_vertical_mirroring_and_correct_size() {
 fn create_ciram_memory_with_horizontal_mirroring_and_correct_size() {
     init();
 
-    let ciram = CiramMemory::new(PpuNameTableMirroring::Horizontal);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Horizontal));
+    let ciram = CiramMemory::new(mirroring);
 
     assert_eq!(ciram.size(), PPU_CIRAM_SIZE);
     assert_eq!(ciram.mirroring(), PpuNameTableMirroring::Horizontal);
@@ -32,7 +34,8 @@ fn create_ciram_memory_with_horizontal_mirroring_and_correct_size() {
 fn create_ciram_memory_with_single_screen_lower_mirroring_and_correct_size() {
     init();
 
-    let ciram = CiramMemory::new(PpuNameTableMirroring::SingleScreenLower);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::SingleScreenLower));
+    let ciram = CiramMemory::new(mirroring);
 
     assert_eq!(ciram.size(), PPU_CIRAM_SIZE);
     assert_eq!(ciram.mirroring(), PpuNameTableMirroring::SingleScreenLower);
@@ -42,7 +45,8 @@ fn create_ciram_memory_with_single_screen_lower_mirroring_and_correct_size() {
 fn create_ciram_memory_with_single_screen_upper_mirroring_and_correct_size() {
     init();
 
-    let ciram = CiramMemory::new(PpuNameTableMirroring::SingleScreenUpper);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::SingleScreenUpper));
+    let ciram = CiramMemory::new(mirroring);
 
     assert_eq!(ciram.size(), PPU_CIRAM_SIZE);
     assert_eq!(ciram.mirroring(), PpuNameTableMirroring::SingleScreenUpper);
@@ -52,7 +56,8 @@ fn create_ciram_memory_with_single_screen_upper_mirroring_and_correct_size() {
 fn vertical_mirroring_maps_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::Vertical);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Vertical));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xAB;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -84,7 +89,8 @@ fn vertical_mirroring_maps_addresses_correctly() {
 fn horizontal_mirroring_maps_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::Horizontal);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Horizontal));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xAB;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -116,7 +122,8 @@ fn horizontal_mirroring_maps_addresses_correctly() {
 fn single_screen_lower_mirroring_maps_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::SingleScreenLower);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::SingleScreenLower));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xAB;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -150,7 +157,8 @@ fn single_screen_lower_mirroring_maps_addresses_correctly() {
 fn single_screen_upper_mirroring_maps_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::SingleScreenUpper);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::SingleScreenUpper));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xAB;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -184,7 +192,8 @@ fn single_screen_upper_mirroring_maps_addresses_correctly() {
 fn vertical_mirroring_maps_word_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::Vertical);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Vertical));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xABCD;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -216,7 +225,8 @@ fn vertical_mirroring_maps_word_addresses_correctly() {
 fn horizontal_mirroring_maps_word_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::Horizontal);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Horizontal));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xABCD;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -248,7 +258,8 @@ fn horizontal_mirroring_maps_word_addresses_correctly() {
 fn single_screen_lower_mirroring_maps_word_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::SingleScreenLower);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::SingleScreenLower));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xABCD;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -282,7 +293,8 @@ fn single_screen_lower_mirroring_maps_word_addresses_correctly() {
 fn single_screen_upper_mirroring_maps_word_addresses_correctly() {
     init();
 
-    let mut ciram = CiramMemory::new(PpuNameTableMirroring::SingleScreenUpper);
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::SingleScreenUpper));
+    let mut ciram = CiramMemory::new(mirroring);
     let test_value = 0xABCD;
 
     // Write to nametable 0 (0x0000-0x23FF)
@@ -317,7 +329,9 @@ fn vertical_mirroring_maps_word_addresses_correctly_through_bus_and_virtual_addr
     init();
 
     let mut bus = NESBus::new();
-    let ciram = CiramMemory::new(PpuNameTableMirroring::Vertical);
+
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Vertical));
+    let ciram = CiramMemory::new(mirroring);
     let test_value = 0xAB;
 
     bus.add_device(Rc::new(RefCell::new(ciram))).unwrap();
@@ -351,7 +365,9 @@ fn vertical_mirroring_maps_word_addresses_correctly_through_bus_and_virtual_addr
     init();
 
     let mut bus = NESBus::new();
-    let ciram = CiramMemory::new(PpuNameTableMirroring::Vertical);
+
+    let mirroring = Rc::new(RefCell::new(PpuNameTableMirroring::Vertical));
+    let ciram = CiramMemory::new(mirroring);
     let test_value = 0xAB;
 
     bus.add_device(Rc::new(RefCell::new(ciram))).unwrap();

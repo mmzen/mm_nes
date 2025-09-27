@@ -53,7 +53,7 @@ fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2
 
     Ppu2c02::new(
         Rc::new(RefCell::new(chr_rom)),
-        mirroring,
+        Rc::new(RefCell::new(mirroring)),
         Rc::new(RefCell::new(cpu))
     ).unwrap()
 }

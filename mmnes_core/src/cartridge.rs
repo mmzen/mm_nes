@@ -79,7 +79,7 @@ pub trait Cartridge: BusDevice {
     fn get_prg_ram(&self) -> Option<Rc<RefCell<dyn BusDevice>>> {
         None
     }
-    fn get_mirroring(&self) -> PpuNameTableMirroring;
+    fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>>;
 }
 
 /***

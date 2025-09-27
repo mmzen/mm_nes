@@ -27,7 +27,7 @@ pub struct UnromCartridge {
     prg_rom_size: usize,
     chr_rom: Rc<RefCell<MemoryBank>>,
     device_type: BusDeviceType,
-    mirroring: PpuNameTableMirroring
+    mirroring: Rc<RefCell<PpuNameTableMirroring>>
 }
 
 impl UnromCartridge {
@@ -62,7 +62,7 @@ impl UnromCartridge {
             num_memory_banks,
             prg_rom_size: (CPU_ADDRESS_SPACE.1 - CPU_ADDRESS_SPACE.0 + 1) as usize,
             device_type: BusDeviceType::CARTRIDGE(UNROM),
-            mirroring,
+            mirroring: Rc::new(RefCell::new(mirroring)),
             chr_rom: Rc::new(RefCell::new(chr_mem)),
         };
 
@@ -167,7 +167,7 @@ impl Cartridge for UnromCartridge {
         self.chr_rom.clone()
     }
 
-    fn get_mirroring(&self) -> PpuNameTableMirroring {
+    fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>> {
         self.mirroring.clone()
     }
 }

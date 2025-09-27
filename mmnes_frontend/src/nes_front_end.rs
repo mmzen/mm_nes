@@ -191,6 +191,10 @@ impl NesFrontEnd {
                 }
             },
 
+            NesMessage::Play => {
+                Ok(Break(NesFrontEndState::Running))
+            },
+
             NesMessage::LoadRom(rom_file) => {
                 self.args.rom_file = rom_file;
 
