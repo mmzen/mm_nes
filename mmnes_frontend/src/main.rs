@@ -24,6 +24,7 @@ mod helpers_ui;
 mod nes_ui_widget;
 mod nes_mediator;
 mod renderer_widget;
+mod square_icon_button;
 
 const APP_NAME: &str = "MMNES";
 

@@ -17,7 +17,7 @@ use crate::tooltip_6502::ToolTip6502;
 
 const WINDOW_NAME: &str = "NES Debugger";
 const DEBUGGER_TOGGLE_BUTTON: NesButtonId = NesButtonId(0);
-const DEBUGGER_BUTTONS: [NesButton; 1] = [ NesButton { id: DEBUGGER_TOGGLE_BUTTON, label: "DEBUGGER" } ];
+const DEBUGGER_BUTTONS: [NesButton; 1] = [ NesButton { id: DEBUGGER_TOGGLE_BUTTON, label: "DEBUGGER", tooltip: "Launch debugger" } ];
 const MAX_CPU_SNAPSHOTS: usize = 256;
 
 pub struct DebuggerWidget {
@@ -442,7 +442,7 @@ impl DebuggerWidget {
             .resizable(true)
             .open(&mut self.visible())
             .show(ctx, |ui| {
-                self.debugger_window_inner(ui);
+                let _ = self.debugger_window_inner(ui);
             });
 
         Ok(())

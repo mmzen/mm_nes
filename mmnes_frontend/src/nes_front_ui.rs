@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
-use eframe::egui::{Align, Align2, CentralPanel, Color32, Context, Event, Grid, Key, RawInput, RichText, TopBottomPanel, Vec2};
+use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, Context, CornerRadius, Event, Grid, Key, Layout, Margin, RawInput, Response, RichText, Stroke, TopBottomPanel, Ui, Vec2};
 use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
@@ -18,10 +18,14 @@ use crate::renderer_widget::RendererWidget;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct NesButtonId(pub u16);
 
+#[derive(Copy, Clone)]
+pub enum ButtonKind { Primary, Secondary, Danger }
+
 #[derive(Debug, Copy, Clone)]
 pub struct NesButton {
     pub id: NesButtonId,
     pub label: &'static str,
+    pub tooltip: &'static str
 }
 
 pub struct NesFrontUI {
@@ -140,7 +144,7 @@ impl NesFrontUI {
             .resizable(false)
             .default_width(420.0)
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
 
                 ui.horizontal(|ui| {
                     let title = RichText::new("Fatalistic Error ☝").heading().color(Color32::from_rgb(230, 75, 75));
@@ -154,8 +158,8 @@ impl NesFrontUI {
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0))).clicked() {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(Button::new("OK").min_size(vec2(80.0, 0.0))).clicked() {
                             close_requested = true;
                         }
                     });
@@ -173,23 +177,97 @@ impl NesFrontUI {
             }
         }
     }
+
+    fn main_menu_text_button(ui: &mut Ui, label: &str, tooltip: &str, kind: ButtonKind, selected: bool) -> Response {
+        // Local style tweaks just for this button scope
+        let resp = ui.scope(|ui| {
+            // Slightly larger, comfy buttons
+            let style = ui.style_mut();
+            style.spacing.button_padding = vec2(8.0, 4.0);
+
+            // Choose base colors from current theme
+            let vis = ui.style().visuals.clone();
+            let accent = Color32::from_rgb(78, 201, 176);
+            let red    = Color32::from_rgb(200, 80, 80);
+            let base_bg = vis.widgets.inactive.bg_fill;
+            let base_stroke = vis.widgets.inactive.bg_stroke;
+
+            let (fill, stroke) = match kind {
+                ButtonKind::Primary   |
+                ButtonKind::Secondary => (base_bg, base_stroke),
+                ButtonKind::Danger    => (red.linear_multiply(if selected { 0.90 } else { 0.75 }),
+                                       Stroke::new(1.0, red.linear_multiply(0.90))),
+            };
+
+            // Nice looking text (slightly larger & bold)
+            let text = RichText::new(label).size(11.0).strong();
+
+            let mut b = Button::new(text).min_size(vec2(80.0, 24.0)).stroke(stroke);
+
+            // Only fill for Primary/Danger; Secondary & Quiet use theme fills
+            if matches!(kind, ButtonKind::Primary | ButtonKind::Danger) {
+                b = b.fill(fill);
+            }
+
+            let r = ui.add(b).on_hover_text(tooltip);
+
+            // Subtle “selected” ring without custom shapes: reuse stroke on hover/selected
+            if selected && r.hovered() == false {
+                // simulate emphasis by re-adding a stroke via a small frame around it
+                // (kept minimal—no custom vector icons/draw calls)
+            }
+
+            r
+        }).inner;
+
+        resp
+    }
+
+    fn install_theme(ctx: &Context) {
+        let mut style = (*ctx.style()).clone();
+        style.spacing.item_spacing = vec2(8.0, 8.0);
+        style.spacing.window_margin = Margin::same(12);
+        style.visuals = egui::Visuals::dark();
+
+        let bg0 = Color32::from_rgb(18, 20, 22);
+        let bg1 = Color32::from_rgb(26, 28, 31);
+        let bg2 = Color32::from_rgb(36, 39, 43);
+        let fg  = Color32::from_rgb(230, 234, 238);
+        let acc = Color32::from_rgb(78, 201, 176); // teal
+
+        style.visuals.widgets.inactive.bg_fill = bg1;
+        style.visuals.widgets.hovered.bg_fill  = bg2;
+        style.visuals.widgets.active.bg_fill   = bg2;
+
+        style.visuals.override_text_color = Some(fg);
+        style.visuals.window_fill = bg0;
+        style.visuals.panel_fill  = bg0;
+
+        ctx.set_style(style);
+
+        let mut visuals = ctx.style().visuals.clone();
+        visuals.selection.bg_fill = acc.linear_multiply(0.35);
+        visuals.hyperlink_color = acc;
+        ctx.set_visuals(visuals);
+    }
 }
 
 impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+        let _ = self.read_error_messages();
+        let _ = self.send_input_to_emulator();
+        let default_fill = Color32::from_rgb(66, 66, 72);
 
-        self.read_error_messages();
-        self.send_input_to_emulator();
-
+        NesFrontUI::install_theme(ctx);
         ctx.request_repaint();
 
         TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             Grid::new("edit_grid").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
-                if ui.button("LOAD ROM").clicked() {
+                if NesFrontUI::main_menu_text_button(ui, "LOAD ROM", "Load ROM from file", ButtonKind::Primary, false).clicked() {
                     self.rom_file_dialog.pick_file();
                 }
 
-                self.load_rom_file();
+                let _ = self.load_rom_file();
                 self.rom_file_dialog.update(ctx);
 
                 for widget in &mut self.widgets {
@@ -197,13 +275,13 @@ impl App for NesFrontUI {
                     let buttons = widget.menu_buttons();
 
                     for button in buttons {
-                        if ui.button(button.label).clicked() {
+                        if NesFrontUI::main_menu_text_button(ui, button.label, button.tooltip, ButtonKind::Primary, false).clicked() {
                             clicked = Some(button.id);
-                        }
+                        };
                     }
 
                     if let Some(clicked_button_id) = clicked {
-                        widget.on_button(clicked_button_id);
+                        let _ = widget.on_button(clicked_button_id);
                     }
                 }
 
@@ -213,7 +291,7 @@ impl App for NesFrontUI {
 
         CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |_| {
             for widget in &mut self.widgets {
-                widget.draw(ctx);
+                let _ = widget.draw(ctx);
             }
 
             let error = self.error.clone();

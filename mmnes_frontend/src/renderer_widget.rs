@@ -20,10 +20,10 @@ const RENDERER_PAUSE_BUTTON: NesButtonId = NesButtonId(1);
 const RENDERER_RESET_BUTTON: NesButtonId = NesButtonId(2);
 const RENDERER_POWER_OFF_BUTTON: NesButtonId = NesButtonId(3);
 const RENDERER_BUTTONS: [NesButton; 4] = [
-    NesButton { id: RENDERER_PLAY_BUTTON, label: "PLAY" },
-    NesButton { id: RENDERER_PAUSE_BUTTON, label: "PAUSE" },
-    NesButton { id: RENDERER_RESET_BUTTON, label: "RESET" },
-    NesButton { id: RENDERER_POWER_OFF_BUTTON, label: "POWER OFF" },
+    NesButton { id: RENDERER_PLAY_BUTTON, label: "PLAY", tooltip: "Run emulator" },
+    NesButton { id: RENDERER_PAUSE_BUTTON, label: "PAUSE", tooltip: "Pause/Run emulator" },
+    NesButton { id: RENDERER_RESET_BUTTON, label: "RESET", tooltip: "Reset emulator" },
+    NesButton { id: RENDERER_POWER_OFF_BUTTON, label: "POWER OFF", tooltip: "Power off emulator" },
 ];
 
 pub struct RendererWidget {
@@ -221,14 +221,16 @@ impl RendererWidget {
     }
 
     fn renderer_window(&mut self, ctx: &Context) -> Result<(), NesConsoleError> {
-        self.prepare_nes_frame();
+        let  _ = self.prepare_nes_frame();
 
         if let Some(image) = self.nes_frame.take() {
             self.texture.set(image, self.texture_options);
         }
 
         egui::Window::new(WINDOW_NAME)
-            .default_pos(pos2(0.0, 22.0))
+            .default_pos(pos2(0.0, 28.0))
+            .title_bar(false)
+            .default_size([880.0, 526.0])
             .show(ctx, |ui| {
                 self.renderer_window_inner(ui)
             });

@@ -17,4 +17,9 @@ tempfile = "3.21.0"
 [lib]
 crate-type = ["lib"]
 
+[features]
+ppu_tile_cache = []
+#default = ["ppu_tile_cache"]
+default = []
+
 

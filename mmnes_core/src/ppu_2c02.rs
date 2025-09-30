@@ -338,6 +338,7 @@ pub struct Ppu2c02 {
     renderer: RefCell<Renderer>,
     cpu: Rc<RefCell<dyn CPU>>,
     state: PpuState,
+    #[cfg(feature = "ppu_tile_cache")]
     tile_cache: TileCache,
     background_pixels_line: PixelLines,
     sprites_pixels_line: PixelLines,
@@ -381,10 +382,13 @@ impl Display for Tile {
     }
 }
 
+#[cfg(feature = "ppu_tile_cache")]
+
 struct TileCache {
     tiles: HashMap<u16, Rc<Tile>>
 }
 
+#[cfg(feature = "ppu_tile_cache")]
 impl Default for TileCache {
     fn default() -> Self {
         TileCache {
@@ -393,6 +397,7 @@ impl Default for TileCache {
     }
 }
 
+#[cfg(feature = "ppu_tile_cache")]
 impl TileCache {
 
     fn clear(&mut self) {
@@ -807,6 +812,7 @@ impl Ppu2c02 {
             renderer: RefCell::new(Renderer::new()),
             cpu,
             state: PpuState::VBlank(261),
+            #[cfg(feature = "ppu_tile_cache")]
             tile_cache: TileCache::default(),
             background_pixels_line: PixelLines::default(),
             sprites_pixels_line: PixelLines::default()
@@ -1093,6 +1099,7 @@ impl Ppu2c02 {
         Ok(tile)
     }
 
+    #[cfg(feature = "ppu_tile_cache")]
     fn get_tile(&mut self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Rc<Tile>, PpuError> {
         let addr = name_table_addr | (coarse_y as u16) << 5  | coarse_x as u16;
 
@@ -1112,8 +1119,14 @@ impl Ppu2c02 {
         Ok(tile)
     }
 
+    #[cfg(not(feature = "ppu_tile_cache"))]
+    fn get_tile(&mut self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Rc<Tile>, PpuError> {
+        let tile = self.fetch_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
+        Ok(Rc::new(tile))
+    }
+
     /***
-     * coase_x: ...ABCDE <- v: ........ ...ABCDE
+     * coarse_x: ...ABCDE <- v: ........ ...ABCDE
      ***/
     fn get_coarse_x(&self) -> u8 {
         (*self.v.borrow() & 0x1F) as u8
@@ -1223,7 +1236,7 @@ impl Ppu2c02 {
         let name_table_addr_from_v = self.get_name_table_addr_from_v();
         let mut name_table_addr = name_table_addr_from_v;
 
-        let pattern_table_addr = self.get_background_pattern_table_addr();
+        //let pattern_table_addr = self.get_background_pattern_table_addr();
         let mut attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
 
         let mut fine_y = self.get_fine_y();
@@ -1241,6 +1254,7 @@ impl Ppu2c02 {
 
         let mut pixel_pos_x= 0u8;
         loop {
+            let pattern_table_addr = self.get_background_pattern_table_addr();
             let tile =  self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
 
             let size = if PIXEL_X_MAX - pixel_pos_x >= 8 { 8usize - fine_x as usize } else { (PIXEL_X_MAX - pixel_pos_x) as usize + 1 };
@@ -1370,7 +1384,7 @@ impl Ppu2c02 {
      */
     fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
         let is_sprite_8x16  = self.get_flag(Control(SpriteSize));
-        let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
+        //let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
 
         //let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
         //trace!("rendering {} sprites for scanline: {}", self.oam.sprite_count, scanline);
@@ -1379,6 +1393,8 @@ impl Ppu2c02 {
 
         for i in (0..self.oam.sprite_count).rev() {
             let sprite = &self.oam.secondary[i];
+            let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
+
             let pixel_pos_y = scanline as u8 - (sprite.y + 1);
             let width = if PIXEL_X_MAX - sprite.x > SPRITE_WIDTH { SPRITE_WIDTH as usize } else { (PIXEL_X_MAX - sprite.x) as usize };
 
@@ -1469,6 +1485,7 @@ impl Ppu2c02 {
 
             PpuState::Rendering(240) => {
                 self.renderer.borrow_mut().update();
+                #[cfg(feature = "ppu_tile_cache")]
                 self.tile_cache.clear();
                 self.state = PpuState::Rendering(241);
             },
