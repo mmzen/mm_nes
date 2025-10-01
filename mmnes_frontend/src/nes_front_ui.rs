@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
-use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, Context, CornerRadius, Event, Grid, Key, Layout, Margin, RawInput, Response, RichText, Stroke, TopBottomPanel, Ui, Vec2};
+use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, Context, Event, Grid, Image, ImageButton, Key, Layout, Margin, RawInput, Response, RichText, Stroke, TopBottomPanel, Ui, Vec2};
 use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
@@ -45,7 +45,7 @@ impl NesFrontUI {
         let frame = egui::containers::Frame {
             inner_margin: Default::default(),
             outer_margin: Default::default(),
-            fill: Color32::from_hex("#727370").unwrap(),
+            fill: Color32::from_rgb(65, 33, 150),
             stroke: Default::default(),
             corner_radius: Default::default(),
             shadow: Default::default(),
@@ -179,15 +179,12 @@ impl NesFrontUI {
     }
 
     fn main_menu_text_button(ui: &mut Ui, label: &str, tooltip: &str, kind: ButtonKind, selected: bool) -> Response {
-        // Local style tweaks just for this button scope
         let resp = ui.scope(|ui| {
-            // Slightly larger, comfy buttons
             let style = ui.style_mut();
             style.spacing.button_padding = vec2(8.0, 4.0);
 
-            // Choose base colors from current theme
             let vis = ui.style().visuals.clone();
-            let accent = Color32::from_rgb(78, 201, 176);
+            //let accent = Color32::from_rgb(78, 201, 176);
             let red    = Color32::from_rgb(200, 80, 80);
             let base_bg = vis.widgets.inactive.bg_fill;
             let base_stroke = vis.widgets.inactive.bg_stroke;
@@ -199,19 +196,16 @@ impl NesFrontUI {
                                        Stroke::new(1.0, red.linear_multiply(0.90))),
             };
 
-            // Nice looking text (slightly larger & bold)
             let text = RichText::new(label).size(11.0).strong();
 
             let mut b = Button::new(text).min_size(vec2(80.0, 24.0)).stroke(stroke);
 
-            // Only fill for Primary/Danger; Secondary & Quiet use theme fills
             if matches!(kind, ButtonKind::Primary | ButtonKind::Danger) {
                 b = b.fill(fill);
             }
 
             let r = ui.add(b).on_hover_text(tooltip);
 
-            // Subtle “selected” ring without custom shapes: reuse stroke on hover/selected
             if selected && r.hovered() == false {
                 // simulate emphasis by re-adding a stroke via a small frame around it
                 // (kept minimal—no custom vector icons/draw calls)
@@ -229,11 +223,11 @@ impl NesFrontUI {
         style.spacing.window_margin = Margin::same(12);
         style.visuals = egui::Visuals::dark();
 
-        let bg0 = Color32::from_rgb(18, 20, 22);
-        let bg1 = Color32::from_rgb(26, 28, 31);
-        let bg2 = Color32::from_rgb(36, 39, 43);
+        let bg0 = Color32::from_rgb(20, 12, 43);
+        let bg1 = Color32::from_rgb(252, 108, 42);
+        let bg2 = Color32::from_rgb(40, 40, 40);
         let fg  = Color32::from_rgb(230, 234, 238);
-        let acc = Color32::from_rgb(78, 201, 176); // teal
+        let acc = Color32::from_rgb(78, 201, 176);
 
         style.visuals.widgets.inactive.bg_fill = bg1;
         style.visuals.widgets.hovered.bg_fill  = bg2;
@@ -246,7 +240,7 @@ impl NesFrontUI {
         ctx.set_style(style);
 
         let mut visuals = ctx.style().visuals.clone();
-        visuals.selection.bg_fill = acc.linear_multiply(0.35);
+        //visuals.selection.bg_fill = acc.linear_multiply(0.35);
         visuals.hyperlink_color = acc;
         ctx.set_visuals(visuals);
     }
@@ -256,7 +250,6 @@ impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
         let _ = self.read_error_messages();
         let _ = self.send_input_to_emulator();
-        let default_fill = Color32::from_rgb(66, 66, 72);
 
         NesFrontUI::install_theme(ctx);
         ctx.request_repaint();
@@ -289,7 +282,9 @@ impl App for NesFrontUI {
             });
         });
 
-        CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |_| {
+        CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |ui| {
+            Image::new(egui::include_image!("assets/bg.jpg")).paint_at(ui, ctx.screen_rect());
+
             for widget in &mut self.widgets {
                 let _ = widget.draw(ctx);
             }

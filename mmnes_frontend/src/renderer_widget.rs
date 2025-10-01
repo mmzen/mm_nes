@@ -228,9 +228,9 @@ impl RendererWidget {
         }
 
         egui::Window::new(WINDOW_NAME)
-            .default_pos(pos2(0.0, 28.0))
+            .default_pos(pos2(110.0, 40.0))
             .title_bar(false)
-            .default_size([880.0, 526.0])
+            .default_size([640.0, 480.0])
             .show(ctx, |ui| {
                 self.renderer_window_inner(ui)
             });
