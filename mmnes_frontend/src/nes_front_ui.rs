@@ -1,14 +1,15 @@
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
-use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, Context, Event, Grid, Image, ImageButton, Key, Layout, Margin, RawInput, Response, RichText, Stroke, TopBottomPanel, Ui, Vec2};
+use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Layout, Margin, RawInput, Response, RichText, Stroke, TextureHandle, TextureOptions, TopBottomPanel, Ui, Vec2};
 use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::debugger_widget::DebuggerWidget;
+use crate::image_text_button::{ButtonKind, ImageTextButton};
 use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Keys, LoadRom};
@@ -18,14 +19,47 @@ use crate::renderer_widget::RendererWidget;
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct NesButtonId(pub u16);
 
-#[derive(Copy, Clone)]
-pub enum ButtonKind { Primary, Secondary, Danger }
-
-#[derive(Debug, Copy, Clone)]
+#[derive(Clone)]
 pub struct NesButton {
     pub id: NesButtonId,
     pub label: &'static str,
-    pub tooltip: &'static str
+    pub tooltip: &'static str,
+    pub icon: TextureHandle,
+}
+
+impl NesButton {
+
+    pub fn new(cc: &eframe::CreationContext<'_>, id: NesButtonId, label: &'static str, tooltip: &'static str, icon_file: &[u8]) -> Result<NesButton, NesConsoleError> {
+        let icon = NesButton::load_icon(icon_file, label, cc)?;
+
+        let button = NesButton {
+            id,
+            label,
+            tooltip,
+            icon,
+        };
+
+        Ok(button)
+    }
+
+    pub fn load_icon(icon_bytes: &[u8], label: &str, cc: &eframe::CreationContext<'_>) -> Result<TextureHandle, NesConsoleError> {
+        let dyn_img = image::load_from_memory(&icon_bytes).map_err(|_| NesConsoleError::InternalError(format!("unable to load icon: {}", label)))?;
+        let rgba = dyn_img.to_rgba8();
+
+        let (w, h) = rgba.dimensions();
+        let image = ColorImage::from_rgba_unmultiplied(
+            [w as usize, h as usize],
+            rgba.as_raw(),
+        );
+
+        let icon = cc.egui_ctx.load_texture(
+            label,
+            image,
+            Default::default()
+        );
+
+        Ok(icon)
+    }
 }
 
 pub struct NesFrontUI {
@@ -35,12 +69,18 @@ pub struct NesFrontUI {
     rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
     widgets: Vec<Box<dyn NesUiWidget>>,
-    nes_mediator: Rc<RefCell<NesMediator>>
+    nes_mediator: Rc<RefCell<NesMediator>>,
+    menu_buttons: Vec<NesButton>,
 }
 
 impl NesFrontUI {
 
-    pub fn new(cc: &eframe::CreationContext<'_>, command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, error_rx: Receiver<NesMessage>, width: usize, height: usize) -> NesFrontUI {
+    pub fn new(cc: &eframe::CreationContext<'_>,
+               command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, error_rx: Receiver<NesMessage>,
+               width: usize, height: usize) -> Result<NesFrontUI, NesConsoleError> {
+
+        let button = NesButton::new(cc, NesButtonId(0), "OPEN ROM", "Load a ROM file", include_bytes!("assets/load_rom.png"))?;
+        let menu_buttons = vec![button];
 
         let frame = egui::containers::Frame {
             inner_margin: Default::default(),
@@ -55,21 +95,36 @@ impl NesFrontUI {
 
         let mut widgets = Vec::<Box<dyn NesUiWidget>>::new();
 
-        let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone());
-        let debugger_ui = DebuggerWidget::new(nes_mediator.clone());
+        let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone())?;
+        let debugger_ui = DebuggerWidget::new(cc, nes_mediator.clone())?;
 
         widgets.push(Box::new(renderer_ui));
         widgets.push(Box::new(debugger_ui));
 
-        NesFrontUI {
+        let nes_front_ui = NesFrontUI {
             emulator_viewport_frame: frame,
             input: KeyEvents::new(),
             rom_file_dialog: FileDialog::new(),
             rom_file: None,
             error: None,
             nes_mediator,
-            widgets
-        }
+            widgets,
+            menu_buttons,
+        };
+
+        Ok(nes_front_ui)
+    }
+
+    fn load_png_texture(ctx: &Context, bytes: &[u8], name: &str) -> TextureHandle {
+        let dyn_img = image::load_from_memory(bytes).expect("invalid PNG");
+        let rgba = dyn_img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        let color_image = ColorImage::from_rgba_unmultiplied(
+            [w as usize, h as usize],
+            rgba.as_raw(),
+        );
+
+        ctx.load_texture(name.to_owned(), color_image, TextureOptions::LINEAR)
     }
 
     fn send_input_to_emulator(&mut self) -> Result<(), NesConsoleError> {
@@ -192,8 +247,7 @@ impl NesFrontUI {
             let (fill, stroke) = match kind {
                 ButtonKind::Primary   |
                 ButtonKind::Secondary => (base_bg, base_stroke),
-                ButtonKind::Danger    => (red.linear_multiply(if selected { 0.90 } else { 0.75 }),
-                                       Stroke::new(1.0, red.linear_multiply(0.90))),
+                ButtonKind::Danger    => (red.linear_multiply(if selected { 0.90 } else { 0.75 }), Stroke::new(1.0, red.linear_multiply(0.90))),
             };
 
             let text = RichText::new(label).size(11.0).strong();
@@ -224,14 +278,17 @@ impl NesFrontUI {
         style.visuals = egui::Visuals::dark();
 
         let bg0 = Color32::from_rgb(20, 12, 43);
-        let bg1 = Color32::from_rgb(252, 108, 42);
-        let bg2 = Color32::from_rgb(40, 40, 40);
+        let bg1 = Color32::from_rgb(9, 0, 30);
+        let bg2 = Color32::from_rgb(12, 0, 130);
+        let bg3 = Color32::from_rgb(60, 60, 60);
         let fg  = Color32::from_rgb(230, 234, 238);
         let acc = Color32::from_rgb(78, 201, 176);
 
         style.visuals.widgets.inactive.bg_fill = bg1;
+        style.visuals.widgets.inactive.bg_stroke = Stroke::new(0.6, Color32::WHITE);
+
         style.visuals.widgets.hovered.bg_fill  = bg2;
-        style.visuals.widgets.active.bg_fill   = bg2;
+        style.visuals.widgets.active.bg_fill   = bg3;
 
         style.visuals.override_text_color = Some(fg);
         style.visuals.window_fill = bg0;
@@ -255,8 +312,11 @@ impl App for NesFrontUI {
         ctx.request_repaint();
 
         TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            Grid::new("edit_grid").num_columns(1).spacing([10.0, 4.0]).show(ui, |ui| {
-                if NesFrontUI::main_menu_text_button(ui, "LOAD ROM", "Load ROM from file", ButtonKind::Primary, false).clicked() {
+            Grid::new("edit_grid").num_columns(1).spacing([14.0, 8.0]).show(ui, |ui| {
+
+                let load_rom_button = ImageTextButton::new().icon(&self.menu_buttons[0].icon).kind(ButtonKind::Primary).tooltip(&self.menu_buttons[0].tooltip);
+
+                if ui.add(load_rom_button).clicked() {
                     self.rom_file_dialog.pick_file();
                 }
 
@@ -268,9 +328,10 @@ impl App for NesFrontUI {
                     let buttons = widget.menu_buttons();
 
                     for button in buttons {
-                        if NesFrontUI::main_menu_text_button(ui, button.label, button.tooltip, ButtonKind::Primary, false).clicked() {
+                        let image_text_button = ImageTextButton::new().icon(&button.icon).kind(ButtonKind::Primary).tooltip(button.tooltip);
+                        if ui.add(image_text_button).clicked() {
                             clicked = Some(button.id);
-                        };
+                        }
                     }
 
                     if let Some(clicked_button_id) = clicked {

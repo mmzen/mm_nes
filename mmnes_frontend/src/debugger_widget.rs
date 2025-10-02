@@ -16,8 +16,6 @@ use crate::nes_ui_widget::NesUiWidget;
 use crate::tooltip_6502::ToolTip6502;
 
 const WINDOW_NAME: &str = "NES Debugger";
-const DEBUGGER_TOGGLE_BUTTON: NesButtonId = NesButtonId(0);
-const DEBUGGER_BUTTONS: [NesButton; 1] = [ NesButton { id: DEBUGGER_TOGGLE_BUTTON, label: "DEBUGGER", tooltip: "Launch debugger" } ];
 const MAX_CPU_SNAPSHOTS: usize = 256;
 
 pub struct DebuggerWidget {
@@ -27,6 +25,7 @@ pub struct DebuggerWidget {
     error: Option<NesConsoleError>,
     nes_mediator: Rc<RefCell<NesMediator>>,
     cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
+    buttons: Vec<NesButton>,
 }
 
 impl NesUiWidget for DebuggerWidget {
@@ -47,12 +46,12 @@ impl NesUiWidget for DebuggerWidget {
     }
 
     fn menu_buttons(&self) -> &[NesButton] {
-        &DEBUGGER_BUTTONS
+        &self.buttons
     }
 
     fn on_button(&mut self, id: NesButtonId) -> Result<(), NesConsoleError> {
         match id {
-            DEBUGGER_TOGGLE_BUTTON => self.switch_visible(),
+            NesButtonId(0) => self.switch_visible(),
             _ => return Err(NesConsoleError::InternalError("unknown button".to_string())),
         }
 
@@ -64,22 +63,28 @@ impl NesUiWidget for DebuggerWidget {
         vec![format!("debugger: {}", debugger_state)]
     }
 
-    fn draw(&mut self, ctx: &egui::Context) -> Result<(), NesConsoleError> {
+    fn draw(&mut self, ctx: &Context) -> Result<(), NesConsoleError> {
         self.debugger_window(ctx)
     }
 }
 
 impl DebuggerWidget {
 
-    pub fn new(nes_mediator: Rc<RefCell<NesMediator>>) -> DebuggerWidget {
-        DebuggerWidget {
+    pub fn new(cc: &eframe::CreationContext<'_>, nes_mediator: Rc<RefCell<NesMediator>>) -> Result<DebuggerWidget, NesConsoleError> {
+        let button = NesButton::new(cc, NesButtonId(0), "DEBUGGER", "Launch debugger", include_bytes!("assets/debug.png"))?;
+        let buttons = vec![button];
+
+        let widget = DebuggerWidget {
             visible: false,
             is_debugger_attached: false,
             rom_file: None,
             error: None,
             nes_mediator,
             cpu_snapshots: Vec::new(),
-        }
+            buttons,
+        };
+
+        Ok(widget)
     }
 
     fn switch_visible(&mut self) {

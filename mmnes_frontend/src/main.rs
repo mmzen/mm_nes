@@ -24,7 +24,7 @@ mod helpers_ui;
 mod nes_ui_widget;
 mod nes_mediator;
 mod renderer_widget;
-mod square_icon_button;
+mod image_text_button;
 
 const APP_NAME: &str = "MMNES";
 
@@ -137,8 +137,12 @@ fn main() -> Result<(), NesConsoleError> {
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
             let nes_front_ui = NesFrontUI::new(cc, command_tx, frame_rx, debug_rx, error_rx, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
-            Ok(Box::new(nes_front_ui))
-        },),
+            if let Err(error) = nes_front_ui {
+                panic!("failed to initialize NES front UI: {}", error);
+            }
+
+            Ok(Box::new(nes_front_ui.unwrap()))
+        }),
     );
 
     Ok(())

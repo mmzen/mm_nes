@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 use eframe::egui;
-use eframe::egui::{pos2, vec2, Color32, ColorImage, Context, Image, TextureHandle, TextureOptions, Ui};
+use eframe::egui::{include_image, pos2, vec2, Color32, ColorImage, Context, Image, TextureHandle, TextureOptions, Ui};
 use log::warn;
 use mmnes_core::nes_console::NesConsoleError;
 use mmnes_core::util::measure_exec_time;
@@ -19,12 +19,14 @@ const RENDERER_PLAY_BUTTON: NesButtonId = NesButtonId(0);
 const RENDERER_PAUSE_BUTTON: NesButtonId = NesButtonId(1);
 const RENDERER_RESET_BUTTON: NesButtonId = NesButtonId(2);
 const RENDERER_POWER_OFF_BUTTON: NesButtonId = NesButtonId(3);
-const RENDERER_BUTTONS: [NesButton; 4] = [
-    NesButton { id: RENDERER_PLAY_BUTTON, label: "PLAY", tooltip: "Run emulator" },
-    NesButton { id: RENDERER_PAUSE_BUTTON, label: "PAUSE", tooltip: "Pause/Run emulator" },
-    NesButton { id: RENDERER_RESET_BUTTON, label: "RESET", tooltip: "Reset emulator" },
-    NesButton { id: RENDERER_POWER_OFF_BUTTON, label: "POWER OFF", tooltip: "Power off emulator" },
+const RENDERER_BUTTONS: [(NesButtonId, &str, &str, &[u8]); 4] = [
+    (RENDERER_PLAY_BUTTON, "PLAY", "Run emulator", include_bytes!("assets/play.png")),
+    (RENDERER_PAUSE_BUTTON, "PAUSE", "Pause/Run emulator", include_bytes!("assets/pause.png")),
+    (RENDERER_RESET_BUTTON, "RESET", "Reset emulator", include_bytes!("assets/reset.png")),
+    (RENDERER_POWER_OFF_BUTTON, "POWER OFF", "Power off emulator", include_bytes!("assets/poweroff.png")),
 ];
+
+
 
 pub struct RendererWidget {
     visible: bool,
@@ -42,6 +44,7 @@ pub struct RendererWidget {
     emulator_fps: f32,
     nes_frame: Option<ColorImage>,
     nes_mediator: Rc<RefCell<NesMediator>>,
+    menu_buttons: Vec<NesButton>,
 }
 
 impl NesUiWidget for RendererWidget {
@@ -62,7 +65,7 @@ impl NesUiWidget for RendererWidget {
     }
 
     fn menu_buttons(&self) -> &[NesButton] {
-        &RENDERER_BUTTONS
+        &self.menu_buttons
     }
 
     fn on_button(&mut self, id: NesButtonId) -> Result<(), NesConsoleError> {
@@ -93,7 +96,19 @@ impl NesUiWidget for RendererWidget {
 }
 
 impl RendererWidget {
-    pub fn new(height: usize, width: usize, cc: &eframe::CreationContext<'_>, nes_mediator: Rc<RefCell<NesMediator>>) -> RendererWidget {
+
+    fn create_menu_buttons(cc: &eframe::CreationContext<'_>) -> Result<Vec<NesButton>, NesConsoleError> {
+        let mut buttons = Vec::<NesButton>::new();
+
+        for i in &RENDERER_BUTTONS {
+            let button = NesButton::new(cc, i.0, i.1, i.2, i.3)?;
+            buttons.push(button);
+        }
+
+        Ok(buttons)
+    }
+
+    pub fn new(height: usize, width: usize, cc: &eframe::CreationContext<'_>, nes_mediator: Rc<RefCell<NesMediator>>) -> Result<RendererWidget, NesConsoleError> {
         let vec = RendererWidget::create_default_texture(width, height, Color32::DARK_GRAY);
 
         let texture_options = TextureOptions {
@@ -109,7 +124,9 @@ impl RendererWidget {
             texture_options
         );
 
-        RendererWidget {
+        let menu_buttons = RendererWidget::create_menu_buttons(cc)?;
+
+        let widget = RendererWidget {
             visible: false,
             rom_file: None,
             error: None,
@@ -125,7 +142,10 @@ impl RendererWidget {
             emulator_fps: 0.0,
             nes_frame: None,
             nes_mediator,
-        }
+            menu_buttons,
+        };
+
+        Ok(widget)
     }
 
     fn prepare_nes_frame(&mut self) -> Result<(), NesConsoleError> {
@@ -228,7 +248,7 @@ impl RendererWidget {
         }
 
         egui::Window::new(WINDOW_NAME)
-            .default_pos(pos2(110.0, 40.0))
+            .default_pos(pos2(110.0, 60.0))
             .title_bar(false)
             .default_size([640.0, 480.0])
             .show(ctx, |ui| {
