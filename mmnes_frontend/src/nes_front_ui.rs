@@ -3,7 +3,7 @@ use std::path::{PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
-use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Layout, Margin, RawInput, Response, RichText, Stroke, TextureHandle, TextureOptions, TopBottomPanel, Ui, Vec2};
+use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Layout, Margin, RawInput, RichText, Stroke, TextureHandle, TopBottomPanel, Vec2};
 use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
@@ -22,6 +22,7 @@ pub struct NesButtonId(pub u16);
 #[derive(Clone)]
 pub struct NesButton {
     pub id: NesButtonId,
+    #[allow(dead_code)]
     pub label: &'static str,
     pub tooltip: &'static str,
     pub icon: TextureHandle,
@@ -113,18 +114,6 @@ impl NesFrontUI {
         };
 
         Ok(nes_front_ui)
-    }
-
-    fn load_png_texture(ctx: &Context, bytes: &[u8], name: &str) -> TextureHandle {
-        let dyn_img = image::load_from_memory(bytes).expect("invalid PNG");
-        let rgba = dyn_img.to_rgba8();
-        let (w, h) = rgba.dimensions();
-        let color_image = ColorImage::from_rgba_unmultiplied(
-            [w as usize, h as usize],
-            rgba.as_raw(),
-        );
-
-        ctx.load_texture(name.to_owned(), color_image, TextureOptions::LINEAR)
     }
 
     fn send_input_to_emulator(&mut self) -> Result<(), NesConsoleError> {
@@ -231,44 +220,6 @@ impl NesFrontUI {
                 widget.set_error(None);
             }
         }
-    }
-
-    fn main_menu_text_button(ui: &mut Ui, label: &str, tooltip: &str, kind: ButtonKind, selected: bool) -> Response {
-        let resp = ui.scope(|ui| {
-            let style = ui.style_mut();
-            style.spacing.button_padding = vec2(8.0, 4.0);
-
-            let vis = ui.style().visuals.clone();
-            //let accent = Color32::from_rgb(78, 201, 176);
-            let red    = Color32::from_rgb(200, 80, 80);
-            let base_bg = vis.widgets.inactive.bg_fill;
-            let base_stroke = vis.widgets.inactive.bg_stroke;
-
-            let (fill, stroke) = match kind {
-                ButtonKind::Primary   |
-                ButtonKind::Secondary => (base_bg, base_stroke),
-                ButtonKind::Danger    => (red.linear_multiply(if selected { 0.90 } else { 0.75 }), Stroke::new(1.0, red.linear_multiply(0.90))),
-            };
-
-            let text = RichText::new(label).size(11.0).strong();
-
-            let mut b = Button::new(text).min_size(vec2(80.0, 24.0)).stroke(stroke);
-
-            if matches!(kind, ButtonKind::Primary | ButtonKind::Danger) {
-                b = b.fill(fill);
-            }
-
-            let r = ui.add(b).on_hover_text(tooltip);
-
-            if selected && r.hovered() == false {
-                // simulate emphasis by re-adding a stroke via a small frame around it
-                // (kept minimal—no custom vector icons/draw calls)
-            }
-
-            r
-        }).inner;
-
-        resp
     }
 
     fn install_theme(ctx: &Context) {
