@@ -12,7 +12,7 @@ pipelines:
         name: Build
         script:
           - rustup update
-          - apt-get update && apt-get install -y libsdl2-dev
+          - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev
           - cargo build --verbose
     - step:
         caches:
@@ -21,7 +21,7 @@ pipelines:
         name: Test
         script:
           - rustup update
-          - apt-get update && apt-get install -y libsdl2-dev
+          - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev
           - cargo test --verbose
     - step:
         name: Mirror to GitHub
