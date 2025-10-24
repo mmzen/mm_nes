@@ -1,7 +1,7 @@
-# mm_nes - a NES emulator with LLM capabilities
+# mmnes - a NES emulator with LLM capabilities
 
-_mm_nes_ is a learning-friendly NES emulator. 
-It’s not trying to beat the fastest or most accurate emulators; the goal is to **integrate LLM** to make playing and developing for the NES more approachable.
+_mmnes_ is a learning-friendly NES emulator. 
+It’s not trying to beat the fastest or most accurate emulators; the goal is to **integrate LLM** to help playing and developing for the NES.
 
 > ⚠️ Experimental • Unstable API • For personal use
 
