@@ -11,7 +11,10 @@ It’s not trying to beat the fastest or most accurate emulators; the goal is to
 ## Disclaimer
 
 This project is a personal work-in-progress. It is **not intended for use by anyone but me** and is **still under active development**.   
-**Notes**: no releases are provided.
+
+**Notes**: 
+- no releases are provided.
+- SDL2 is needed
 
 
 ## Why an LLM for a NES emulator ?
@@ -57,7 +60,7 @@ By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, s
 ## NES Accuracy
 
 We track emulator correctness with **AccuracyCoin**, a very cool single-ROM test suite for NES  (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).  
-_Source: [AccuracyCoin by 100thCoin]_.
+_[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 
 **Current score:** `74 / 131`
 
@@ -112,7 +115,7 @@ _Source: [AccuracyCoin by 100thCoin]_.
 - [ ] APU visualizer
 
 ### LLM Integration
-- [ ] Snapshot and hint overlay
+- [ ] Snapshot and hint overlay (✨*in progress*✨)
 - [ ] Explain next N instructions
 - [ ] Natural-language cheats
 - [ ] Session recap
