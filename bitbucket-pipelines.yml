@@ -23,6 +23,14 @@ pipelines:
           - rustup update
           - apt-get update && apt-get install -y libsdl2-dev
           - cargo test --verbose
+    - step:
+        name: Mirror to GitHub
+        script:
+          - git fetch --prune --unshallow --tags || true
+          - export GITHUB_URL="https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+          - git remote add github "${GITHUB_URL}" || git remote set-url github "${GITHUB_URL}"
+          - git push --prune github +refs/heads/*:refs/heads/*
+          - git push --prune github +refs/tags/*:refs/tags/*
 definitions:
   caches:
     cargo-home: $HOME/.cargo
