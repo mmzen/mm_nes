@@ -9,19 +9,11 @@ pipelines:
         caches:
           - cargo-home
           - cargo-target
-        name: Build
+        name: Build and Test
         script:
           - rustup update
           - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev
           - cargo build --verbose
-    - step:
-        caches:
-          - cargo-home
-          - cargo-target
-        name: Test
-        script:
-          - rustup update
-          - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev
           - cargo test --verbose
     - step:
         name: Mirror to GitHub

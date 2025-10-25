@@ -57,29 +57,13 @@ pub struct Args {
         value_parser=maybe_hex::<u16>
     )]
     pc: Option<u16>,
-
-    #[arg(
-        short = 'g',
-        long = "cpu-tracing",
-        help = "activate cpu tracing",
-        default_value_t = false,
-    )]
-    cpu_tracing: bool,
-
-    #[arg(
-        short = 't',
-        long = "trace-file",
-        help = "output for CPU tracing"
-    )]
-    trace_file: Option<String>,
-
+    
     #[arg(
         short = 'f',
         long = "rom-file",
-        help = "rom file to load",
-        required = true,
+        help = "rom file to immediately load",
     )]
-    rom_file: PathBuf
+    rom_file: Option<PathBuf>
 }
 
 
@@ -94,10 +78,10 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-fn spawn_emulator_thread(args: Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
+fn spawn_emulator_thread(args: &Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
 
     let handle = spawn(move || -> Result<(), NesConsoleError> {
-        let mut front = NesFrontEnd::new(args, frame_tx, command_rx, debug_tx, error_tx).map_err(|e| {
+        let mut front = NesFrontEnd::new(frame_tx, command_rx, debug_tx, error_tx).map_err(|e| {
             error!("fatal error while creating emulator: {}", e);
             e
         })?;
@@ -128,7 +112,7 @@ fn main() -> Result<(), NesConsoleError> {
     let (debug_tx, debug_rx) = sync_channel::<NesMessage>(DEBUG_CHANNEL_BOUND_SIZE);
     let (error_tx, error_rx) = sync_channel::<NesMessage>(ERROR_BOUND_SIZE);
 
-    let _ = spawn_emulator_thread(args, frame_tx, command_rx, debug_tx, error_tx)?;
+    let _ = spawn_emulator_thread(&args, frame_tx, command_rx, debug_tx, error_tx)?;
 
     let _ = eframe::run_native(
         APP_NAME,
@@ -136,7 +120,7 @@ fn main() -> Result<(), NesConsoleError> {
         Box::new(|cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
 
-            let nes_front_ui = NesFrontUI::new(cc, command_tx, frame_rx, debug_rx, error_rx, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
+            let nes_front_ui = NesFrontUI::new(args, cc, command_tx, frame_rx, debug_rx, error_rx, FRAME_BUFFER_WIDTH, FRAME_BUFFER_HEIGHT);
             if let Err(error) = nes_front_ui {
                 panic!("failed to initialize NES front UI: {}", error);
             }

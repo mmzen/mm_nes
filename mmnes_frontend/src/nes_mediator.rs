@@ -1,13 +1,16 @@
+use std::path::PathBuf;
 use log::warn;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
+use crate::nes_message::NesMessage::LoadRom;
 
 pub struct NesMediator {
     frame_rx: Receiver<NesMessage>,
     command_tx: SyncSender<NesMessage>,
     debug_rx: Receiver<NesMessage>,
     error_rx: Receiver<NesMessage>,
+    rom_file: Option<PathBuf>,
 }
 
 impl NesMediator {
@@ -18,7 +21,16 @@ impl NesMediator {
             command_tx,
             debug_rx,
             error_rx,
+            rom_file: None,
         }
+    }
+    
+    pub fn rom_file(&self) -> Option<&PathBuf> {
+        self.rom_file.as_ref()
+    }
+    
+    pub fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
+        self.rom_file = rom_file;
     }
 
     pub fn read_messages(&self) -> Result<Vec<NesMessage>, NesConsoleError> {

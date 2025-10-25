@@ -1,18 +1,18 @@
-use std::fs::File;
 use std::hint::spin_loop;
 use std::ops::ControlFlow;
 use std::ops::ControlFlow::{Break, Continue};
+use std::path::PathBuf;
 use std::sync::mpsc::TrySendError;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use log::{debug, info, warn};
+use log::{info, warn};
 use mmnes_core::apu::ApuType::RP2A03;
 use mmnes_core::bus::BusType;
 use mmnes_core::bus_device::BusDeviceType::{APU, CARTRIDGE, CONTROLLER, PPU, WRAM};
 use mmnes_core::cartridge::CartridgeType::NROM;
 use mmnes_core::controller::ControllerType::StandardController;
-use mmnes_core::cpu::CpuType::NES6502;
+use mmnes_core::cpu::CpuType;
 use mmnes_core::cpu_debugger::DebugCommand;
 use mmnes_core::loader::LoaderType::INESV2;
 use mmnes_core::memory::MemoryType::StandardMemory;
@@ -30,6 +30,7 @@ enum NesFrontEndState {
     Debug(DebugCommand),
     Paused,
     Idle,
+    Halted,
 }
 
 impl NesFrontEndState {
@@ -47,34 +48,31 @@ pub struct NesFrontEnd {
     frame_tx: SyncSender<NesMessage>,
     debug_tx: SyncSender<NesMessage>,
     error_tx: SyncSender<NesMessage>,
-    nes: NesConsole,
-    args: Args,
+    nes: Option<NesConsole>,
     state: NesFrontEndState
 }
 
 impl NesFrontEnd {
 
-    fn create_emulator(args: &Args) -> Result<NesConsole, NesConsoleError> {
-        let builder = NesConsoleBuilder::new();
+    fn nes_mut(&mut self) -> Result<&mut NesConsole, NesConsoleError> {
+        self.nes
+            .as_mut()
+            .ok_or_else(|| NesConsoleError::InternalError("emulator is not created".to_string()))
+    }
 
-        let trace_file = if let Some(trace_file) = args.trace_file.clone() {
-            debug!("output for traces: {}", trace_file);
-            Some(File::create(trace_file)?)
-        } else {
-            debug!("output for traces: stdout");
-            None
-        };
+    fn create_emulator(rom_file: PathBuf, pc: Option<u16>) -> Result<NesConsole, NesConsoleError> {
+        let builder = NesConsoleBuilder::new();
 
         info!("emulator bootstrapping...");
 
         /***
-         * XXX order of initialization is important:
+         * order of initialization is important:
          * 1. APU covers a single range from 0x4000 to 0x4017, because of the default bus implementation that does not support multiple ranges.
          * 2. PPU (OAM DMA) and CONTROLLER overwrite part of the APU range with their own memory spaces.
          * /!\ Changing the order will result in PPU and CONTROLLER having no mapping to the bus.
          ***/
         let mut console = builder
-            .with_cpu_tracing_options(NES6502, args.cpu_tracing, trace_file)
+            .with_cpu(CpuType::NES6502)
             .with_bus_type(BusType::NESBus)
             .with_bus_device_type(WRAM(StandardMemory))
             .with_bus_device_type(CARTRIDGE(NROM))
@@ -82,8 +80,8 @@ impl NesFrontEnd {
             .with_bus_device_type(PPU(NES2C02))
             .with_bus_device_type(CONTROLLER(StandardController))
             .with_loader_type(INESV2)
-            .with_rom_file(args.rom_file.clone())
-            .with_entry_point(args.pc)
+            .with_rom_file(rom_file)
+            .with_entry_point(pc)
             .build()?;
 
         console.power_on()?;
@@ -92,17 +90,15 @@ impl NesFrontEnd {
         Ok(console)
     }
 
-    pub fn new(args: Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>,) -> Result<NesFrontEnd, NesConsoleError> {
-        let nes = NesFrontEnd::create_emulator(&args)?;
+    pub fn new(frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<NesFrontEnd, NesConsoleError> {
 
         let front = NesFrontEnd {
-            nes,
+            nes: None,
             frame_tx,
             command_rx,
             debug_tx,
             error_tx,
-            args,
-            state: NesFrontEndState::Running
+            state: NesFrontEndState::Halted
         };
 
         Ok(front)
@@ -170,18 +166,19 @@ impl NesFrontEnd {
     }
 
     fn process_message(&mut self, message: NesMessage) -> Result<ControlFlow<NesFrontEndState, ()>, NesConsoleError> {
-        match message {
-            NesMessage::Keys(key_events) => {
-                self.nes.set_input(key_events)?;
+
+        match (self.nes.as_mut(), message) {
+            (Some(nes), NesMessage::Keys(key_events)) => {
+                nes.set_input(key_events)?;
                 Ok(Continue(()))
             },
 
-            NesMessage::Reset => {
-                self.nes.reset()?;
+            (Some(nes), NesMessage::Reset) => {
+                nes.reset()?;
                 Ok(Break(self.state.clone()))
             },
 
-            NesMessage::Pause => {
+            (Some(_), NesMessage::Pause) => {
                 let state = self.state.toggle_pause();
 
                 if let Some(s) = state {
@@ -191,32 +188,36 @@ impl NesFrontEnd {
                 }
             },
 
-            NesMessage::Play => {
+            (Some(_), NesMessage::PowerOff) => {
+                self.nes = None;
+                Ok(Break(NesFrontEndState::Halted))
+            },
+
+            (Some(_), NesMessage::Play) => {
                 Ok(Break(NesFrontEndState::Running))
             },
 
-            NesMessage::LoadRom(rom_file) => {
-                self.args.rom_file = rom_file;
-
-                match NesFrontEnd::create_emulator(&self.args) {
+            (_, NesMessage::LoadRom(rom_file)) => {
+                match NesFrontEnd::create_emulator(rom_file, None) {
                     Ok(nes) => {
-                        self.nes = nes;
+                        self.nes = Some(nes);
                         Ok(Break(NesFrontEndState::Running))
                     }
                     Err(e) => {
+                        self.nes = None;
                         self.send_error_message(e)?;
                         Ok(Break(NesFrontEndState::Idle))
                     }
                 }
             },
 
-            NesMessage::Debug(command) => {
+            (Some(_), NesMessage::Debug(command)) => {
                 let state = NesFrontEndState::Debug(command);
                 Ok(Break(state))
             },
 
-            other => {
-                warn!("unexpected message: {:?}", other);
+            (_, other) => {
+                warn!("unexpected message: {:?}, dropping", other);
                 Ok(Continue(()))
             }
         }
@@ -247,7 +248,7 @@ impl NesFrontEnd {
 
             match self.state {
                 NesFrontEndState::Running => {
-                    let (frame, samples) = self.nes.step_frame()?;
+                    let (frame, samples) = self.nes_mut()?.step_frame()?;
                     self.process_frame(frame)?;
                     self.process_samples(samples, &mut sound_player)?;
 
@@ -255,7 +256,7 @@ impl NesFrontEnd {
                 },
 
                 NesFrontEndState::Debug(DebugCommand::StepInstruction) => {
-                    let (frame, samples, snapshot) = self.nes.step_instruction()?;
+                    let (frame, samples, snapshot) = self.nes_mut()?.step_instruction()?;
 
                     if let Some(frame) = frame {
                         self.process_frame(frame)?;
@@ -273,7 +274,7 @@ impl NesFrontEnd {
                 NesFrontEndState::Debug(DebugCommand::Paused) => {},
 
                 NesFrontEndState::Debug(DebugCommand::Run) => {
-                    let (frame, samples, snapshots) = self.nes.step_frame_debug()?;
+                    let (frame, samples, snapshots) = self.nes_mut()?.step_frame_debug()?;
                     self.process_frame(frame)?;
                     self.process_samples(samples, &mut sound_player)?;
 
@@ -291,6 +292,7 @@ impl NesFrontEnd {
                 },
 
                 NesFrontEndState::Paused => {},
+                NesFrontEndState::Halted => {},
                 NesFrontEndState::Idle => {}
             }
         }

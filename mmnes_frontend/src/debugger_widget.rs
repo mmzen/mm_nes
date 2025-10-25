@@ -21,7 +21,6 @@ const MAX_CPU_SNAPSHOTS: usize = 256;
 pub struct DebuggerWidget {
     visible: bool,
     is_debugger_attached: bool,
-    rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
     nes_mediator: Rc<RefCell<NesMediator>>,
     cpu_snapshots: Vec<Box<dyn CpuSnapshot>>,
@@ -35,10 +34,6 @@ impl NesUiWidget for DebuggerWidget {
 
     fn visible(&self) -> bool {
         self.visible
-    }
-
-    fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
-        self.rom_file = rom_file;
     }
 
     fn set_error(&mut self, error: Option<NesConsoleError>) {
@@ -77,7 +72,6 @@ impl DebuggerWidget {
         let widget = DebuggerWidget {
             visible: false,
             is_debugger_attached: false,
-            rom_file: None,
             error: None,
             nes_mediator,
             cpu_snapshots: Vec::new(),
@@ -102,8 +96,10 @@ impl DebuggerWidget {
     }
 
     fn debugger_header_bar(&self, ui: &mut Ui) {
-        let rom = self.rom_file
-            .as_ref()
+        let nes_mediator = self.nes_mediator.borrow();
+        let rom_file = nes_mediator.rom_file();
+
+        let rom = rom_file
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .unwrap_or("(no ROM)");

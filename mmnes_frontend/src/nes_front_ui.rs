@@ -8,6 +8,7 @@ use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
+use crate::Args;
 use crate::debugger_widget::DebuggerWidget;
 use crate::image_text_button::{ButtonKind, ImageTextButton};
 use crate::nes_mediator::NesMediator;
@@ -67,7 +68,6 @@ pub struct NesFrontUI {
     emulator_viewport_frame: egui::containers::Frame,
     input: KeyEvents,
     rom_file_dialog: FileDialog,
-    rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
     widgets: Vec<Box<dyn NesUiWidget>>,
     nes_mediator: Rc<RefCell<NesMediator>>,
@@ -76,7 +76,7 @@ pub struct NesFrontUI {
 
 impl NesFrontUI {
 
-    pub fn new(cc: &eframe::CreationContext<'_>,
+    pub fn new(args: Args, cc: &eframe::CreationContext<'_>,
                command_tx: SyncSender<NesMessage>, frame_rx: Receiver<NesMessage>, debug_rx: Receiver<NesMessage>, error_rx: Receiver<NesMessage>,
                width: usize, height: usize) -> Result<NesFrontUI, NesConsoleError> {
 
@@ -106,14 +106,24 @@ impl NesFrontUI {
             emulator_viewport_frame: frame,
             input: KeyEvents::new(),
             rom_file_dialog: FileDialog::new(),
-            rom_file: None,
             error: None,
             nes_mediator,
             widgets,
             menu_buttons,
         };
 
+        if let Some(rom_file) = &args.rom_file {
+            let mut nes_mediator = nes_front_ui.nes_mediator.borrow_mut();
+
+            nes_mediator.send_message(LoadRom(rom_file.clone()))?;
+            nes_mediator.set_rom_file(args.rom_file);
+        }
+
         Ok(nes_front_ui)
+    }
+
+    fn is_halted(&self) -> bool {
+        self.nes_mediator.borrow().rom_file().is_none()
     }
 
     fn send_input_to_emulator(&mut self) -> Result<(), NesConsoleError> {
@@ -144,13 +154,11 @@ impl NesFrontUI {
 
     fn load_rom_file(&mut self) -> Result<(), NesConsoleError> {
         if let Some(path) = self.rom_file_dialog.take_picked() {
-            self.rom_file = Some(path.clone());
+            let rom_file = Some(path.clone());
+            let mut nes_mediator = self.nes_mediator.borrow_mut();
 
-            for widget in &mut self.widgets {
-                widget.set_rom_file(self.rom_file.clone());
-            }
-            
-            self.nes_mediator.borrow_mut().send_message(LoadRom(path))?;
+            nes_mediator.set_rom_file(rom_file);
+            nes_mediator.send_message(LoadRom(path))?;
         }
 
         Ok(())
@@ -159,7 +167,7 @@ impl NesFrontUI {
     fn get_window_title(&self) -> String {
         let mut title = "MMNES".to_string();
 
-        let rom_name = if let Some(rom_file) = &self.rom_file {
+        let rom_name = if let Some(rom_file) = &self.nes_mediator.borrow().rom_file() {
             if let Some (rom_file_str) = rom_file.file_name() {
                 " - ".to_string() + &*rom_file_str.to_string_lossy()
             } else {
@@ -297,14 +305,16 @@ impl App for NesFrontUI {
         CentralPanel::default().frame(self.emulator_viewport_frame).show(ctx, |ui| {
             Image::new(egui::include_image!("assets/bg.jpg")).paint_at(ui, ctx.screen_rect());
 
-            for widget in &mut self.widgets {
-                let _ = widget.draw(ctx);
-            }
+            if self.is_halted() == false {
+                for widget in &mut self.widgets {
+                    let _ = widget.draw(ctx);
+                }
 
-            let error = self.error.clone();
+                let error = self.error.clone();
 
-            if let Some(error) = error {
-                self.show_error_modal(ctx, &error);
+                if let Some(error) = error {
+                    self.show_error_modal(ctx, &error);
+                }
             }
         });
         

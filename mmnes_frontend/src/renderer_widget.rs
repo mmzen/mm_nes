@@ -30,7 +30,6 @@ const RENDERER_BUTTONS: [(NesButtonId, &str, &str, &[u8]); 4] = [
 
 pub struct RendererWidget {
     visible: bool,
-    rom_file: Option<PathBuf>,
     error: Option<NesConsoleError>,
     height: usize,
     width: usize,
@@ -56,10 +55,6 @@ impl NesUiWidget for RendererWidget {
         self.visible
     }
 
-    fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
-        self.rom_file = rom_file;
-    }
-
     fn set_error(&mut self, error: Option<NesConsoleError>) {
         self.error = error;
     }
@@ -73,7 +68,12 @@ impl NesUiWidget for RendererWidget {
             RENDERER_PLAY_BUTTON => self.nes_mediator.borrow_mut().send_message(Play),
             RENDERER_PAUSE_BUTTON => self.nes_mediator.borrow_mut().send_message(Pause),
             RENDERER_RESET_BUTTON => self.nes_mediator.borrow_mut().send_message(Reset),
-            RENDERER_POWER_OFF_BUTTON => self.nes_mediator.borrow_mut().send_message(PowerOff),
+            RENDERER_POWER_OFF_BUTTON => {
+                let mut nes_mediator = self.nes_mediator.borrow_mut();
+
+                nes_mediator.set_rom_file(None);
+                nes_mediator.send_message(PowerOff)
+            },
             _ => return Err(NesConsoleError::InternalError("unknown button".to_string())),
         };
 
@@ -128,7 +128,6 @@ impl RendererWidget {
 
         let widget = RendererWidget {
             visible: false,
-            rom_file: None,
             error: None,
             height,
             width,

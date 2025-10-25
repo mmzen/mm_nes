@@ -366,16 +366,14 @@ impl NesConsoleBuilder {
         }
     }
 
-    pub fn with_loader_type(mut self, loader_type: LoaderType) -> Self {
-        self.loader_type = Some(loader_type);
+
+    pub fn with_cpu(mut self, cpu: CpuType) -> Self {
+        self.cpu_type = Some(cpu);
         self
     }
 
-    pub fn with_cpu_tracing_options(mut self, cpu: CpuType, trace: bool, trace_file: Option<File>) -> Self {
-        self.cpu_type = Some(cpu);
-        self.cpu_tracing = trace;
-        self.cpu_trace_file = trace_file;
-
+    pub fn with_loader_type(mut self, loader_type: LoaderType) -> Self {
+        self.loader_type = Some(loader_type);
         self
     }
 
