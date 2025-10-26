@@ -20,7 +20,7 @@ use mmnes_core::nes_console::{NesConsole, NesConsoleBuilder, NesConsoleError};
 use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::nes_samples::NesSamples;
 use mmnes_core::ppu::PpuType::NES2C02;
-use crate::{Args, FRAMES_PER_SECOND, SPIN_BEFORE};
+use crate::{FRAMES_PER_SECOND, SPIN_BEFORE};
 use crate::nes_message::NesMessage;
 use crate::sound_player::SoundPlayer;
 

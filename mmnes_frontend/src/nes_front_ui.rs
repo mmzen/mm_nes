@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::path::{PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
@@ -8,6 +7,7 @@ use egui_file_dialog::FileDialog;
 use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
+use crate::ai_widget::AiWidget;
 use crate::Args;
 use crate::debugger_widget::DebuggerWidget;
 use crate::image_text_button::{ButtonKind, ImageTextButton};
@@ -98,9 +98,11 @@ impl NesFrontUI {
 
         let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone())?;
         let debugger_ui = DebuggerWidget::new(cc, nes_mediator.clone())?;
+        let ai_ui = AiWidget::new(cc, nes_mediator.clone())?;
 
         widgets.push(Box::new(renderer_ui));
         widgets.push(Box::new(debugger_ui));
+        widgets.push(Box::new(ai_ui));
 
         let nes_front_ui = NesFrontUI {
             emulator_viewport_frame: frame,

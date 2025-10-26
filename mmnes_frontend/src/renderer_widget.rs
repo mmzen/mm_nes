@@ -1,9 +1,8 @@
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 use eframe::egui;
-use eframe::egui::{include_image, pos2, vec2, Color32, ColorImage, Context, Image, TextureHandle, TextureOptions, Ui};
+use eframe::egui::{pos2, vec2, Color32, ColorImage, Context, Image, TextureHandle, TextureOptions, Ui};
 use log::warn;
 use mmnes_core::nes_console::NesConsoleError;
 use mmnes_core::util::measure_exec_time;

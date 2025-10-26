@@ -25,6 +25,12 @@ mod nes_ui_widget;
 mod nes_mediator;
 mod renderer_widget;
 mod image_text_button;
+mod llm_orchestrator;
+mod llm_client;
+mod openai_llm;
+mod ai_widget;
+#[cfg(test)]
+pub mod tests;
 
 const APP_NAME: &str = "MMNES";
 
@@ -57,7 +63,7 @@ pub struct Args {
         value_parser=maybe_hex::<u16>
     )]
     pc: Option<u16>,
-    
+
     #[arg(
         short = 'f',
         long = "rom-file",
@@ -78,7 +84,7 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-fn spawn_emulator_thread(args: &Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
+fn spawn_emulator_thread(_args: &Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
 
     let handle = spawn(move || -> Result<(), NesConsoleError> {
         let mut front = NesFrontEnd::new(frame_tx, command_rx, debug_tx, error_tx).map_err(|e| {

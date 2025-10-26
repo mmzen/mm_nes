@@ -72,7 +72,6 @@ _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 - [x] Official opcodes
 - [x] Unofficial opcodes
 - [x] NMI/IRQ handling
-- [ ] Cycle-accurate page-crossing penalties everywhere
 
 ### PPU
 - [x] Background rendering
@@ -106,6 +105,7 @@ _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 - [ ] Save states
 - [ ] Rewind
 - [ ] PRG ram persistency
+- [ ] Regionalization (NTSC, PAL, Dendy)
 
 ### Debugging
 - [x] CPU disassembler
