@@ -37,6 +37,7 @@ impl<'a> ImageTextButton<'a> {
         self
     }
 
+    #[allow(dead_code)]
     pub fn label(mut self, s: &'a str) -> ImageTextButton<'a> {
         self.label = Some(s);
         self

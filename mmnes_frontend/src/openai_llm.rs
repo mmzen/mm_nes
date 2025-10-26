@@ -1,16 +1,16 @@
 use std::time::Duration;
-use serde_json::json;
+use serde_json::{json, Value};
 use crate::llm_client::{LLMClient, LLMClientError};
 
 pub struct OpenAILLM {
-    client: reqwest::Client,
+    client: reqwest::blocking::Client,
     endpoint: String,
     api_key: String,
     model: String,
 }
 
 impl LLMClient for OpenAILLM {
-    async fn chat(&self, prompt: String) -> Result<String, LLMClientError> {
+    fn chat(&self, prompt: String) -> Result<String, LLMClientError> {
         let request = json!({
             "model": self.model.clone(),
             "instructions": "You are a professional NES gameplay coach. \
@@ -29,15 +29,45 @@ impl LLMClient for OpenAILLM {
             .bearer_auth(&self.api_key)
             .json(&request)
             .send()
-            .await?;
+            .map_err(|err| LLMClientError::CommunicationError(format!("could not send request: {}", err)))?;
 
-        Ok(resp.text().await?)
+        let json: Value = resp.json()
+            .map_err(|err| LLMClientError::CommunicationError(format!("could not read response {}", err)))?;
+
+        if let Some(s) = json.get("output_text").and_then(|raw| raw.as_str()) {
+            return Ok(s.to_string());
+        }
+
+        if let Some(array) = json.get("output").and_then(|raw| raw.as_array()) {
+            let mut buffer = String::new();
+
+            for item in array {
+                if let Some(parts) = item.get("content").and_then(|raw| raw.as_array()) {
+                    for part in parts {
+                        let content_type = part.get("type").and_then(|raw| raw.as_str());
+
+                        if content_type == Some("output_text") || content_type == Some("text") {
+                            if let Some(text) = part.get("text").and_then(|raw| raw.as_str()) {
+                                if !buffer.is_empty() { buffer.push('\n'); }
+                                buffer.push_str(text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !buffer.is_empty() {
+                return Ok(buffer);
+            }
+        }
+
+        Err(LLMClientError::CommunicationError("could not find text in response".into()))
     }
 }
 
 impl OpenAILLM {
     pub fn new(endpoint: impl Into<String>, api_key: impl Into<String>, model: impl Into<String>) -> Result<OpenAILLM, LLMClientError> {
-        let client = reqwest::Client::builder()
+        let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
             .or(Err(LLMClientError::ConfigurationError("could not build HTTP client".to_string())))?;

@@ -4,6 +4,7 @@ use eframe::egui;
 use eframe::egui::{pos2, Align, Color32, Context, CornerRadius, Frame, Key, Label, Layout, Margin, RichText, Stroke, Ui};
 use egui_extras::{Size, StripBuilder};
 use mmnes_core::nes_console::NesConsoleError;
+use crate::ai_worker::{AiWorkMessage, AiWorker};
 use crate::nes_front_ui::{NesButton, NesButtonId};
 use crate::nes_mediator::NesMediator;
 use crate::nes_ui_widget::NesUiWidget;
@@ -18,6 +19,7 @@ pub struct AiWidget {
     messages: Vec<ChatMessage>,
     input: String,
     is_sending: bool,
+    ai_worker: AiWorker,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,7 +66,7 @@ impl NesUiWidget for AiWidget {
 }
 
 impl AiWidget {
-    pub fn new(cc: &eframe::CreationContext<'_>, nes_mediator: Rc<RefCell<NesMediator>>) -> Result<AiWidget, NesConsoleError> {
+    pub fn new(cc: &eframe::CreationContext<'_>, nes_mediator: Rc<RefCell<NesMediator>>, ai_worker: AiWorker) -> Result<AiWidget, NesConsoleError> {
         let button = NesButton::new(cc, NesButtonId(0), "AI", "AI Coach", include_bytes!("assets/cupid.png"))?;
         let buttons = vec![button];
 
@@ -74,10 +76,11 @@ impl AiWidget {
             error: None,
             buttons,
             messages: vec![
-                ChatMessage { role: ChatRole::Assistant, text: "Hi! Ask me for a hint anytime. (Enter to send, Shift+Enter for newline)".to_string() },
+                ChatMessage { role: ChatRole::Assistant, text: "Hi! Click the \"Ask Coach\" button to get some help or ask a question ! (Enter to send, Shift+Enter for newline)".to_string() },
             ],
             input: String::new(),
             is_sending: false,
+            ai_worker,
         };
 
         Ok(widget)
@@ -118,12 +121,61 @@ impl AiWidget {
             });
     }
 
+    fn fetch_ai_response(&mut self) {
+        while let Some(message) = self.ai_worker.try_recv() {
+            match message {
+                AiWorkMessage::Reply { text, .. } => self.messages.push(ChatMessage { role: ChatRole::Assistant, text }),
+                AiWorkMessage::Error { text, .. } => self.messages.push(ChatMessage { role: ChatRole::Assistant, text: format!("error: {text}") })
+            }
+
+            self.is_sending = false;
+        }
+    }
+
+    fn quick_help(&mut self) -> Result<(), NesConsoleError> {
+        if self.is_sending {
+            return Ok(())
+        }
+
+        self.messages.push(ChatMessage { role: ChatRole::Player, text: "Help me Coach!".to_string() });
+        self.is_sending = true;
+
+        if let Err(e) = self.ai_worker.request(0, "I'm playing super mario bros, and I'm in world 1-2, are there any warp zones ?".to_string()) {
+            self.messages.push(ChatMessage { role: ChatRole::Assistant, text: format!("(enqueue error) {e}") });
+            self.is_sending = false;
+        }
+
+        Ok(())
+    }
+
+    fn send_freeform(&mut self, text: String) -> Result<(), NesConsoleError> {
+        if self.is_sending {
+            return Ok(())
+        }
+
+        self.messages.push(ChatMessage { role: ChatRole::Player, text: text.clone() });
+        self.is_sending = true;
+
+        if let Err(e) = self.ai_worker.request(0, text) {
+            self.messages.push(ChatMessage { role: ChatRole::Assistant, text: format!("(enqueue error) {e}") });
+            self.is_sending = false;
+        }
+
+        Ok(())
+    }
+
     fn ai_window_inner(&mut self, ui: &mut Ui) -> Result<(), NesConsoleError> {
+        self.fetch_ai_response();
+
+        if ui.input(|i| i.key_pressed(Key::F1)) {
+            self.quick_help();
+        }
+
         StripBuilder::new(ui)
-            .size(Size::exact(28.0))     // header
-            .size(Size::remainder())            // chat list (fills)
-            .size(Size::exact(8.0))      // separator space
-            .size(Size::exact(84.0))     // input bar
+            .size(Size::exact(28.0))   // header
+            .size(Size::remainder())          // chat list
+            .size(Size::exact(8.0))    // separator space
+            .size(Size::exact(84.0))   // input bar
             .clip(true)
             .vertical(|mut strip| {
                 // Header
@@ -137,7 +189,17 @@ impl AiWidget {
                         ui.label(if self.is_sending { "thinking…" } else { "ready" });
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Clear").clicked() {
+                            // Ask Coach button (primary action)
+                            let ask_label = if self.is_sending { "Asking…" } else { "Ask Coach" };
+                            if ui.add_enabled(!self.is_sending, egui::Button::new(ask_label))
+                                .on_hover_text("Get a quick hint without typing (F1)")
+                                .clicked()
+                            {
+                                self.quick_help();
+                            }
+
+                            ui.add_space(6.0);
+                            if ui.button("Clear").on_hover_text("Clear chat").clicked() {
                                 self.messages.clear();
                             }
                         });
@@ -155,7 +217,6 @@ impl AiWidget {
 
                             for message in &self.messages {
                                 let is_user = message.role == ChatRole::Player;
-                                // Align left for assistant, right for user:
                                 let layout = if is_user {
                                     Layout::right_to_left(Align::Min)
                                 } else {
@@ -173,7 +234,7 @@ impl AiWidget {
                             }
 
                             if self.is_sending {
-                                // Tiny inline "typing" bubble:
+                                // inline "typing" bubble
                                 ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
                                     Frame::new()
                                         .fill(ui.visuals().faint_bg_color)
@@ -190,9 +251,7 @@ impl AiWidget {
                         });
                 });
 
-                strip.cell(|ui| {
-                    ui.separator();
-                });
+                strip.cell(|ui| { ui.separator(); });
 
                 // Input bar
                 strip.cell(|ui| {
@@ -202,7 +261,7 @@ impl AiWidget {
                     ui.horizontal(|ui| {
                         // Growing text box
                         let te = egui::TextEdit::multiline(&mut self.input)
-                            .hint_text("Ask anything… (enter to send, shift + enter for newline)")
+                            .hint_text("Refine or ask anything… (Enter to send, Shift+Enter for newline)")
                             .desired_rows(3)
                             .lock_focus(true)
                             .desired_width(f32::INFINITY);
@@ -221,26 +280,10 @@ impl AiWidget {
                         }
                     });
 
-                    // Actually send after the UI frame is built
+                    // Send after the UI frame is built (stubbed for now)
                     if send_now {
                         let text = std::mem::take(&mut self.input);
-
-                        // Push user message to the UI immediately:
-                        self.messages.push(ChatMessage { role: ChatRole::Player, text: text.clone() });
-                        self.is_sending = true;
-
-                        // TODO: start async LLM call here.
-                        // When the response arrives, push:
-                        // self.messages.push(ChatMsg { role: ChatRole::Assistant, text: reply });
-                        // self.is_sending = false;
-                        //
-                        // For now fake a reply:
-                        #[allow(unused_variables)]
-                        let _ = {
-                            let reply = "Try waiting for the fireball, then jump twice while holding run.";
-                            self.messages.push(ChatMessage { role: ChatRole::Assistant, text: reply.into() });
-                            self.is_sending = false;
-                        };
+                        self.send_freeform(text);
                     }
                 });
             });

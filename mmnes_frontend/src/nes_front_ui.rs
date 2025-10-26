@@ -8,6 +8,7 @@ use log::warn;
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
 use crate::ai_widget::AiWidget;
+use crate::ai_worker::AiWorker;
 use crate::Args;
 use crate::debugger_widget::DebuggerWidget;
 use crate::image_text_button::{ButtonKind, ImageTextButton};
@@ -16,6 +17,9 @@ use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Keys, LoadRom};
 use crate::nes_ui_widget::NesUiWidget;
 use crate::renderer_widget::RendererWidget;
+
+const OPENAI_API_URL: &str = "https://api.openai.com/v1/responses";
+const OPENAI_MODEL: &str = "gpt-5-nano";
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct NesButtonId(pub u16);
@@ -92,13 +96,19 @@ impl NesFrontUI {
             shadow: Default::default(),
         };
 
+        let api_key = std::env::var("OPENAI_API_KEY")
+            .map_err(|e| NesConsoleError::InternalError(format!("OpenAI API key (OPENAI_API_KEY) not set: {}", e)))?;
+
         let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx, error_rx)));
+
+        let ai_worker = AiWorker::spawn(api_key, OPENAI_API_URL, OPENAI_MODEL)
+            .map_err(|e| NesConsoleError::InternalError(format!("unable to spawn AI worker: {}", e)))?;
 
         let mut widgets = Vec::<Box<dyn NesUiWidget>>::new();
 
         let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone())?;
         let debugger_ui = DebuggerWidget::new(cc, nes_mediator.clone())?;
-        let ai_ui = AiWidget::new(cc, nes_mediator.clone())?;
+        let ai_ui = AiWidget::new(cc, nes_mediator.clone(), ai_worker)?;
 
         widgets.push(Box::new(renderer_ui));
         widgets.push(Box::new(debugger_ui));

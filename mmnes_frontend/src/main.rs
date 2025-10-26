@@ -31,6 +31,7 @@ mod openai_llm;
 mod ai_widget;
 #[cfg(test)]
 pub mod tests;
+mod ai_worker;
 
 const APP_NAME: &str = "MMNES";
 

@@ -328,8 +328,6 @@ impl Display for NesConsoleError {
 pub struct NesConsoleBuilder {
     cpu: Option<Rc<RefCell<dyn CPU>>>,
     cpu_type: Option<CpuType>,
-    cpu_tracing: bool,
-    cpu_trace_file: Option<File>,
     bus: Option<Rc<RefCell<dyn Bus>>>,
     bus_type: Option<BusType>,
     ppu: Option<Rc<RefCell<dyn PPU>>>,
@@ -349,8 +347,6 @@ impl NesConsoleBuilder {
         NesConsoleBuilder {
             cpu: None,
             cpu_type: None,
-            cpu_tracing: false,
-            cpu_trace_file: None,
             bus: None,
             bus_type: None,
             ppu: None,

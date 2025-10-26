@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
 pub enum LLMClientError {
@@ -6,12 +7,15 @@ pub enum LLMClientError {
 }
 
 pub trait LLMClient {
-    async fn chat(&self, prompt: String) -> Result<String, LLMClientError>;
+    fn chat(&self, prompt: String) -> Result<String, LLMClientError>;
 }
 
-impl From<reqwest::Error> for LLMClientError {
-    fn from(error: reqwest::Error) -> Self {
-        LLMClientError::CommunicationError(error.to_string())
+impl Display for LLMClientError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LLMClientError::ConfigurationError(s) => write!(f, "configuration error: {}", s),
+            LLMClientError::CommunicationError(s) => write!(f, "communication error: {}", s),
+        }
     }
 }
 
