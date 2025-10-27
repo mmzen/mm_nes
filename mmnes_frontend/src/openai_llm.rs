@@ -34,34 +34,7 @@ impl LLMClient for OpenAILLM {
         let json: Value = resp.json()
             .map_err(|err| LLMClientError::CommunicationError(format!("could not read response {}", err)))?;
 
-        if let Some(s) = json.get("output_text").and_then(|raw| raw.as_str()) {
-            return Ok(s.to_string());
-        }
-
-        if let Some(array) = json.get("output").and_then(|raw| raw.as_array()) {
-            let mut buffer = String::new();
-
-            for item in array {
-                if let Some(parts) = item.get("content").and_then(|raw| raw.as_array()) {
-                    for part in parts {
-                        let content_type = part.get("type").and_then(|raw| raw.as_str());
-
-                        if content_type == Some("output_text") || content_type == Some("text") {
-                            if let Some(text) = part.get("text").and_then(|raw| raw.as_str()) {
-                                if !buffer.is_empty() { buffer.push('\n'); }
-                                buffer.push_str(text);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !buffer.is_empty() {
-                return Ok(buffer);
-            }
-        }
-
-        Err(LLMClientError::CommunicationError("could not find text in response".into()))
+        OpenAILLM::parse_response(json)
     }
 }
 
@@ -80,6 +53,39 @@ impl OpenAILLM {
         };
 
         Ok(openai)
+    }
+
+    fn parse_response(json: Value) -> Result<String, LLMClientError> {
+        if let Some(text) = json.get("output_text").and_then(|raw| raw.as_str()) {
+            return Ok(text.to_string());
+        }
+
+        if let Some(array) = json.get("output").and_then(|raw| raw.as_array()) {
+            let mut buffer = String::new();
+
+            for item in array {
+                if let Some(parts) = item.get("content").and_then(|raw| raw.as_array()) {
+                    for part in parts {
+                        let content = part.get("type").and_then(|raw| raw.as_str());
+
+                        if content == Some("output_text") || content == Some("text") {
+                            if let Some(text) = part.get("text").and_then(|raw| raw.as_str()) {
+                                if !text.is_empty() {
+                                    buffer.push('\n');
+                                }
+                                buffer.push_str(text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !buffer.is_empty() {
+                return Ok(buffer);
+            }
+        }
+
+        Err(LLMClientError::CommunicationError("could not find text in response".into()))
     }
 }
 

@@ -132,43 +132,44 @@ impl AiWidget {
         }
     }
 
-    fn quick_help(&mut self) -> Result<(), NesConsoleError> {
-        if self.is_sending {
-            return Ok(())
-        }
-
-        self.messages.push(ChatMessage { role: ChatRole::Player, text: "Help me Coach!".to_string() });
-        self.is_sending = true;
-
-        if let Err(e) = self.ai_worker.request(0, "I'm playing super mario bros, and I'm in world 1-2, are there any warp zones ?".to_string()) {
-            self.messages.push(ChatMessage { role: ChatRole::Assistant, text: format!("(enqueue error) {e}") });
-            self.is_sending = false;
-        }
-
-        Ok(())
+    fn build_prompt_coach(&self) -> String {
+        "Give one short, gentle hint for the current NES scene.".to_string()
     }
 
-    fn send_freeform(&mut self, text: String) -> Result<(), NesConsoleError> {
+    fn build_prompt_cheat(&self) -> String {
+        "Suggest one simple NES cheat for this scene.".to_string()
+    }
+
+    fn build_prompt_action3(&self) -> String {
+        "Explain briefly what to try next.".to_string()
+    }
+
+
+    fn add_prompt(&mut self, user_label: &str, prompt: String) {
         if self.is_sending {
-            return Ok(())
+            return;
         }
 
-        self.messages.push(ChatMessage { role: ChatRole::Player, text: text.clone() });
+        self.messages.push(ChatMessage { role: ChatRole::Player, text: user_label.to_string() });
         self.is_sending = true;
 
-        if let Err(e) = self.ai_worker.request(0, text) {
-            self.messages.push(ChatMessage { role: ChatRole::Assistant, text: format!("(enqueue error) {e}") });
+        if let Err(e) = self.ai_worker.request(prompt) {
+            self.messages.push(ChatMessage { role: ChatRole::Assistant, text: format!("error: {e}") });
             self.is_sending = false;
         }
-
-        Ok(())
     }
 
     fn ai_window_inner(&mut self, ui: &mut Ui) -> Result<(), NesConsoleError> {
         self.fetch_ai_response();
 
         if ui.input(|i| i.key_pressed(Key::F1)) {
-            self.quick_help();
+            self.add_prompt("Ask Coach", self.build_prompt_coach());
+        }
+        if ui.input(|i| i.key_pressed(Key::F2)) {
+            self.add_prompt("Cheat!", self.build_prompt_cheat());
+        }
+        if ui.input(|i| i.key_pressed(Key::F3)) {
+            self.add_prompt("Action 3", self.build_prompt_action3());
         }
 
         StripBuilder::new(ui)
@@ -189,16 +190,6 @@ impl AiWidget {
                         ui.label(if self.is_sending { "thinking…" } else { "ready" });
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            // Ask Coach button (primary action)
-                            let ask_label = if self.is_sending { "Asking…" } else { "Ask Coach" };
-                            if ui.add_enabled(!self.is_sending, egui::Button::new(ask_label))
-                                .on_hover_text("Get a quick hint without typing (F1)")
-                                .clicked()
-                            {
-                                self.quick_help();
-                            }
-
-                            ui.add_space(6.0);
                             if ui.button("Clear").on_hover_text("Clear chat").clicked() {
                                 self.messages.clear();
                             }
@@ -253,38 +244,41 @@ impl AiWidget {
 
                 strip.cell(|ui| { ui.separator(); });
 
-                // Input bar
+                // --- ACTION BUTTON BAR ---
                 strip.cell(|ui| {
-                    let send_enabled = !self.is_sending && !self.input.trim().is_empty();
-                    let mut send_now = false;
+                    let width = 120.0;
+                    let gap = 6.0;
+                    let height = 72.0;
 
                     ui.horizontal(|ui| {
-                        // Growing text box
-                        let te = egui::TextEdit::multiline(&mut self.input)
-                            .hint_text("Refine or ask anything… (Enter to send, Shift+Enter for newline)")
-                            .desired_rows(3)
-                            .lock_focus(true)
-                            .desired_width(f32::INFINITY);
-                        let response = ui.add_sized([ui.available_width() - 92.0, 64.0], te);
-
-                        // Enter to send (unless Shift is held)
-                        let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift);
-                        if enter_pressed && send_enabled && response.has_focus() {
-                            send_now = true;
+                        // Ask Coach
+                        let ask_label = if self.is_sending { "Thinking…" } else { "Ask Coach" };
+                        let ask = ui.add_sized([width, height], egui::Button::new(ask_label))
+                            .on_hover_text("General guidance (F1)");
+                        if !self.is_sending && ask.clicked() {
+                            self.add_prompt("Ask Coach", self.build_prompt_coach());
                         }
 
-                        // Send button
-                        let label = if self.is_sending { "Sending…" } else { "Send" };
-                        if ui.add_enabled(send_enabled, egui::Button::new(label)).clicked() {
-                            send_now = true;
+                        ui.add_space(gap);
+
+                        // Cheat!
+                        let cheat_label = if self.is_sending { "Thinking…" } else { "Cheat!" };
+                        let cheat = ui.add_sized([width, height], egui::Button::new(cheat_label))
+                            .on_hover_text("Quick power-up or cheat (F2)");
+                        if !self.is_sending && cheat.clicked() {
+                            self.add_prompt("Cheat!", self.build_prompt_cheat());
+                        }
+
+                        ui.add_space(gap);
+
+                        // Placeholder (Action 3)
+                        let a3_label = if self.is_sending { "Thinking…" } else { "Action 3" };
+                        let a3 = ui.add_sized([width, height], egui::Button::new(a3_label))
+                            .on_hover_text("Coming soon (F3)");
+                        if !self.is_sending && a3.clicked() {
+                            self.add_prompt("Action 3", self.build_prompt_action3());
                         }
                     });
-
-                    // Send after the UI frame is built (stubbed for now)
-                    if send_now {
-                        let text = std::mem::take(&mut self.input);
-                        self.send_freeform(text);
-                    }
                 });
             });
 

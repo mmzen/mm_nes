@@ -23,12 +23,11 @@ impl Display for AiWorkerError {
 }
 
 pub enum AiWorkMessage {
-    Reply { id: u32, text: String },
-    Error { id: u32, text: String },
+    Reply { text: String },
+    Error { text: String },
 }
 
 struct AiRequest {
-    id: u32,
     prompt: String,
 }
 
@@ -50,10 +49,10 @@ impl AiWorker {
         let handle = thread::Builder::new()
             .name("ai_worker".to_string())
             .spawn(move || {
-                while let Ok(AiRequest { id, prompt }) = request_rx.recv() {
+                while let Ok(AiRequest { prompt }) = request_rx.recv() {
                     let response = match client.chat(prompt) {
-                        Ok(text) => AiWorkMessage::Reply { id, text },
-                        Err(e) => AiWorkMessage::Error { id, text: format!("OpenAI request failed: {}", e) },
+                        Ok(text) => AiWorkMessage::Reply { text },
+                        Err(e) => AiWorkMessage::Error { text: format!("OpenAI request failed: {}", e) },
                     };
 
                     let _ = message_tx.send(response);
@@ -66,8 +65,8 @@ impl AiWorker {
         Ok(AiWorker { request_tx, message_rx, handle: Some(handle) })
     }
 
-    pub fn request(&self, id: u32, prompt: String) -> Result<(), AiWorkerError> {
-        self.request_tx.send(AiRequest { id, prompt })
+    pub fn request(&self, prompt: String) -> Result<(), AiWorkerError> {
+        self.request_tx.send(AiRequest { prompt })
             .map_err(|e| AiWorkerError::CommunicationError(e.to_string()))
     }
 

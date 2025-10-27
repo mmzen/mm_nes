@@ -25,7 +25,6 @@ mod nes_ui_widget;
 mod nes_mediator;
 mod renderer_widget;
 mod image_text_button;
-mod llm_orchestrator;
 mod llm_client;
 mod openai_llm;
 mod ai_widget;

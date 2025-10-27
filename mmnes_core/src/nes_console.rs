@@ -1,6 +1,5 @@
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
-use std::fs::File;
 use std::path::PathBuf;
 use std::rc::Rc;
 use log::debug;
