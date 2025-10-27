@@ -76,7 +76,7 @@ impl AiWidget {
             error: None,
             buttons,
             messages: vec![
-                ChatMessage { role: ChatRole::Assistant, text: "Hi! Click the \"Ask Coach\" button to get some help or ask a question ! (Enter to send, Shift+Enter for newline)".to_string() },
+                ChatMessage { role: ChatRole::Assistant, text: "Hi! Click one of the action buttons to get some help.".to_string() },
             ],
             input: String::new(),
             is_sending: false,
@@ -140,8 +140,8 @@ impl AiWidget {
         "Suggest one simple NES cheat for this scene.".to_string()
     }
 
-    fn build_prompt_action3(&self) -> String {
-        "Explain briefly what to try next.".to_string()
+    fn build_prompt_tell_me(&self) -> String {
+        "Tell me something interesting about this game: super mario bros".to_string()
     }
 
 
@@ -169,7 +169,7 @@ impl AiWidget {
             self.add_prompt("Cheat!", self.build_prompt_cheat());
         }
         if ui.input(|i| i.key_pressed(Key::F3)) {
-            self.add_prompt("Action 3", self.build_prompt_action3());
+            self.add_prompt("Action 3", self.build_prompt_tell_me());
         }
 
         StripBuilder::new(ui)
@@ -272,11 +272,11 @@ impl AiWidget {
                         ui.add_space(gap);
 
                         // Placeholder (Action 3)
-                        let a3_label = if self.is_sending { "Thinking…" } else { "Action 3" };
+                        let a3_label = if self.is_sending { "Thinking…" } else { "Tell me something" };
                         let a3 = ui.add_sized([width, height], egui::Button::new(a3_label))
-                            .on_hover_text("Coming soon (F3)");
+                            .on_hover_text("Tell me something about this game (F3)");
                         if !self.is_sending && a3.clicked() {
-                            self.add_prompt("Action 3", self.build_prompt_action3());
+                            self.add_prompt("Tell me something", self.build_prompt_tell_me());
                         }
                     });
                 });

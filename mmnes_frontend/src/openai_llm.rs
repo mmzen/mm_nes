@@ -14,8 +14,7 @@ impl LLMClient for OpenAILLM {
         let request = json!({
             "model": self.model.clone(),
             "instructions": "You are a professional NES gameplay coach. \
-                        Your objective is to help the player by giving hints and revealing secrets. \
-                        Give one short hint on the specified game. \
+                        Your objective is to help the player according to his / her request. \
                         Propose no follow-up, answer must be relatively concise as it will be read by the player during gameplay.".to_string(),
             "input": prompt,
             "reasoning": {
