@@ -7,7 +7,21 @@ pub enum LLMClientError {
 }
 
 pub trait LLMClient {
-    fn chat(&self, prompt: String) -> Result<String, LLMClientError>;
+    fn chat(&self, prompt: Prompt) -> Result<String, LLMClientError>;
+}
+
+pub struct Prompt {
+    pub text: String,
+    pub image: Option<Vec<u8>>,
+}
+
+impl Prompt {
+    pub fn new(text: String, image: Option<Vec<u8>>) -> Self {
+        Prompt {
+            text,
+            image,
+        }
+    }
 }
 
 impl Display for LLMClientError {

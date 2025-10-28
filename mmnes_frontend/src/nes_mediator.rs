@@ -1,8 +1,16 @@
+use std::cmp::PartialEq;
 use std::path::PathBuf;
 use log::warn;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
+use eframe::egui::ColorImage;
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_message::NesMessage;
+
+#[derive(Debug, Clone)]
+pub enum NesMediatorRequest {
+    FrameRequest,
+    FrameResponse(ColorImage),
+}
 
 pub struct NesMediator {
     frame_rx: Receiver<NesMessage>,
@@ -10,6 +18,7 @@ pub struct NesMediator {
     debug_rx: Receiver<NesMessage>,
     error_rx: Receiver<NesMessage>,
     rom_file: Option<PathBuf>,
+    request: Option<NesMediatorRequest>,
 }
 
 impl NesMediator {
@@ -21,6 +30,7 @@ impl NesMediator {
             debug_rx,
             error_rx,
             rom_file: None,
+            request: None,
         }
     }
 
@@ -30,6 +40,30 @@ impl NesMediator {
 
     pub fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
         self.rom_file = rom_file;
+    }
+
+    pub fn request_frame(&mut self) {
+        self.request = Some(NesMediatorRequest::FrameRequest);
+    }
+
+    pub fn is_frame_requested(&self) -> bool {
+        matches!(self.request, Some(NesMediatorRequest::FrameRequest))
+    }
+
+    pub fn is_frame_available(&self) -> bool {
+        matches!(self.request, Some(NesMediatorRequest::FrameResponse(_)))
+    }
+
+    pub fn frame(&mut self) -> Option<ColorImage> {
+        if let Some(NesMediatorRequest::FrameResponse(image)) = self.request.take() {
+            Some(image)
+        } else {
+            None
+        }
+    }
+
+    pub fn set_frame(&mut self, frame: ColorImage) {
+        self.request = Some(NesMediatorRequest::FrameResponse(frame));
     }
 
     pub fn read_messages(&self) -> Result<Vec<NesMessage>, NesConsoleError> {

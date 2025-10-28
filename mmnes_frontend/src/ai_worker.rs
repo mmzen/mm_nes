@@ -3,7 +3,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::thread::JoinHandle;
 use log::info;
-use crate::llm_client::{LLMClient, LLMClientError};
+use crate::llm_client::{LLMClient, LLMClientError, Prompt};
 use crate::openai_llm::OpenAILLM;
 
 pub enum AiWorkerError {
@@ -28,7 +28,7 @@ pub enum AiWorkMessage {
 }
 
 struct AiRequest {
-    prompt: String,
+    prompt: Prompt,
 }
 
 pub struct AiWorker {
@@ -65,7 +65,7 @@ impl AiWorker {
         Ok(AiWorker { request_tx, message_rx, handle: Some(handle) })
     }
 
-    pub fn request(&self, prompt: String) -> Result<(), AiWorkerError> {
+    pub fn request(&self, prompt: Prompt) -> Result<(), AiWorkerError> {
         self.request_tx.send(AiRequest { prompt })
             .map_err(|e| AiWorkerError::CommunicationError(e.to_string()))
     }

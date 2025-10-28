@@ -242,6 +242,10 @@ impl RendererWidget {
         let  _ = self.prepare_nes_frame();
 
         if let Some(image) = self.nes_frame.take() {
+            if self.nes_mediator.borrow().is_frame_requested() {
+                self.nes_mediator.borrow_mut().set_frame(image.clone())
+            }
+            
             self.texture.set(image, self.texture_options);
         }
 

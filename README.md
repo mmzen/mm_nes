@@ -6,7 +6,7 @@ It’s not trying to beat the fastest or most accurate emulators; the goal is to
 > ⚠️ Experimental • Unstable API • For personal use
 
 
-![mm_nes screenshot](docs/mmnes_screenshot2.png)
+![mm_nes screenshot](docs/mmnes_screenshot3.png)
 
 ## Disclaimer
 

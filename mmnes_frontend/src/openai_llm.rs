@@ -1,6 +1,8 @@
 use std::time::Duration;
+use base64::Engine;
 use serde_json::{json, Value};
-use crate::llm_client::{LLMClient, LLMClientError};
+use crate::llm_client::{LLMClient, LLMClientError, Prompt};
+use base64::engine::general_purpose;
 
 pub struct OpenAILLM {
     client: reqwest::blocking::Client,
@@ -10,13 +12,30 @@ pub struct OpenAILLM {
 }
 
 impl LLMClient for OpenAILLM {
-    fn chat(&self, prompt: String) -> Result<String, LLMClientError> {
+    fn chat(&self, prompt: Prompt) -> Result<String, LLMClientError> {
+        let text = prompt.text;
+
+        let base64_image = if let Some(image) = prompt.image {
+            general_purpose::STANDARD.encode(image)
+        } else {
+            String::new()
+        };
+
         let request = json!({
             "model": self.model.clone(),
             "instructions": "You are a professional NES gameplay coach. \
                         Your objective is to help the player according to his / her request. \
                         Propose no follow-up, answer must be relatively concise as it will be read by the player during gameplay.".to_string(),
-            "input": prompt,
+            "input": [{
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": text
+                }, {
+                    "type": "input_image",
+                    "image_url": format!("data:image/jpeg;base64,{}", base64_image)
+                }]
+            }],
             "reasoning": {
                 "effort": "low"
             },
