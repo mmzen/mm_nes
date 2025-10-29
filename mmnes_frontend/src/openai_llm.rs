@@ -15,32 +15,12 @@ impl LLMClient for OpenAILLM {
     fn chat(&self, prompt: Prompt) -> Result<String, LLMClientError> {
         let text = prompt.text;
 
-        let base64_image = if let Some(image) = prompt.image {
-            general_purpose::STANDARD.encode(image)
+        let request = if let Some(image) = prompt.image {
+            let base64_image = general_purpose::STANDARD.encode(image);
+            self.build_json_prompt_with_image(text, base64_image)
         } else {
-            String::new()
+            self.build_json_prompt(text)
         };
-
-        let request = json!({
-            "model": self.model.clone(),
-            "instructions": "You are a professional NES gameplay coach. \
-                        Your objective is to help the player according to his / her request. \
-                        Propose no follow-up, answer must be relatively concise as it will be read by the player during gameplay.".to_string(),
-            "input": [{
-                "role": "user",
-                "content": [{
-                    "type": "input_text",
-                    "text": text
-                }, {
-                    "type": "input_image",
-                    "image_url": format!("data:image/jpeg;base64,{}", base64_image)
-                }]
-            }],
-            "reasoning": {
-                "effort": "low"
-            },
-            "store": false,
-        });
 
         let resp = self.client
             .post(&self.endpoint)
@@ -71,6 +51,45 @@ impl OpenAILLM {
         };
 
         Ok(openai)
+    }
+
+    fn build_instructions() -> String {
+        "You are a professional NES gameplay coach. \
+         Your objective is to help the player according to his / her request. \
+         Propose no follow-up, answer must be relatively concise as it will be read by the player during gameplay.".to_string()
+    }
+
+    fn build_json_prompt(&self, text: String) -> Value {
+        json!({
+            "model": self.model.clone(),
+            "instructions": OpenAILLM::build_instructions(),
+            "input": text,
+            "reasoning": {
+                "effort": "low"
+            },
+            "store": false,
+        })
+    }
+
+    fn build_json_prompt_with_image(&self, text: String, base64_image: String) -> Value {
+        json!({
+            "model": self.model.clone(),
+            "instructions": OpenAILLM::build_instructions(),
+            "input": [{
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": text
+                }, {
+                    "type": "input_image",
+                    "image_url": format!("data:image/jpeg;base64,{}", base64_image)
+                }]
+            }],
+            "reasoning": {
+                "effort": "low"
+            },
+            "store": false,
+        })
     }
 
     fn parse_response(json: Value) -> Result<String, LLMClientError> {

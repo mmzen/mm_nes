@@ -6,6 +6,7 @@ use eframe::egui::{pos2, vec2, Color32, ColorImage, Context, Image, TextureHandl
 use log::warn;
 use mmnes_core::nes_console::NesConsoleError;
 use mmnes_core::util::measure_exec_time;
+use crate::helpers_ui::HelpersUI;
 use crate::nes_front_ui::{NesButton, NesButtonId};
 use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
@@ -108,7 +109,7 @@ impl RendererWidget {
     }
 
     pub fn new(height: usize, width: usize, cc: &eframe::CreationContext<'_>, nes_mediator: Rc<RefCell<NesMediator>>) -> Result<RendererWidget, NesConsoleError> {
-        let vec = RendererWidget::create_default_texture(width, height, Color32::DARK_GRAY);
+        let vec = HelpersUI::create_default_texture(width, height, Color32::DARK_GRAY);
 
         let texture_options = TextureOptions {
             minification: egui::TextureFilter::Nearest,
@@ -168,16 +169,6 @@ impl RendererWidget {
         Ok(())
     }
 
-    fn create_default_texture(width: usize, height: usize, color: Color32) -> Vec<Color32> {
-        let mut vec = Vec::<Color32>::with_capacity(width * height);
-
-        for _ in 0..width * height {
-            vec.push(color);
-        }
-
-        vec
-    }
-
     fn compute_fps(&mut self) {
         const ALPHA: f32 = 0.1;
 
@@ -216,7 +207,7 @@ impl RendererWidget {
         let background = Color32::DARK_GRAY;
         let foreground = Color32::DARK_RED;
 
-        let mut image = ColorImage::new([self.width, self.height], RendererWidget::create_default_texture(self.width, self.height, background));
+        let mut image = ColorImage::new([self.width, self.height], HelpersUI::create_default_texture(self.width, self.height, background));
         let _ = Test8x8Generator::draw_text_wrapped_centered(&mut image, &format!("{}", error), foreground);
 
         image

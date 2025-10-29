@@ -1,4 +1,4 @@
-use eframe::egui::{ColorImage, RichText};
+use eframe::egui::{Color32, ColorImage, RichText};
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageError};
 
@@ -16,7 +16,7 @@ impl HelpersUI {
     pub fn color_image_to_jpeg_bytes(image: &ColorImage, quality: u8, background: [u8; 3]) -> Result<Vec<u8>, ImageError> {
         let (width, height) = (image.size[0], image.size[1]);
 
-        let mut rgb = Vec::with_capacity((width * height * 3));
+        let mut rgb = Vec::with_capacity(width * height * 3);
         
         for pixel in &image.pixels {
             let a = pixel.a() as u32;
@@ -32,5 +32,15 @@ impl HelpersUI {
         encoder.encode(&rgb, width as u32, height as u32, ExtendedColorType::Rgb8)?;
         
         Ok(out)
+    }
+
+    pub(crate) fn create_default_texture(width: usize, height: usize, color: Color32) -> Vec<Color32> {
+        let mut vec = Vec::<Color32>::with_capacity(width * height);
+
+        for _ in 0..width * height {
+            vec.push(color);
+        }
+
+        vec
     }
 }
