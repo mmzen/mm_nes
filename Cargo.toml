@@ -1,5 +1,5 @@
 [workspace]
-members = ["mmnes_core", "mmnes_frontend"]
+members = ["mmnes_core", "mmnes_frontend", "mmretrodb"]
 resolver = "3"
 
 [workspace.dependencies]

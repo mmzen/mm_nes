@@ -359,14 +359,12 @@ impl AiWidget {
 
                         AiWidget::status_dot(ui, if self.is_sending { Color32::ORANGE } else { Color32::GREEN });
                         ui.label(
-                            if self.is_sending { "thinking…" } else { "ready" }
+                            if self.is_sending { "Thinking…" } else { "Ready" }
                         );
 
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui.button("Clear").on_hover_text("Clear chat").clicked() {
                                 self.messages.clear();
-                                self.is_sending = false;
-                                self.is_waiting_frame = false;
                             }
                         });
                     });
@@ -440,7 +438,7 @@ impl AiWidget {
 
                     ui.horizontal(|ui| {
                         // Ask Coach
-                        let ask_label = if self.is_sending { "Thinking…" } else { "Ask Coach (F1)" };
+                        let ask_label = if self.is_sending { "Thinking…" } else { "Ask Coach\n(F1)" };
                         let ask = ui.add_sized([width, height], egui::Button::new(ask_label))
                             .on_hover_text("General guidance (F1)");
                         if !self.is_sending && ask.clicked() {
@@ -450,7 +448,7 @@ impl AiWidget {
                         ui.add_space(gap);
 
                         // Cheat!
-                        let cheat_label = if self.is_sending { "Thinking…" } else { "Cheat! (F2)" };
+                        let cheat_label = if self.is_sending { "Thinking…" } else { "Cheat!\n(F2)" };
                         let cheat = ui.add_sized([width, height], egui::Button::new(cheat_label))
                             .on_hover_text("Quick power-up or cheat (F2)");
                         if !self.is_sending && cheat.clicked() {
@@ -460,7 +458,7 @@ impl AiWidget {
                         ui.add_space(gap);
 
                         // Placeholder (Action 3)
-                        let a3_label = if self.is_sending { "Thinking…" } else { "Tell me something (F3)" };
+                        let a3_label = if self.is_sending { "Thinking…" } else { "Tell me something\n(F3)" };
                         let a3 = ui.add_sized([width, height], egui::Button::new(a3_label))
                             .on_hover_text("Tell me something about this game (F3)");
                         if !self.is_sending && a3.clicked() {

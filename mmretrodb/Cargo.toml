@@ -1,0 +1,22 @@
+[package]
+name = "mmretrodb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = { version = "0.4.22", features = ["max_level_trace", "release_max_level_info"] }
+simplelog = { version = "0.12.2" }
+byteorder = "1"
+rmpv = "1"        # MessagePack values
+crc32fast = "1"   # optional, for computing CRC from a ROM file
+
+[dev-dependencies]
+mockall = "0.13.0"
+simplelog = { version = "0.12.2", features = ["test"] }
+tempfile = "3.21.0"
+
+[lib]
+crate-type = ["lib"]
+
+[features]
+default = []
