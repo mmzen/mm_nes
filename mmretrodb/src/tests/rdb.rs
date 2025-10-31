@@ -127,3 +127,12 @@ fn test_open_rdb_bad_metadata_missing_count() {
     }
 }
 
+#[test]
+fn test_crc32_file_known_content() {
+    init();
+
+    let expected_crc = 0xe5b26e1f;
+    let calculated_crc = Rdb::crc32(RDB_NES_FILE_PATH).unwrap();
+
+    assert_eq!(calculated_crc, expected_crc);
+}
