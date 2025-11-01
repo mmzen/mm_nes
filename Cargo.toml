@@ -4,3 +4,4 @@ resolver = "3"
 
 [workspace.dependencies]
 mmnes_core = { path = "mmnes_core" }
+mmretrodb = { path = "mmretrodb" }

@@ -9,6 +9,7 @@ simplelog = { version = "0.12.2" }
 clap = { version = "4.5.15", features = ["derive"] }
 clap-num = "1.1.1"
 mmnes_core = { workspace = true }
+mmretrodb = { workspace = true }
 eframe = "0.32.3"
 egui_extras = { version = "0.32.3" , features = ["image"] }
 image = { version = "0.25.8", features = ["jpeg", "png"] }

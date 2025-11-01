@@ -43,6 +43,9 @@ impl AiWorker {
         let (request_tx, request_rx) = channel::<AiRequest>();
         let (message_tx, message_rx) = channel::<AiWorkMessage>();
 
+        /***
+         *  should be injected and be a dynamic trait
+         ***/
         let client = OpenAILLM::new(api_url, api_key, model)
             .map_err(|e| AiWorkerError::ClientInitializationError(e))?;
 
@@ -61,7 +64,6 @@ impl AiWorker {
             .map_err(|e| AiWorkerError::InternalError(e.to_string()))?;
 
         info!("AI worker started...");
-
         Ok(AiWorker { request_tx, message_rx, handle: Some(handle) })
     }
 

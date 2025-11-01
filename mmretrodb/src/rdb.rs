@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -6,7 +7,7 @@ use byteorder::{BigEndian, ReadBytesExt};
 use crc32fast::Hasher;
 use log::debug;
 use rmpv::{decode, Value};
-use crate::nes_rom::NesRom;
+use crate::nes_rom_metadata::NesRomMetadata;
 
 #[derive(Debug)]
 pub enum RdbError {
@@ -26,6 +27,18 @@ impl From<std::io::Error> for RdbError {
 impl From<decode::Error> for RdbError {
     fn from(_: decode::Error) -> Self {
         RdbError::MessagePack()
+    }
+}
+
+impl Display for RdbError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RdbError::Io(e) => write!(f, "IO error: {}", e),
+            RdbError::MessagePack() => write!(f, "MessagePack error"),
+            RdbError::BadMagic => write!(f, "bad header magic"),
+            RdbError::Layout => write!(f, "invalid layout"),
+            RdbError::InvalidEntry => write!(f, "invalid entry")
+        }
     }
 }
 
@@ -150,7 +163,7 @@ impl Rdb {
         Ok(None)
     }
 
-    pub fn scan_by_crc(&mut self, crc: u32) -> Result<Option<NesRom>, RdbError> {
+    pub fn scan_by_crc(&mut self, crc: u32) -> Result<Option<NesRomMetadata>, RdbError> {
         let eof = self.file_len;
 
         self.file.seek(SeekFrom::Start(self.items_offset))?;
@@ -164,7 +177,7 @@ impl Rdb {
 
             match Rdb::match_by_crc(entry, crc) {
                 Ok(Some(entry)) => {
-                    let rom = NesRom::try_from(entry)?;
+                    let rom = NesRomMetadata::try_from(entry)?;
                     return Ok(Some(rom));
                 },
                 Ok(None) => {},

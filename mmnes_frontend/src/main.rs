@@ -31,6 +31,8 @@ mod ai_widget;
 #[cfg(test)]
 pub mod tests;
 mod ai_worker;
+mod nes_rom_metadata_widget;
+mod nes_rom_metadata_worker;
 
 const APP_NAME: &str = "MMNES";
 

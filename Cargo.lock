@@ -2424,6 +2424,7 @@ dependencies = [
  "image",
  "log",
  "mmnes_core",
+ "mmretrodb",
  "once_cell",
  "reqwest",
  "sdl2",

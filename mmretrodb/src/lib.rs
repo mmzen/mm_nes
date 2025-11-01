@@ -1,4 +1,4 @@
-mod rdb;
+pub mod rdb;
 #[cfg(test)]
 mod tests;
-mod nes_rom;
+pub mod nes_rom_metadata;
