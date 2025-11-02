@@ -206,4 +206,8 @@ impl Rdb {
 
         Ok(hasher.finalize())
     }
+
+    pub fn size(&self) -> u64 {
+        self.file_len
+    }
 }

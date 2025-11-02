@@ -1,6 +1,6 @@
 use std::thread::sleep;
 use std::time::Duration;
-use crate::nes_rom_metadata_worker::NesRomMetadataWorker;
+use crate::nes_rom_metadata_worker::{NesRomMetadataMessage, NesRomMetadataWorker};
 use crate::tests::init;
 
 #[ignore]
@@ -15,7 +15,9 @@ fn test_metadata() {
         sleep(Duration::from_secs(10));
         let response = metadata.try_recv().unwrap();
 
-        println!("metadata: {:?}", response);
+        if let NesRomMetadataMessage::ResponseMetadata(Some(rom_metadata)) = response {
+            println!("{}", rom_metadata);
+        }
         let _ = metadata.handle.unwrap().join();
     }
 }

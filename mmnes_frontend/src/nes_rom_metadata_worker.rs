@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{copy, Write};
 use std::path::PathBuf;
@@ -20,12 +21,28 @@ pub enum NesRomMetadataWorkerError {
     SearchError(String),
 }
 
+impl From<reqwest::Error> for NesRomMetadataWorkerError {
+    fn from(e: reqwest::Error) -> Self {
+        NesRomMetadataWorkerError::CommunicationError(e.to_string())
+    }
+}
+
+impl Display for NesRomMetadataWorkerError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NesRomMetadataWorkerError::InitializationError(e) => write!(f, "initialization error: {}", e),
+            NesRomMetadataWorkerError::CommunicationError(e) => write!(f, "communication error: {}", e),
+            NesRomMetadataWorkerError::InternalError(e) => write!(f, "internal error: {}", e),
+            NesRomMetadataWorkerError::SearchError(e) => write!(f, "search error: {}", e),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum NesRomMetadataMessage {
     RequestMetadataByCrc(u32),
     ResponseMetadata(Option<NesRomMetadata>),
     Error(String),
-    Dummy
 }
 
 pub struct NesRomMetadataWorker {
@@ -39,6 +56,7 @@ impl NesRomMetadataWorker {
     fn build_http_client() -> Result<reqwest::blocking::Client, NesRomMetadataWorkerError> {
         reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
+            .user_agent("mmnes/0.0.1")
             .build()
             .or(Err(NesRomMetadataWorkerError::InitializationError("could not build HTTP client".to_string())))
     }
@@ -47,10 +65,8 @@ impl NesRomMetadataWorker {
         debug!("sending HTTP request to: {} ...", file);
 
         let response = client.get(file)
-            .send()
-            .map_err(|err| NesRomMetadataWorkerError::CommunicationError(format!("could not send request: {}", err)))?
-            .error_for_status()
-            .map_err(|err| NesRomMetadataWorkerError::CommunicationError(format!("could not receive response: {}", err)))?;
+            .send()?
+            .error_for_status()?;
 
         Ok(response)
     }
@@ -85,6 +101,7 @@ impl NesRomMetadataWorker {
     }
 
     fn loop_not_ready(request_rx: Receiver<NesRomMetadataMessage>, response_tx: Sender<NesRomMetadataMessage>) {
+        info!("NES ROM metadata worker running but not ready...");
 
         loop {
             let response = match request_rx.recv() {
@@ -100,6 +117,9 @@ impl NesRomMetadataWorker {
     }
 
     fn loop_ready(request_rx: Receiver<NesRomMetadataMessage>, response_tx: Sender<NesRomMetadataMessage>, mut rdb: Rdb) {
+        let rdb_size = rdb.size() / 1024;
+        info!("NES ROM metadata worker running (rom database: {} Ko)...", rdb_size);
+
         loop {
             let response = match request_rx.recv() {
                 Ok(NesRomMetadataMessage::RequestMetadataByCrc(crc)) => {
@@ -129,7 +149,6 @@ impl NesRomMetadataWorker {
             .spawn(move || {
 
                 let result = NesRomMetadataWorker::init_rdb();
-                debug!("=> {:?}", result);
 
                 match result {
                     Ok(rdb) => NesRomMetadataWorker::loop_ready(request_rx, response_tx, rdb),

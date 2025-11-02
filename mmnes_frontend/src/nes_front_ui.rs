@@ -15,6 +15,8 @@ use crate::image_text_button::{ButtonKind, ImageTextButton};
 use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Keys, LoadRom};
+use crate::nes_rom_metadata_widget::NesRomMetaDataWidget;
+use crate::nes_rom_metadata_worker::NesRomMetadataWorker;
 use crate::nes_ui_widget::NesUiWidget;
 use crate::renderer_widget::RendererWidget;
 
@@ -101,18 +103,26 @@ impl NesFrontUI {
 
         let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx, error_rx)));
 
+        /***
+         * widgets initialization to integrate in widgets, triggered in registration
+         ***/
         let ai_worker = AiWorker::spawn(api_key, OPENAI_API_URL, OPENAI_MODEL)
             .map_err(|e| NesConsoleError::InternalError(format!("unable to spawn AI worker: {}", e)))?;
+        
+        let nes_rom_metadata_worker = NesRomMetadataWorker::spawn()
+            .map_err(|e| NesConsoleError::InternalError(format!("unable to spawn NES ROM metadata worker: {}", e)))?;
 
         let mut widgets = Vec::<Box<dyn NesUiWidget>>::new();
 
         let renderer_ui =  RendererWidget::new(height, width, cc, nes_mediator.clone())?;
         let debugger_ui = DebuggerWidget::new(cc, nes_mediator.clone())?;
         let ai_ui = AiWidget::new(cc, nes_mediator.clone(), ai_worker)?;
+        let metadata = NesRomMetaDataWidget::new(nes_mediator.clone(), nes_rom_metadata_worker)?;
 
         widgets.push(Box::new(renderer_ui));
         widgets.push(Box::new(debugger_ui));
         widgets.push(Box::new(ai_ui));
+        widgets.push(Box::new(metadata));
 
         let nes_front_ui = NesFrontUI {
             emulator_viewport_frame: frame,

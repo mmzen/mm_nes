@@ -1,5 +1,7 @@
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use rmpv::Value;
-use crate::rdb::{RdbError};
+use crate::rdb::RdbError;
 
 #[derive(Debug)]
 pub struct NesRomMetadata {
@@ -19,6 +21,40 @@ pub struct NesRomRelease {
     month: Option<u8>,
 }
 
+impl Display for NesRomMetadata {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(name) = &self.name {
+            writeln!(f, "name: {name}")?;
+        }
+        if let Some(region) = &self.region {
+            writeln!(f, "region: {region}")?;
+        }
+        if let Some(rom_name) = &self.rom_name {
+            writeln!(f, "rom name: {rom_name}")?;
+        }
+        if let Some(size) = self.size {
+            writeln!(f, "size: {size} bytes")?;
+        }
+        if let Some(crc) = self.crc {
+            writeln!(f, "crc: 0x{crc:08X}")?;
+        }
+        if let Some(md5) = &self.md5 {
+            write!(f, "md5: ")?;
+            NesRomMetadata::write_hex(f, md5)?;
+            writeln!(f)?;
+        }
+        if let Some(sha1) = &self.sha1 {
+            write!(f, "sha1: ")?;
+            NesRomMetadata::write_hex(f, sha1)?;
+            writeln!(f)?;
+        }
+        if let Some(release) = &self.release {
+            writeln!(f, "release date: {}", release)?;
+        }
+        Ok(())
+    }
+}
+
 impl NesRomRelease {
     fn new(year: u64, month: Option<u64>) -> Self {
         NesRomRelease {
@@ -35,6 +71,14 @@ impl NesRomRelease {
     }
 }
 
+impl Display for NesRomRelease {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.month {
+            Some(m) => write!(f, "{:04}-{:02}", self.year, m),
+            None    => write!(f, "{:04}", self.year),
+        }
+    }
+}
 
 impl TryFrom<Value> for NesRomMetadata {
     type Error = RdbError;
@@ -49,6 +93,13 @@ impl TryFrom<Value> for NesRomMetadata {
 }
 
 impl NesRomMetadata {
+
+    fn write_hex(f: &mut Formatter<'_>, bytes: &[u8]) -> fmt::Result {
+        for byte in bytes {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
+    }
 
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
