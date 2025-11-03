@@ -71,7 +71,8 @@ impl NesUiWidget for RendererWidget {
             RENDERER_POWER_OFF_BUTTON => {
                 let mut nes_mediator = self.nes_mediator.borrow_mut();
 
-                nes_mediator.set_rom_file(None);
+                nes_mediator.common_mut().set_rom_file(None);
+                nes_mediator.common_mut().set_rom_metadata(None);
                 nes_mediator.send_message(PowerOff)
             },
             _ => return Err(NesConsoleError::InternalError("unknown button".to_string())),

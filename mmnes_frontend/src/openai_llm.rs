@@ -14,12 +14,13 @@ pub struct OpenAILLM {
 impl LLMClient for OpenAILLM {
     fn chat(&self, prompt: Prompt) -> Result<String, LLMClientError> {
         let text = prompt.text;
+        let rom_title = prompt.rom_title;
 
         let request = if let Some(image) = prompt.image {
             let base64_image = general_purpose::STANDARD.encode(image);
-            self.build_json_prompt_with_image(text, base64_image)
+            self.build_json_prompt_with_image(text, rom_title, base64_image)
         } else {
-            self.build_json_prompt(text)
+            self.build_json_prompt(text, rom_title)
         };
 
         let resp = self.client
@@ -53,16 +54,22 @@ impl OpenAILLM {
         Ok(openai)
     }
 
-    fn build_instructions() -> String {
-        "You are a professional NES gameplay coach. \
+    fn build_instructions(rom_title: Option<String>) -> String {
+        let mut instruction = "You are a professional NES gameplay coach. \
          Your objective is to help the player according to his / her request. \
-         Propose no follow-up, answer must be relatively concise as it will be read by the player during gameplay.".to_string()
+         Propose no follow-up, answer must be relatively concise as it will be read by the player during gameplay.".to_string();
+
+        if let Some(rom_title) = rom_title {
+            instruction += &format!("\nrom title is: {}", rom_title);
+        }
+
+        instruction
     }
 
-    fn build_json_prompt(&self, text: String) -> Value {
+    fn build_json_prompt(&self, text: String, rom_title: Option<String>) -> Value {
         json!({
             "model": self.model.clone(),
-            "instructions": OpenAILLM::build_instructions(),
+            "instructions": OpenAILLM::build_instructions(rom_title),
             "input": text,
             "reasoning": {
                 "effort": "low"
@@ -71,10 +78,10 @@ impl OpenAILLM {
         })
     }
 
-    fn build_json_prompt_with_image(&self, text: String, base64_image: String) -> Value {
+    fn build_json_prompt_with_image(&self, text: String, rom_title: Option<String>, base64_image: String) -> Value {
         json!({
             "model": self.model.clone(),
-            "instructions": OpenAILLM::build_instructions(),
+            "instructions": OpenAILLM::build_instructions(rom_title),
             "input": [{
                 "role": "user",
                 "content": [{

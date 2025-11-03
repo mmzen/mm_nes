@@ -1,12 +1,14 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use eframe::{egui, App, Frame};
 use eframe::egui::{vec2, Align, Align2, Button, CentralPanel, Color32, ColorImage, Context, Event, Grid, Image, Key, Layout, Margin, RawInput, RichText, Stroke, TextureHandle, TopBottomPanel, Vec2};
 use egui_file_dialog::FileDialog;
-use log::warn;
+use log::{info, warn};
 use mmnes_core::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_DOWN, NES_CONTROLLER_KEY_LEFT, NES_CONTROLLER_KEY_RIGHT, NES_CONTROLLER_KEY_SELECT, NES_CONTROLLER_KEY_START, NES_CONTROLLER_KEY_UP};
 use mmnes_core::nes_console::NesConsoleError;
+use mmretrodb::rdb::Rdb;
 use crate::ai_widget::AiWidget;
 use crate::ai_worker::AiWorker;
 use crate::Args;
@@ -16,7 +18,7 @@ use crate::nes_mediator::NesMediator;
 use crate::nes_message::NesMessage;
 use crate::nes_message::NesMessage::{Keys, LoadRom};
 use crate::nes_rom_metadata_widget::NesRomMetaDataWidget;
-use crate::nes_rom_metadata_worker::NesRomMetadataWorker;
+use crate::nes_rom_metadata_worker::{NesRomMetadataWorker, NesRomMetadataWorkerError};
 use crate::nes_ui_widget::NesUiWidget;
 use crate::renderer_widget::RendererWidget;
 
@@ -124,7 +126,7 @@ impl NesFrontUI {
         widgets.push(Box::new(ai_ui));
         widgets.push(Box::new(metadata));
 
-        let nes_front_ui = NesFrontUI {
+        let mut nes_front_ui = NesFrontUI {
             emulator_viewport_frame: frame,
             input: KeyEvents::new(),
             rom_file_dialog: FileDialog::new(),
@@ -134,18 +136,15 @@ impl NesFrontUI {
             menu_buttons,
         };
 
-        if let Some(rom_file) = &args.rom_file {
-            let mut nes_mediator = nes_front_ui.nes_mediator.borrow_mut();
-
-            nes_mediator.send_message(LoadRom(rom_file.clone()))?;
-            nes_mediator.set_rom_file(args.rom_file);
+        if let Some(rom_file) = args.rom_file {
+            nes_front_ui.load_rom_file(rom_file)?;
         }
 
         Ok(nes_front_ui)
     }
 
     fn is_halted(&self) -> bool {
-        self.nes_mediator.borrow().rom_file().is_none()
+        self.nes_mediator.borrow().common().rom_file().is_none()
     }
 
     fn send_input_to_emulator(&mut self) -> Result<(), NesConsoleError> {
@@ -174,36 +173,51 @@ impl NesFrontUI {
         Ok(())
     }
 
-    fn load_rom_file(&mut self) -> Result<(), NesConsoleError> {
-        if let Some(path) = self.rom_file_dialog.take_picked() {
-            let rom_file = Some(path.clone());
-            let mut nes_mediator = self.nes_mediator.borrow_mut();
+    fn process_metadata_answer(&mut self) -> Result<(), NesRomMetadataWorkerError> {
+        let metadata_available = self.nes_mediator.borrow().is_rom_metadata_available();
 
-            nes_mediator.set_rom_file(rom_file);
-            nes_mediator.send_message(LoadRom(path))?;
+        if metadata_available == true {
+            let metadata = self.nes_mediator.borrow_mut().rom_metadata();
+            info!("metadata available: {:?}", metadata);
+
+            self.nes_mediator.borrow_mut().common_mut().set_rom_metadata(metadata);
         }
 
         Ok(())
     }
 
-    fn get_window_title(&self) -> String {
-        let mut title = "MMNES".to_string();
+    fn load_rom_file(&mut self, path: PathBuf) -> Result<(), NesConsoleError> {
+        let mut nes_mediator = self.nes_mediator.borrow_mut();
+        let rom_file = Some(path.clone());
+        let crc = Rdb::crc32(&path)
+            .map_err(|e| NesConsoleError::InternalError(format!("unable to calculate CRC32 of ROM file {}: {}", e, path.display())))?;
 
-        let rom_name = if let Some(rom_file) = &self.nes_mediator.borrow().rom_file() {
-            if let Some (rom_file_str) = rom_file.file_name() {
-                " - ".to_string() + &*rom_file_str.to_string_lossy()
+        nes_mediator.common_mut().set_rom_metadata(None);
+        nes_mediator.common_mut().set_rom_file(rom_file);
+        nes_mediator.send_message(LoadRom(path))?;
+        nes_mediator.request_rom_metadata(crc);
+
+        Ok(())
+    }
+
+    fn get_window_title(&self) -> String {
+        let nes_mediator = self.nes_mediator.borrow();
+        let common = nes_mediator.common();
+
+        let title = if let Some(metadata) = common.rom_metadata() {
+            format!("MMNES - {}", metadata.name().unwrap_or("Unknown ROM"))
+        } else if let Some(path) = common.rom_file() {
+            let file_name = path.file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if file_name.is_empty() {
+                "MMNES".to_string()
             } else {
-                " - (invalid filename)".to_string()
+                format!("MMNES - {}", file_name)
             }
         } else {
-            " - (idle)".to_string()
+            "MMNES".to_string()
         };
-
-        title += &rom_name;
-
-        if let Some(_) = &self.error {
-            title += " - (error)";
-        }
 
         title
     }
@@ -288,6 +302,7 @@ impl App for NesFrontUI {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
         let _ = self.read_error_messages();
         let _ = self.send_input_to_emulator();
+        let _ = self.process_metadata_answer();
 
         NesFrontUI::install_theme(ctx);
         ctx.request_repaint();
@@ -301,7 +316,10 @@ impl App for NesFrontUI {
                     self.rom_file_dialog.pick_file();
                 }
 
-                let _ = self.load_rom_file();
+                if let Some(path) = self.rom_file_dialog.take_picked() {
+                    let _ = self.load_rom_file(path);
+                }
+
                 self.rom_file_dialog.update(ctx);
 
                 for widget in &mut self.widgets {

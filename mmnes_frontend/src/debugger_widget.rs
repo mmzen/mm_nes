@@ -96,7 +96,7 @@ impl DebuggerWidget {
 
     fn debugger_header_bar(&self, ui: &mut Ui) {
         let nes_mediator = self.nes_mediator.borrow();
-        let rom_file = nes_mediator.rom_file();
+        let rom_file = nes_mediator.common().rom_file();
 
         let rom = rom_file
             .and_then(|p| p.file_name())

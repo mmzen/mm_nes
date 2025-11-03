@@ -13,13 +13,15 @@ pub trait LLMClient {
 pub struct Prompt {
     pub text: String,
     pub image: Option<Vec<u8>>,
+    pub rom_title: Option<String>,
 }
 
 impl Prompt {
-    pub fn new(text: String, image: Option<Vec<u8>>) -> Self {
+    pub fn new(text: String, image: Option<Vec<u8>>, rom_title: Option<String>) -> Self {
         Prompt {
             text,
             image,
+            rom_title
         }
     }
 }

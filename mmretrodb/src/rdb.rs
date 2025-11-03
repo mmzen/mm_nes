@@ -1,5 +1,4 @@
 use std::fmt::{Display, Formatter};
-use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -46,6 +45,7 @@ impl Display for RdbError {
 pub struct Rdb {
     file: BufReader<File>,
     items_offset: u64,
+    #[allow(dead_code)]
     items_count: u64,
     file_len: u64,
 }
@@ -188,7 +188,7 @@ impl Rdb {
         Ok(None)
     }
 
-    pub fn crc32(path: &str) -> Result<u32, RdbError> {
+    pub fn crc32(path: impl AsRef<Path>) -> Result<u32, RdbError> {
         let file = File::open(path)?;
         let mut reader = BufReader::new(file);
         let mut hasher = Hasher::new();

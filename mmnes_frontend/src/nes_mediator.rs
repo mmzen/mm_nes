@@ -59,13 +59,45 @@ struct NesMediatorEvents {
     rom_metadata: Event<NesRomMetadata, u32>,
 }
 
+pub struct Common {
+    rom_file: Option<PathBuf>,
+    rom_metadata: Option<NesRomMetadata>,
+}
+
+impl Default for Common {
+    fn default() -> Common {
+        Common {
+            rom_file: None,
+            rom_metadata: None,
+        }
+    }
+}
+
+impl Common {
+    pub fn rom_file(&self) -> Option<&PathBuf> {
+        self.rom_file.as_ref()
+    }
+
+    pub fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
+        self.rom_file = rom_file;
+    }
+
+    pub fn rom_metadata(&self) -> Option<&NesRomMetadata> {
+        self.rom_metadata.as_ref()
+    }
+
+    pub fn set_rom_metadata(&mut self, rom_file: Option<NesRomMetadata>) {
+        self.rom_metadata = rom_file;
+    }
+}
+
 pub struct NesMediator {
     frame_rx: Receiver<NesMessage>,
     command_tx: SyncSender<NesMessage>,
     debug_rx: Receiver<NesMessage>,
     error_rx: Receiver<NesMessage>,
-    rom_file: Option<PathBuf>,
     events: NesMediatorEvents,
+    common: Common,
 }
 
 impl NesMediator {
@@ -76,19 +108,19 @@ impl NesMediator {
             command_tx,
             debug_rx,
             error_rx,
-            rom_file: None,
+            common: Common::default(),
             events: NesMediatorEvents::default(),
         }
     }
-
-    pub fn rom_file(&self) -> Option<&PathBuf> {
-        self.rom_file.as_ref()
+    
+    pub fn common_mut(&mut self) -> &mut Common { 
+        &mut self.common
     }
 
-    pub fn set_rom_file(&mut self, rom_file: Option<PathBuf>) {
-        self.rom_file = rom_file;
+    pub fn common(&self) -> &Common {
+        &self.common
     }
-
+    
     pub fn request_frame(&mut self) { self.events.frame.request(()); }
     pub fn is_frame_requested(&self) -> bool { self.events.frame.is_requested() }
     pub fn set_frame(&mut self, image: ColorImage) { self.events.frame.set(image); }

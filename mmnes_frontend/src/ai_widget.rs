@@ -185,11 +185,11 @@ impl AiWidget {
         Ok(())
     }
 
-    fn build_prompt_with_image(text: &'static str, image: &ColorImage) -> Result<Prompt, AiWorkerError> {
+    fn build_prompt_with_image(text: &'static str, image: &ColorImage, rom_title: Option<String>) -> Result<Prompt, AiWorkerError> {
         let jpg_bytes = HelpersUI::color_image_to_jpeg_bytes(&image, 90, [0, 0, 0]);
 
         let result = match jpg_bytes {
-            Ok(bytes) => Ok(Prompt::new(text.to_string(), Some(bytes))),
+            Ok(bytes) => Ok(Prompt::new(text.to_string(), Some(bytes), rom_title)),
             Err(err) => Err(AiWorkerError::InternalError(format!("Failed to convert color image to jpeg: {}", err)))
         };
 
@@ -208,16 +208,16 @@ impl AiWidget {
         "Tell me something interesting about this game"
     }
 
-    fn build_prompt_coach(image: &ColorImage) -> Result<Prompt, AiWorkerError> {
-        AiWidget::build_prompt_with_image(AiWidget::build_prompt_coach_text(), image)
+    fn build_prompt_coach(image: &ColorImage, rom_title: Option<String>) -> Result<Prompt, AiWorkerError> {
+        AiWidget::build_prompt_with_image(AiWidget::build_prompt_coach_text(), image, rom_title)
     }
 
-    fn build_prompt_cheat() -> Result<Prompt, AiWorkerError> {
-        Ok(Prompt::new(AiWidget::build_prompt_cheat_text().to_string(), None))
+    fn build_prompt_cheat(rom_title: Option<String>) -> Result<Prompt, AiWorkerError> {
+        Ok(Prompt::new(AiWidget::build_prompt_cheat_text().to_string(), None, rom_title))
     }
 
-    fn build_prompt_tell_me(image: &ColorImage) -> Result<Prompt, AiWorkerError> {
-        AiWidget::build_prompt_with_image(AiWidget::build_prompt_tell_me_text(), image)
+    fn build_prompt_tell_me(image: &ColorImage, rom_title: Option<String>) -> Result<Prompt, AiWorkerError> {
+        AiWidget::build_prompt_with_image(AiWidget::build_prompt_tell_me_text(), image, rom_title)
     }
 
     fn try_finish_pending_capture(&mut self) -> Result<(), AiWorkerError> {
@@ -230,18 +230,21 @@ impl AiWidget {
         }
 
         let screenshot_opt = self.nes_mediator.borrow_mut().frame();
+        let rom_title = self.nes_mediator.borrow().common()
+            .rom_metadata()
+            .and_then(|metadata| metadata.name().map(str::to_owned));
 
         if let Some(screenshot) = screenshot_opt {
             let result = match self.pending_action {
                 PendingAction::AskCoach => {
-                    match AiWidget::build_prompt_coach(&screenshot) {
+                    match AiWidget::build_prompt_coach(&screenshot, rom_title) {
                         Ok(prompt) => self.chat_verbose("Help me Coach!", prompt, Some(screenshot)),
                         Err(e) => Err(e),
                     }
                 },
 
                 PendingAction::TellMe => {
-                    match AiWidget::build_prompt_tell_me(&screenshot) {
+                    match AiWidget::build_prompt_tell_me(&screenshot, rom_title) {
                         Ok(prompt) => self.chat_verbose("Tell me something!", prompt, Some(screenshot)),
                         Err(e) => Err(e),
                     }
@@ -331,7 +334,11 @@ impl AiWidget {
     }
 
     fn cheat(&mut self) -> Result<(), AiWorkerError> {
-        self.chat("Cheat!", AiWidget::build_prompt_cheat()?)
+        let rom_title = self.nes_mediator.borrow().common()
+            .rom_metadata()
+            .and_then(|metadata| metadata.name().map(str::to_owned));
+
+        self.chat("Cheat!", AiWidget::build_prompt_cheat(rom_title)?)
     }
 
 
@@ -442,7 +449,7 @@ impl AiWidget {
                         let ask = ui.add_sized([width, height], egui::Button::new(ask_label))
                             .on_hover_text("General guidance (F1)");
                         if !self.is_sending && ask.clicked() {
-                            self.ask_coach();
+                            let _ = self.ask_coach();
                         }
 
                         ui.add_space(gap);
@@ -452,7 +459,7 @@ impl AiWidget {
                         let cheat = ui.add_sized([width, height], egui::Button::new(cheat_label))
                             .on_hover_text("Quick power-up or cheat (F2)");
                         if !self.is_sending && cheat.clicked() {
-                           self.cheat();
+                           let _ = self.cheat();
                         }
 
                         ui.add_space(gap);
@@ -462,7 +469,7 @@ impl AiWidget {
                         let a3 = ui.add_sized([width, height], egui::Button::new(a3_label))
                             .on_hover_text("Tell me something about this game (F3)");
                         if !self.is_sending && a3.clicked() {
-                            self.tell_me();
+                            let _ = self.tell_me();
                         }
                     });
                 });

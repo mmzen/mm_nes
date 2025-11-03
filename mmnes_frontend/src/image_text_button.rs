@@ -6,6 +6,7 @@ use eframe::epaint::StrokeKind;
 pub enum ButtonKind {
     Primary,
     Secondary,
+    #[allow(dead_code)]
     Danger
 }
 

@@ -14,6 +14,7 @@ fn openaillm_chat_sends_request_and_receive_response() -> Result<(), LLMClientEr
     let prompt = Prompt {
         text: "I'm playing super mario bros, and I'm in world 1-2, are there any warp zones ?".to_string(),
         image: None,
+        rom_title: None,
     };
     
     let response = openai.chat(prompt)?;
