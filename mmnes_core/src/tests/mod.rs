@@ -15,6 +15,7 @@ mod sound_playback_passive;
 mod nes_samples;
 mod cartridge;
 mod memory_ciram;
+mod ines_loader;
 
 static START: Once = Once::new();
 

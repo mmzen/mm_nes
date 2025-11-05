@@ -4,6 +4,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
 use eframe::egui::ColorImage;
 use mmnes_core::nes_console::NesConsoleError;
 use mmretrodb::nes_rom_metadata::NesRomMetadata;
+use crate::nes_log::NesLog;
 use crate::nes_message::NesMessage;
 
 #[derive(Debug)]
@@ -133,6 +134,7 @@ impl NesMediator {
     pub fn is_rom_metadata_available(&self) -> bool { self.events.rom_metadata.is_answered() }
     pub fn rom_metadata(&mut self) -> Option<NesRomMetadata> { self.events.rom_metadata.take_answer() }
     pub fn rom_metadata_request(&mut self) -> Option<u32> { self.events.rom_metadata.take_request() }
+
 
     pub fn read_messages(&self) -> Result<Vec<NesMessage>, NesConsoleError> {
         let mut messages = Vec::new();

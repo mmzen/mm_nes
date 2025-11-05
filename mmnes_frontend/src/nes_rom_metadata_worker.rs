@@ -80,7 +80,7 @@ impl NesRomMetadataWorker {
         let mut file = File::create(&path)
             .map_err(|e| NesRomMetadataWorkerError::CommunicationError(format!("could not create file {}: {}", path.display(), e)))?;
 
-        debug!("downloading NES rdb file to: {} ...", path.display());
+        info!("downloading NES rdb file to: {} ...", path.display());
 
         copy(&mut response, &mut file)
             .map_err(|e| NesRomMetadataWorkerError::CommunicationError(format!("could not write file {}: {}", path.display(), e)))?;

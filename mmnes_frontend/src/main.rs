@@ -33,6 +33,7 @@ pub mod tests;
 mod ai_worker;
 mod nes_rom_metadata_widget;
 mod nes_rom_metadata_worker;
+mod nes_log;
 
 const APP_NAME: &str = "MMNES";
 

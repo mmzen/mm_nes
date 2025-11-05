@@ -46,7 +46,7 @@ impl NesUiWidget for NesRomMetaDataWidget {
     fn draw(&mut self, _: &Context) -> Result<(), NesConsoleError> {
         self.process_metadata_request().map_err(|_| NesConsoleError::InternalError("could not process metadata request".to_string()))?;
         self.process_worker_answer().map_err(|_| NesConsoleError::InternalError("could not process metadata request".to_string()))?;
-
+        
         Ok(())
     }
 }

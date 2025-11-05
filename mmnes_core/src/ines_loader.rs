@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::cmp::PartialEq;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::File;
 use std::io::Read;
@@ -14,11 +15,20 @@ use crate::nrom_cartridge::NromCartridge;
 use crate::unrom_cartridge::UnromCartridge;
 
 const HEADER_SIZE: usize = 16;
+const NES_MAGIC: &[u8; 4] = b"NES\x1A";
 
 pub trait FromINes: Debug {
     fn from_ines(file: File, header: INesRomHeader) -> Result<impl Cartridge, LoaderError>
     where
         Self: Sized;
+}
+
+#[derive(Debug, PartialEq, Eq, Default)]
+pub enum INESVersion {
+    #[default]
+    V1,
+    V2,
+    DiskDude
 }
 
 #[derive(Debug)]
@@ -57,6 +67,11 @@ impl Loader for INesLoader {
 
 impl INesLoader {
 
+    #[cfg(test)]
+    pub fn header(&self) -> &INesRomHeader {
+        &self.header
+    }
+    
     fn load_header(file: &mut File) -> Result<INesRomHeader, LoaderError> {
         let mut buffer = vec![0u8; HEADER_SIZE];
         file.read_exact(&mut buffer)?;
@@ -65,8 +80,9 @@ impl INesLoader {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub enum ConsoleType {
+    #[default]
     NesFamicom,
     VsSystem,
     PlayChoice10,
@@ -87,7 +103,7 @@ impl Display for ConsoleType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ConsoleType::NesFamicom => write!(f, "NES Family Computer"),
-            ConsoleType::VsSystem => write!(f, "Visual Studio System"),
+            ConsoleType::VsSystem => write!(f, "VS. System"),
             ConsoleType::PlayChoice10 => write!(f, "NES Family Computer PlayChoice 10"),
             ConsoleType::Famiclone => write!(f, "Famicom Clone"),
             ConsoleType::NesFamicomWithEPSM => write!(f, "NES Family Computer with EPSM"),
@@ -104,8 +120,9 @@ impl Display for ConsoleType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum Region {
+    #[default]
     NTSC,
     PAL,
     Multiple,
@@ -123,8 +140,9 @@ impl Display for Region {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum ExpansionDevice {
+    #[default]
     Unspecified,
     StandardController,
     Zapper,
@@ -144,7 +162,7 @@ impl Display for ExpansionDevice {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum VsPpuType {
     Rx2C03Variant,
     RP2C04_0001,
@@ -156,6 +174,7 @@ pub enum VsPpuType {
     RC2C05_0003,
     RC2C05_0004,
     Unknown,
+    #[default]
     None,
 }
 
@@ -177,7 +196,7 @@ impl Display for VsPpuType {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum VsHardwareType {
     VsUnisystem,
     VsUnisystemRbiBaseballProtection,
@@ -187,6 +206,7 @@ pub enum VsHardwareType {
     VsDualSystem,
     VsDualSystemRaidOnBungelingBayProtection,
     Unknown,
+    #[default]
     None,
 }
 
@@ -242,7 +262,7 @@ pub struct INesRomHeader {
     pub trainer: bool,
     pub alternative_nametables: bool,
     pub console_type: ConsoleType,
-    pub ines2: bool,
+    pub version: INESVersion,
     pub mapper: NesMapper,
     pub sub_mapper: u8,
     pub region: Region,
@@ -250,6 +270,32 @@ pub struct INesRomHeader {
     pub vs_hardware_type: VsHardwareType,
     pub misc_rom: u16,
     pub expansion_device: ExpansionDevice
+}
+
+impl Default for INesRomHeader {
+    fn default() -> INesRomHeader {
+        INesRomHeader {
+            prg_rom_size: 0,
+            chr_rom_size: 0,
+            prg_ram_size: 0,
+            prg_nvram_size: 0,
+            chr_ram_size: 0,
+            chr_nvram_size: 0,
+            nametables_layout: PpuNameTableMirroring::Vertical,
+            battery: false,
+            trainer: false,
+            alternative_nametables: false,
+            console_type: Default::default(),
+            version: Default::default(),
+            mapper: Default::default(),
+            sub_mapper: 0,
+            region: Default::default(),
+            vs_ppu_type: Default::default(),
+            vs_hardware_type: Default::default(),
+            misc_rom: 0,
+            expansion_device: Default::default(),
+        }
+    }
 }
 
 impl INesRomHeader {
@@ -277,14 +323,8 @@ impl INesRomHeader {
         }
     }
 
-    fn build_preamble(bytes: &[u8]) -> [u8; 4] {
-        let mut preamble = [0u8; 4];
-        preamble.copy_from_slice(&bytes[0..4]);
-        preamble
-    }
-
-    fn verify_preamble(preamble: &[u8; 4]) -> Result<(), LoaderError> {
-        if *preamble != [0x4E, 0x45, 0x53, 0x1A] {
+    fn verify_preamble(bytes: &[u8]) -> Result<(), LoaderError> {
+        if &bytes[0..4] != NES_MAGIC  {
             Err(LoaderError::InvalidRomFormat)
         } else {
             Ok(())
@@ -323,16 +363,16 @@ impl INesRomHeader {
         result
     }
 
-    fn build_prg_rom_size(bytes: &[u8], ines2: bool) -> usize {
-        if ines2 == true {
+    fn build_prg_rom_size(bytes: &[u8], version: &INESVersion) -> usize {
+        if *version == INESVersion::V2 {
             INesRomHeader::build_rom_from_msb_and_lsb_ines2(bytes, RomArea::PrgRom)
         } else {
             INesRomHeader::build_rom_from_msb_and_lsb_ines1(bytes, RomArea::PrgRom)
         }
     }
 
-    fn build_chr_rom_size(bytes: &[u8], ines2: bool) -> usize {
-        if ines2 == true {
+    fn build_chr_rom_size(bytes: &[u8], version: &INESVersion) -> usize {
+        if *version == INESVersion::V2 {
             INesRomHeader::build_rom_from_msb_and_lsb_ines2(bytes, RomArea::ChrRom)
         } else {
             INesRomHeader::build_rom_from_msb_and_lsb_ines1(bytes, RomArea::ChrRom)
@@ -343,12 +383,12 @@ impl INesRomHeader {
      * XXX
      * specific cases to handle between ines1 and ines2
      */
-    fn build_ram_size(bytes: &[u8], area: RomArea, ines2: bool) -> usize {
+    fn build_ram_size(bytes: &[u8], area: RomArea, version: &INESVersion) -> usize {
         let (byte, mask, shift) = match area {
             RomArea::PrgRam => (bytes[10], 0x0F, 0),
             RomArea::PrgNvRam => (bytes[10], 0xF0, 4),
             RomArea::ChrRam => {
-                if ines2 == true {
+                if *version == INESVersion::V2 {
                     (bytes[11], 0x0F, 0)
                 } else {
                     if bytes[5] == 0 {
@@ -374,20 +414,20 @@ impl INesRomHeader {
         result
     }
 
-    fn build_prg_ram_size(bytes: &[u8], ines2: bool) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::PrgRam, ines2)
+    fn build_prg_ram_size(bytes: &[u8], version: &INESVersion) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::PrgRam, version)
     }
 
-    fn build_prg_nvram_size(bytes: &[u8], ines2: bool) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::PrgNvRam, ines2)
+    fn build_prg_nvram_size(bytes: &[u8], version: &INESVersion) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::PrgNvRam, version)
     }
 
-    fn build_chr_ram_size(bytes: &[u8], ines2: bool) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::ChrRam, ines2)
+    fn build_chr_ram_size(bytes: &[u8], version: &INESVersion) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::ChrRam, version)
     }
 
-    fn build_chr_nvram_size(bytes: &[u8], ines2: bool) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::ChrNvRam, ines2)
+    fn build_chr_nvram_size(bytes: &[u8], version: &INESVersion) -> usize {
+        INesRomHeader::build_ram_size(bytes, RomArea::ChrNvRam, version)
     }
 
     fn build_nametables_layout(bytes: &[u8]) -> PpuNameTableMirroring {
@@ -447,21 +487,43 @@ impl INesRomHeader {
         result
     }
 
-    fn build_ines2_identifier(bytes: &[u8]) -> bool {
-        let result = bytes[7] & 0x08 != 0;
-        info!("ines2: {}", result);
+    fn build_version(bytes: &[u8]) -> INESVersion {
+        let ines2 = ((bytes[7] & 0x0C) >> 2) == 2;
+        info!("ines2: {}", ines2);
+
+        let is_diskdude = if ines2 == false {
+             INesRomHeader::is_diskdude(&bytes)
+        } else {
+            false
+        };
+        info!("is_diskdude: {}", is_diskdude);
+
+        let version = match (ines2, is_diskdude) {
+            (false, false) => INESVersion::V1,
+            (false, true) => INESVersion::DiskDude,
+            (true, _) => INESVersion::V2,
+        };
+
+        version
+    }
+
+    fn is_diskdude(bytes: &[u8]) -> bool {
+        let result = str::from_utf8(&bytes[7..=15])
+            .ok()
+            .map(|s| s == "DiskDude!").unwrap_or(false);
+
         result
     }
 
-    fn build_mapper(bytes: &[u8], ines2: bool) -> NesMapper {
-        let d3_d0: u16 = (bytes[6] & 0xF0) as u16;
+    fn build_mapper(bytes: &[u8], version: &INESVersion) -> NesMapper {
+        let d3_d0: u16 = ((bytes[6] & 0xF0) as u16) >> 4;
         let d7_d4: u16 = (bytes[7] & 0xF0) as u16;
-        let d11_d8: u16 = (bytes[8] & 0x0F) as u16;
+        let d11_d8: u16 = ((bytes[8] & 0x0F) as u16) << 8;
 
-        let result0 = if ines2 == true  {
-            (d3_d0 >> 4) | (d7_d4 << 4) | (d11_d8 << 8)
-        } else {
-            (d3_d0 >> 4) | (d7_d4 << 4)
+        let result0 = match version {
+            INESVersion::V1 => d3_d0  | d7_d4,
+            INESVersion::V2 => d3_d0  | d7_d4 | d11_d8,
+            INESVersion::DiskDude => d3_d0,
         };
 
         let result = NesMapper::from_id(result0);
@@ -489,8 +551,8 @@ impl INesRomHeader {
         result
     }
 
-    fn build_vs_ppu_type(bytes: &[u8]) -> VsPpuType {
-        let result = if bytes[3] & 0x03 != 0x01 {
+    fn build_vs_ppu_type(bytes: &[u8], console: &ConsoleType) -> VsPpuType {
+        let result = if !matches!(*console, ConsoleType::VsSystem) {
             VsPpuType::None
         } else {
             match bytes[13] & 0x0F {
@@ -511,8 +573,8 @@ impl INesRomHeader {
         result
     }
 
-    fn build_vs_hardware_type(bytes: &[u8]) -> VsHardwareType {
-        let result = if bytes[3] & 0x03 != 0x01 {
+    fn build_vs_hardware_type(bytes: &[u8], console: &ConsoleType) -> VsHardwareType {
+        let result = if !matches!(*console, ConsoleType::VsSystem) {
             VsHardwareType::None
         } else {
             match (bytes[13] & 0xF0) >> 4 {
@@ -552,52 +614,82 @@ impl INesRomHeader {
 
     fn from_bytes(bytes: &[u8]) -> Result<INesRomHeader, LoaderError> {
         INesRomHeader::verify_raw_header_size(&bytes)?;
+        INesRomHeader::verify_preamble(&bytes)?;
 
-        let preamble = INesRomHeader::build_preamble(&bytes);
-        INesRomHeader::verify_preamble(&preamble)?;
+        let version = INesRomHeader::build_version(&bytes);
 
-        let ines2 = INesRomHeader::build_ines2_identifier(&bytes);
-        let prg_rom_size = INesRomHeader::build_prg_rom_size(&bytes, ines2);
-        let chr_rom_size = INesRomHeader::build_chr_rom_size(&bytes, ines2);
-        let prg_ram_size = INesRomHeader::build_prg_ram_size(&bytes, ines2);
-        let prg_nvram_size = INesRomHeader::build_prg_nvram_size(&bytes, ines2);
-        let chr_ram_size = INesRomHeader::build_chr_ram_size(&bytes, ines2);
-        let chr_nvram_size = INesRomHeader::build_chr_nvram_size(&bytes, ines2);
-        let nametables_layout = INesRomHeader::build_nametables_layout(&bytes);
-        let battery = INesRomHeader::build_battery(&bytes);
-        let trainer = INesRomHeader::build_trainer(&bytes);
-        let alternative_nametables = INesRomHeader::build_alternative_nametables(&bytes);
-        let console_type = INesRomHeader::build_console_type(&bytes);
-        let mapper = INesRomHeader::build_mapper(&bytes, ines2);
-        let sub_mapper = INesRomHeader::build_sub_mapper(&bytes);
-        let region = INesRomHeader::build_region(&bytes);
-        let vs_ppu_type = INesRomHeader::build_vs_ppu_type(&bytes);
-        let vs_hardware_type = INesRomHeader::build_vs_hardware_type(&bytes);
-        let misc_rom = INesRomHeader::build_misc_rom(&bytes);
-        let expansion_device = INesRomHeader::build_expansion_device(&bytes);
+        let headers = match version {
+            INESVersion::V1 |
+            INESVersion::V2 => {
+                let prg_rom_size = INesRomHeader::build_prg_rom_size(&bytes, &version);
+                let chr_rom_size = INesRomHeader::build_chr_rom_size(&bytes, &version);
+                let prg_ram_size = INesRomHeader::build_prg_ram_size(&bytes, &version);
+                let prg_nvram_size = INesRomHeader::build_prg_nvram_size(&bytes, &version);
+                let chr_ram_size = INesRomHeader::build_chr_ram_size(&bytes, &version);
+                let chr_nvram_size = INesRomHeader::build_chr_nvram_size(&bytes, &version);
+                let nametables_layout = INesRomHeader::build_nametables_layout(&bytes);
+                let battery = INesRomHeader::build_battery(&bytes);
+                let trainer = INesRomHeader::build_trainer(&bytes);
+                let alternative_nametables = INesRomHeader::build_alternative_nametables(&bytes);
+                let console_type = INesRomHeader::build_console_type(&bytes);
+                let mapper = INesRomHeader::build_mapper(&bytes, &version);
+                let sub_mapper = INesRomHeader::build_sub_mapper(&bytes);
+                let region = INesRomHeader::build_region(&bytes);
+                let vs_ppu_type = INesRomHeader::build_vs_ppu_type(&bytes, &console_type);
+                let vs_hardware_type = INesRomHeader::build_vs_hardware_type(&bytes, &console_type);
+                let misc_rom = INesRomHeader::build_misc_rom(&bytes);
+                let expansion_device = INesRomHeader::build_expansion_device(&bytes);
 
-        let headers = INesRomHeader {
-            prg_rom_size,
-            chr_rom_size,
-            prg_ram_size,
-            prg_nvram_size,
-            chr_ram_size,
-            chr_nvram_size,
-            nametables_layout,
-            battery,
-            trainer,
-            alternative_nametables,
-            console_type,
-            ines2,
-            mapper,
-            sub_mapper,
-            region,
-            vs_ppu_type,
-            vs_hardware_type,
-            misc_rom,
-            expansion_device,
+                let headers = INesRomHeader {
+                    prg_rom_size,
+                    chr_rom_size,
+                    prg_ram_size,
+                    prg_nvram_size,
+                    chr_ram_size,
+                    chr_nvram_size,
+                    nametables_layout,
+                    battery,
+                    trainer,
+                    alternative_nametables,
+                    console_type,
+                    version,
+                    mapper,
+                    sub_mapper,
+                    region,
+                    vs_ppu_type,
+                    vs_hardware_type,
+                    misc_rom,
+                    expansion_device,
+                };
+
+                headers
+            },
+
+            INESVersion::DiskDude => {
+                let prg_rom_size = INesRomHeader::build_prg_rom_size(&bytes, &version);
+                let chr_rom_size = INesRomHeader::build_chr_rom_size(&bytes, &version);
+                let nametables_layout = INesRomHeader::build_nametables_layout(&bytes);
+                let battery = INesRomHeader::build_battery(&bytes);
+                let trainer = INesRomHeader::build_trainer(&bytes);
+                let alternative_nametables = INesRomHeader::build_alternative_nametables(&bytes);
+                let mapper = INesRomHeader::build_mapper(&bytes, &version);
+
+                let headers = INesRomHeader {
+                    prg_rom_size,
+                    chr_rom_size,
+                    nametables_layout,
+                    battery,
+                    trainer,
+                    alternative_nametables,
+                    version,
+                    mapper,
+                    .. Default::default()
+                };
+
+                headers
+            }
         };
-
+        
         info!("prg offset: 0x{:04X} (+{} bytes)", headers.prg_offset(), headers.prg_offset());
 
         let chr_offset = headers.chr_offset();

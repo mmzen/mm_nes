@@ -178,7 +178,8 @@ impl NesFrontUI {
 
         if metadata_available == true {
             let metadata = self.nes_mediator.borrow_mut().rom_metadata();
-            info!("metadata available: {:?}", metadata);
+            info!("metadata found: {}",
+                metadata.as_ref().map(|m| m.to_string()).unwrap_or_else(|| "(none)".to_string()));
 
             self.nes_mediator.borrow_mut().common_mut().set_rom_metadata(metadata);
         }

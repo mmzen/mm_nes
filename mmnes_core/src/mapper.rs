@@ -1,8 +1,9 @@
 
 
 #[allow(non_camel_case_types)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Default)]
 pub enum NesMapper {
+    #[default]
     NROM,          // 0
     MMC1,          // 1  (SxROM)
     UxROM,         // 2  (UNROM/UOROM)
