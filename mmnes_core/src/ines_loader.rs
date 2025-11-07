@@ -226,6 +226,7 @@ impl Display for VsHardwareType {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum RomArea {
     PrgRom,
@@ -379,25 +380,24 @@ impl INesRomHeader {
         }
     }
 
-    /***
-     * XXX
-     * specific cases to handle between ines1 and ines2
-     */
-    fn build_ram_size(bytes: &[u8], area: RomArea, version: &INESVersion) -> usize {
+    fn build_ram_size_ines1(bytes: &[u8], area: RomArea) -> usize {
+        let result = match area {
+            RomArea::PrgRam => (bytes[8] as usize).max(1) * 8192,
+            RomArea::PrgNvRam => 0,
+            RomArea::ChrRam => 8192,
+            RomArea::ChrNvRam => 0,
+            _=> { panic!("invalid rom area: {:?}", area) }
+        };
+
+        info!("area: {}, size: {} bytes", area, result);
+        result
+    }
+
+    fn build_ram_size_ines2(bytes: &[u8], area: RomArea) -> usize {
         let (byte, mask, shift) = match area {
             RomArea::PrgRam => (bytes[10], 0x0F, 0),
             RomArea::PrgNvRam => (bytes[10], 0xF0, 4),
-            RomArea::ChrRam => {
-                if *version == INESVersion::V2 {
-                    (bytes[11], 0x0F, 0)
-                } else {
-                    if bytes[5] == 0 {
-                        (0x07, 0xFF, 0) // will eventually compute as 8192
-                    } else {
-                        (0, 0, 0)
-                    }
-                }
-            },
+            RomArea::ChrRam => (bytes[11], 0x0F, 0),
             RomArea::ChrNvRam => (bytes[11], 0xF0, 4),
             _=> { panic!("invalid rom area: {:?}", area) }
         };
@@ -415,19 +415,31 @@ impl INesRomHeader {
     }
 
     fn build_prg_ram_size(bytes: &[u8], version: &INESVersion) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::PrgRam, version)
+        match *version {
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+        }
     }
 
     fn build_prg_nvram_size(bytes: &[u8], version: &INESVersion) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::PrgNvRam, version)
+        match *version {
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+        }
     }
 
     fn build_chr_ram_size(bytes: &[u8], version: &INESVersion) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::ChrRam, version)
+        match *version {
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+        }
     }
 
     fn build_chr_nvram_size(bytes: &[u8], version: &INESVersion) -> usize {
-        INesRomHeader::build_ram_size(bytes, RomArea::ChrNvRam, version)
+        match *version {
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+        }
     }
 
     fn build_nametables_layout(bytes: &[u8]) -> PpuNameTableMirroring {

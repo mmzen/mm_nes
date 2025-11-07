@@ -1361,6 +1361,10 @@ impl Ppu2c02 {
         Ok(())
     }
 
+    fn do_pre_fetch(&mut self, _scanline: u16) -> Result<(), PpuError> {
+        Ok(())
+    }
+
     fn get_sprite_priority(&self, sprite: &Sprite) -> SpritePriority {
         if sprite.get_attribute_value(SpriteAttribute::Priority) == 1 {
             SpritePriority::Back
@@ -1463,7 +1467,6 @@ impl Ppu2c02 {
 
                 if show_background {
                     self.render_background(scanline)?;
-                    self.put_horizontal_t_into_v();
                 }
 
                 if show_sprites {
@@ -1472,6 +1475,8 @@ impl Ppu2c02 {
 
                 if show_background || show_sprites {
                     self.do_sprite_evaluation(scanline)?;
+                    self.do_pre_fetch(scanline)?;
+                    self.put_horizontal_t_into_v();
                 } else {
                     self.oam.clear_secondary();
                 }
