@@ -4,6 +4,7 @@ use std::rc::Rc;
 use log::info;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::config_spec::{ConfigSpec, Configurable};
 use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
 use crate::nes_frame::{FrameState, NesFrame};
@@ -337,10 +338,9 @@ pub struct Ppu2c02 {
     renderer: RefCell<Renderer>,
     cpu: Rc<RefCell<dyn CPU>>,
     state: PpuState,
-    #[cfg(feature = "ppu_tile_cache")]
-    tile_cache: TileCache,
     background_pixels_line: PixelLines,
     sprites_pixels_line: PixelLines,
+    config: ConfigSpec
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -381,42 +381,6 @@ impl Display for Tile {
     }
 }
 
-#[cfg(feature = "ppu_tile_cache")]
-
-struct TileCache {
-    tiles: HashMap<u16, Rc<Tile>>
-}
-
-#[cfg(feature = "ppu_tile_cache")]
-impl Default for TileCache {
-    fn default() -> Self {
-        TileCache {
-            tiles: HashMap::new()
-        }
-    }
-}
-
-#[cfg(feature = "ppu_tile_cache")]
-impl TileCache {
-
-    fn clear(&mut self) {
-        self.tiles.clear();
-    }
-
-    fn get_cached_tile(&self, addr: u16) -> Option<Rc<Tile>> {
-        if let Some(tile) = self.tiles.get(&addr) {
-            Some(tile.clone())
-        } else {
-            None
-        }
-    }
-
-    fn set_cached_tile(&mut self, tile: Tile, addr: u16) -> Rc<Tile> {
-        self.tiles.insert(addr, Rc::new(tile));
-        self.get_cached_tile(addr).unwrap()
-    }
-}
-
 struct OAM {
     primary: [Sprite; 64],
     secondary: [Sprite; 8],
@@ -440,6 +404,12 @@ impl OAM {
             .for_each(|s| *s = Sprite::default());
 
         self.sprite_count = 0;
+    }
+}
+
+impl Configurable for Ppu2c02 {
+    fn set_config(&mut self, config: ConfigSpec) {
+        self.config = config
     }
 }
 
@@ -811,10 +781,9 @@ impl Ppu2c02 {
             renderer: RefCell::new(Renderer::new()),
             cpu,
             state: PpuState::VBlank(261),
-            #[cfg(feature = "ppu_tile_cache")]
-            tile_cache: TileCache::default(),
             background_pixels_line: PixelLines::default(),
-            sprites_pixels_line: PixelLines::default()
+            sprites_pixels_line: PixelLines::default(),
+            config: ConfigSpec::default(),
         };
 
         Ok(ppu)
@@ -1098,27 +1067,6 @@ impl Ppu2c02 {
         Ok(tile)
     }
 
-    #[cfg(feature = "ppu_tile_cache")]
-    fn get_tile(&mut self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Rc<Tile>, PpuError> {
-        let addr = name_table_addr | (coarse_y as u16) << 5  | coarse_x as u16;
-
-        let tile = if let Some(cached_tile) = self.tile_cache.get_cached_tile(addr) {
-            //trace!("cache hit: coarse_x: {}, coarse_y: {}, tile: 0x{:02X}", coarse_x, coarse_y, cached_tile.index);
-            cached_tile
-        } else {
-            //trace!("cache miss: coarse_x: {}, coarse_y: {}", coarse_x, coarse_y);
-            let fetched_tile = self.fetch_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
-
-            let cache = &mut self.tile_cache;
-            let cached_tile = cache.set_cached_tile(fetched_tile, addr);
-
-            cached_tile.clone()
-        };
-
-        Ok(tile)
-    }
-
-    #[cfg(not(feature = "ppu_tile_cache"))]
     fn get_tile(&mut self, coarse_x: u8, coarse_y: u8, name_table_addr: u16, pattern_table_addr: u16, attribute_table_addr: u16) -> Result<Rc<Tile>, PpuError> {
         let tile = self.fetch_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
         Ok(Rc::new(tile))
@@ -1489,8 +1437,6 @@ impl Ppu2c02 {
 
             PpuState::Rendering(240) => {
                 self.renderer.borrow_mut().update();
-                #[cfg(feature = "ppu_tile_cache")]
-                self.tile_cache.clear();
                 self.state = PpuState::Rendering(241);
             },
 

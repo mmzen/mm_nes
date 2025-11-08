@@ -6,6 +6,7 @@ use std::io::{BufReader, Error, Read, Seek, SeekFrom};
 use std::rc::Rc;
 use log::debug;
 use crate::bus_device::BusDevice;
+use crate::ines_loader::Region;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
 use crate::memory_ciram::PpuNameTableMirroring;
@@ -76,10 +77,9 @@ impl PartialEq for CartridgeType {
 
 pub trait Cartridge: BusDevice {
     fn get_chr_rom(&self) -> Rc<RefCell<dyn BusDevice>>;
-    fn get_prg_ram(&self) -> Option<Rc<RefCell<dyn BusDevice>>> {
-        None
-    }
+    fn get_prg_ram(&self) -> Option<Rc<RefCell<dyn BusDevice>>> { None }
     fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>>;
+    fn get_region(&self) -> Region;
 }
 
 /***

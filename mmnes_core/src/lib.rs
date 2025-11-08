@@ -31,7 +31,6 @@ pub mod mapper;
 pub mod irq_source;
 pub mod unrom_cartridge;
 pub mod memory_mirror;
-
 #[cfg(test)]
 pub mod tests;
 pub mod key_event;
@@ -41,3 +40,4 @@ pub mod nes_samples;
 mod mmc1_cartridge;
 pub mod cpu_debugger;
 mod memory_ciram;
+mod config_spec;

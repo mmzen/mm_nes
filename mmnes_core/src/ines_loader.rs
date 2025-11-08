@@ -40,8 +40,12 @@ pub struct INesLoader {
 impl Loader for INesLoader {
 
     fn from_file(path: PathBuf) -> Result<INesLoader, LoaderError> {
+        let filename = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut file = File::open(path)?;
-        let header = INesLoader::load_header(&mut file)?;
+        let header = INesLoader::load_header(&mut file, filename)?;
 
         let loader = INesLoader {
             header,
@@ -72,11 +76,11 @@ impl INesLoader {
         &self.header
     }
     
-    fn load_header(file: &mut File) -> Result<INesRomHeader, LoaderError> {
+    fn load_header(file: &mut File, filename: String) -> Result<INesRomHeader, LoaderError> {
         let mut buffer = vec![0u8; HEADER_SIZE];
         file.read_exact(&mut buffer)?;
 
-        INesRomHeader::from_bytes(&buffer)
+        INesRomHeader::from_bytes(&buffer, filename)
     }
 }
 
@@ -252,6 +256,7 @@ impl Display for RomArea {
 
 #[derive(Debug)]
 pub struct INesRomHeader {
+    pub filename: String,
     pub prg_rom_size: usize,
     pub chr_rom_size: usize,
     pub prg_ram_size: usize,
@@ -276,6 +281,7 @@ pub struct INesRomHeader {
 impl Default for INesRomHeader {
     fn default() -> INesRomHeader {
         INesRomHeader {
+            filename: String::new(),
             prg_rom_size: 0,
             chr_rom_size: 0,
             prg_ram_size: 0,
@@ -550,13 +556,36 @@ impl INesRomHeader {
         result
     }
 
-    fn build_region(bytes: &[u8]) -> Region {
+
+    /***
+     * https://emulation.gametechwiki.com/index.php/GoodTools
+     ***/
+    fn build_region_ines1(filename: &String) -> Region {
+        let result = if filename.contains("(Europe)") || filename.contains("(E)") {
+            Region::PAL
+        } else {
+            Region::NTSC
+        };
+
+        result
+    }
+
+    fn build_region_ines2(bytes: &[u8]) -> Region {
         let result = match bytes[12] & 0x03 {
             0 => Region::NTSC,
             1 => Region::PAL,
             2 => Region::Multiple,
             3 => Region::Dendy,
             _ => unreachable!()
+        };
+
+        result
+    }
+
+    fn build_region(bytes: &[u8], version: &INESVersion, filename: &String) -> Region {
+        let result = match *version {
+            INESVersion::V2 => INesRomHeader::build_region_ines2(bytes),
+            _ => INesRomHeader::build_region_ines1(filename),
         };
 
         info!("region: {}", result);
@@ -624,7 +653,9 @@ impl INesRomHeader {
         result
     }
 
-    fn from_bytes(bytes: &[u8]) -> Result<INesRomHeader, LoaderError> {
+    fn from_bytes(bytes: &[u8], filename: String) -> Result<INesRomHeader, LoaderError> {
+        info!("filename: {}", filename);
+
         INesRomHeader::verify_raw_header_size(&bytes)?;
         INesRomHeader::verify_preamble(&bytes)?;
 
@@ -646,13 +677,14 @@ impl INesRomHeader {
                 let console_type = INesRomHeader::build_console_type(&bytes);
                 let mapper = INesRomHeader::build_mapper(&bytes, &version);
                 let sub_mapper = INesRomHeader::build_sub_mapper(&bytes);
-                let region = INesRomHeader::build_region(&bytes);
+                let region = INesRomHeader::build_region(&bytes, &version, &filename);
                 let vs_ppu_type = INesRomHeader::build_vs_ppu_type(&bytes, &console_type);
                 let vs_hardware_type = INesRomHeader::build_vs_hardware_type(&bytes, &console_type);
                 let misc_rom = INesRomHeader::build_misc_rom(&bytes);
                 let expansion_device = INesRomHeader::build_expansion_device(&bytes);
 
                 let headers = INesRomHeader {
+                    filename,
                     prg_rom_size,
                     chr_rom_size,
                     prg_ram_size,
@@ -685,6 +717,7 @@ impl INesRomHeader {
                 let trainer = INesRomHeader::build_trainer(&bytes);
                 let alternative_nametables = INesRomHeader::build_alternative_nametables(&bytes);
                 let mapper = INesRomHeader::build_mapper(&bytes, &version);
+                let region = INesRomHeader::build_region(&bytes, &version, &filename);
 
                 let headers = INesRomHeader {
                     prg_rom_size,
@@ -695,6 +728,7 @@ impl INesRomHeader {
                     alternative_nametables,
                     version,
                     mapper,
+                    region,
                     .. Default::default()
                 };
 

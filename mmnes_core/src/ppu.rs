@@ -3,6 +3,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::bus::BusError;
 use crate::bus_device::BusDevice;
+use crate::config_spec::Configurable;
 use crate::cpu::CpuError;
 use crate::dma_device::DmaDevice;
 use crate::nes_frame::NesFrame;
@@ -30,7 +31,7 @@ impl PartialEq for PpuType {
     }
 }
 
-pub trait PPU: BusDevice + DmaDevice {
+pub trait PPU: BusDevice + DmaDevice + Configurable {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
 

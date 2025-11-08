@@ -8,7 +8,7 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError, CPU_ADDRESS_SPACE, PPU_ADDRESS_SPACE};
 use crate::cartridge::CartridgeType::NROM;
-use crate::ines_loader::{FromINes, INesRomHeader};
+use crate::ines_loader::{FromINes, INesRomHeader, Region};
 use crate::loader::LoaderError;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
@@ -26,6 +26,7 @@ pub struct NromCartridge {
     device_type: BusDeviceType,
     mirroring: Rc<RefCell<PpuNameTableMirroring>>,
     prg_rom_size: usize,
+    region: Region
 }
 
 impl NromCartridge {
@@ -33,7 +34,7 @@ impl NromCartridge {
     pub fn new(mut data: BufReader<File>,
                prg_rom_offset: u64, prg_rom_size: usize,
                chr_rom_offset: u64, chr_rom_size: usize,
-               chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, CartridgeError> {
+               chr_ram_size: usize, mirroring: PpuNameTableMirroring, region: Region) -> Result<NromCartridge, CartridgeError> {
 
         if chr_rom_size > 0 && chr_ram_size > 0 {
             Err(CartridgeError::Unsupported(
@@ -60,6 +61,7 @@ impl NromCartridge {
             device_type: BusDeviceType::CARTRIDGE(NROM),
             mirroring: Rc::new(RefCell::new(mirroring)),
             prg_rom_size,
+            region
         };
 
         Ok(cartridge)
@@ -68,13 +70,13 @@ impl NromCartridge {
     fn build(file: File,
              prg_rom_offset: u64, prg_rom_size: usize,
              chr_rom_offset: Option<u64>, chr_rom_size: usize,
-             chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<NromCartridge, LoaderError> {
+             chr_ram_size: usize, mirroring: PpuNameTableMirroring, region: Region) -> Result<NromCartridge, LoaderError> {
         info!("creating NROM cartridge");
 
         let reader = BufReader::new(file);
         let chr_rom_offset = if let Some(chr_rom_offset_unwrapped) = chr_rom_offset { chr_rom_offset_unwrapped } else { 0 };
 
-        let cartridge = NromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring)?;
+        let cartridge = NromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring, region)?;
         Ok(cartridge)
     }
 }
@@ -89,7 +91,8 @@ impl FromINes for NromCartridge {
                                              header.prg_offset(), header.prg_rom_size,
                                              header.chr_offset(), header.chr_rom_size,
                                              header.chr_ram_size,
-                                             header.nametables_layout)?;
+                                             header.nametables_layout,
+                                             header.region)?;
 
         Ok(cartridge)
     }
@@ -155,5 +158,9 @@ impl Cartridge for NromCartridge {
 
     fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>> {
         self.mirroring.clone()
+    }
+
+    fn get_region(&self) -> Region {
+        self.region
     }
 }

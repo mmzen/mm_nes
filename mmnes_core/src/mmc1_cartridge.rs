@@ -8,7 +8,7 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError, PPU_ADDRESS_SPACE};
 use crate::cartridge::CartridgeType::MMC1;
-use crate::ines_loader::{FromINes, INesRomHeader};
+use crate::ines_loader::{FromINes, INesRomHeader, Region};
 use crate::loader::LoaderError;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_bank::MemoryBank;
@@ -162,7 +162,8 @@ pub struct Mmc1Cartridge {
     prg_ram: Rc<RefCell<SwitchableMemory>>,
     chr_rom: Rc<RefCell<SwitchableMemory>>,
     device_type: BusDeviceType,
-    mirroring: Rc<RefCell<PpuNameTableMirroring>>
+    mirroring: Rc<RefCell<PpuNameTableMirroring>>,
+    region: Region
 }
 
 impl Mmc1Cartridge {
@@ -402,7 +403,7 @@ impl Mmc1Cartridge {
     pub fn new(mut data: BufReader<File>,
                prg_rom_offset: u64, prg_rom_size: usize, prg_ram_size: usize,
                chr_rom_offset: u64, chr_rom_size: usize, chr_ram_size: usize,
-               mirroring: PpuNameTableMirroring) -> Result<Mmc1Cartridge, CartridgeError> {
+               mirroring: PpuNameTableMirroring, region: Region) -> Result<Mmc1Cartridge, CartridgeError> {
 
         let prg_rom_memory_banks = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, MMC1_PRG_ROM_BANK_SIZE, PRG_ROM_ADDRESS_SPACE)?;
         let prg_rom_addr_size = (PRG_ROM_ADDRESS_SPACE.1 - PRG_ROM_ADDRESS_SPACE.0 + 1) as usize;
@@ -433,6 +434,7 @@ impl Mmc1Cartridge {
             chr_rom: Rc::new(RefCell::new(Mmc1Cartridge::build_switchable_memory("chr_rom".to_string(), chr_addr_size, chr_memory_banks, PPU_ADDRESS_SPACE)?)),
             device_type: BusDeviceType::CARTRIDGE(MMC1),
             mirroring: Rc::new(RefCell::new(mirroring)),
+            region,
         };
 
         cartridge.apply_control()?;
@@ -442,13 +444,13 @@ impl Mmc1Cartridge {
 
     fn build(file: File,
              prg_rom_offset: u64, prg_rom_size: usize, prg_ram_size: usize,
-             chr_rom_offset: Option<u64>, chr_rom_size: usize, chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<Mmc1Cartridge, LoaderError> {
+             chr_rom_offset: Option<u64>, chr_rom_size: usize, chr_ram_size: usize, mirroring: PpuNameTableMirroring, region: Region) -> Result<Mmc1Cartridge, LoaderError> {
         debug!("creating MMC1 cartridge");
 
         let reader = BufReader::new(file);
         let chr_rom_offset = if let Some(chr_rom_offset_unwrapped) = chr_rom_offset { chr_rom_offset_unwrapped } else { 0 };
 
-        let cartridge = Mmc1Cartridge::new(reader, prg_rom_offset, prg_rom_size, prg_ram_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring)?;
+        let cartridge = Mmc1Cartridge::new(reader, prg_rom_offset, prg_rom_size, prg_ram_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring, region)?;
         Ok(cartridge)
     }
 }
@@ -465,7 +467,8 @@ impl FromINes for Mmc1Cartridge {
         let cartridge = Mmc1Cartridge::build(file,
                                               header.prg_offset(), header.prg_rom_size, prg_ram_size,
                                               header.chr_offset(), header.chr_rom_size, header.chr_ram_size,
-                                              header.nametables_layout)?;
+                                              header.nametables_layout, 
+                                              header.region)?;
 
         Ok(cartridge)
     }
@@ -537,5 +540,9 @@ impl Cartridge for Mmc1Cartridge {
 
     fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>> {
         self.mirroring.clone()
+    }
+
+    fn get_region(&self) -> Region {
+        self.region
     }
 }

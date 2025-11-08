@@ -7,7 +7,7 @@ use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge;
 use crate::cartridge::{Cartridge, CartridgeError, CPU_ADDRESS_SPACE, PPU_ADDRESS_SPACE};
 use crate::cartridge::CartridgeType::UNROM;
-use crate::ines_loader::{FromINes, INesRomHeader};
+use crate::ines_loader::{FromINes, INesRomHeader, Region};
 use crate::loader::LoaderError;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
@@ -27,7 +27,8 @@ pub struct UnromCartridge {
     prg_rom_size: usize,
     chr_rom: Rc<RefCell<MemoryBank>>,
     device_type: BusDeviceType,
-    mirroring: Rc<RefCell<PpuNameTableMirroring>>
+    mirroring: Rc<RefCell<PpuNameTableMirroring>>,
+    region: Region
 }
 
 impl UnromCartridge {
@@ -40,7 +41,7 @@ impl UnromCartridge {
     pub fn new(mut data: BufReader<File>,
                prg_rom_offset: u64, prg_rom_size: usize,
                chr_rom_offset: u64, chr_rom_size: usize,
-               chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<UnromCartridge, CartridgeError> {
+               chr_ram_size: usize, mirroring: PpuNameTableMirroring, region: Region) -> Result<UnromCartridge, CartridgeError> {
 
 
         let prg_memory_banks = cartridge::create_prg_rom_memory(&mut data, prg_rom_offset, prg_rom_size, UNROM_PRG_MEMORY_BANK_SIZE, CPU_ADDRESS_SPACE)?;
@@ -64,6 +65,7 @@ impl UnromCartridge {
             device_type: BusDeviceType::CARTRIDGE(UNROM),
             mirroring: Rc::new(RefCell::new(mirroring)),
             chr_rom: Rc::new(RefCell::new(chr_mem)),
+            region
         };
 
         Ok(cartridge)
@@ -71,13 +73,13 @@ impl UnromCartridge {
 
     fn build(file: File,
              prg_rom_offset: u64, prg_rom_size: usize,
-             chr_rom_offset: Option<u64>, chr_rom_size: usize, chr_ram_size: usize, mirroring: PpuNameTableMirroring) -> Result<UnromCartridge, LoaderError> {
+             chr_rom_offset: Option<u64>, chr_rom_size: usize, chr_ram_size: usize, mirroring: PpuNameTableMirroring, region: Region) -> Result<UnromCartridge, LoaderError> {
         debug!("creating UNROM cartridge");
 
         let reader = BufReader::new(file);
         let chr_rom_offset = if let Some(chr_rom_offset_unwrapped) = chr_rom_offset { chr_rom_offset_unwrapped } else { 0 };
 
-        let cartridge = UnromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring)?;
+        let cartridge = UnromCartridge::new(reader, prg_rom_offset, prg_rom_size, chr_rom_offset, chr_rom_size, chr_ram_size, mirroring, region)?;
         Ok(cartridge)
     }
 }
@@ -91,7 +93,8 @@ impl FromINes for UnromCartridge {
         let cartridge = UnromCartridge::build(file,
                                               header.prg_offset(), header.prg_rom_size,
                                               header.chr_offset(), header.chr_rom_size,
-                                              header.chr_ram_size, header.nametables_layout)?;
+                                              header.chr_ram_size, header.nametables_layout, 
+                                              header.region)?;
 
         Ok(cartridge)
     }
@@ -169,5 +172,9 @@ impl Cartridge for UnromCartridge {
 
     fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>> {
         self.mirroring.clone()
+    }
+
+    fn get_region(&self) -> Region {
+        self.region
     }
 }

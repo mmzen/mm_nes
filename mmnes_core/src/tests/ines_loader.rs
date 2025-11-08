@@ -1,6 +1,6 @@
 use std::io::Write;
 use tempfile::NamedTempFile;
-use crate::ines_loader::{ConsoleType, INESVersion, INesLoader, VsHardwareType, VsPpuType};
+use crate::ines_loader::{ConsoleType, INESVersion, INesLoader, Region, VsHardwareType, VsPpuType};
 use crate::loader::Loader;
 use crate::mapper::NesMapper;
 use crate::memory_ciram::PpuNameTableMirroring;
@@ -666,4 +666,44 @@ fn test_version_detection_ines1_vs_nes20() {
     let h2 = loader2.header();
 
     assert_eq!(h2.version, INESVersion::V2);
+}
+
+#[test]
+fn test_ines_guess_region_from_filename() {
+    init();
+
+    let filenames = [
+        ("California Games (Europe)", Region::PAL),
+        ("Dragon Quest (USA)", Region::NTSC),
+        ("Super Mario Bros. (Europe)", Region::PAL),
+        ("Tetris (Japan)", Region::NTSC),
+        ("Final Fantasy VII (USA)", Region::NTSC),
+        ("Super Mario Kart (Europe)", Region::PAL),
+        ("Super Mario II (E)", Region::PAL),
+        ("Ghost'n Goblins", Region::NTSC),
+    ];
+
+    // bits3..2=00b (NES 1.0)
+    let header_bytes: Vec<u8> = vec![
+        0x4E, 0x45, 0x53, 0x1A,
+        0x02, // PRG
+        0x01, // CHR
+        0x00, // byte6
+        0x00, // byte7: NES 1.0
+        0x00, 0x00,
+        0x00, 0x00,
+        0x00,
+        0x00, 0x00, 0x00,
+    ];
+
+    for (filename, expected_region) in filenames {
+        let mut tmp = NamedTempFile::with_prefix(filename).unwrap();
+        tmp.write_all(&header_bytes).unwrap();
+        tmp.flush().unwrap();
+
+        let loader = INesLoader::from_file(tmp.path().into()).unwrap();
+        let h = loader.header();
+
+        assert_eq!(h.region, expected_region);
+    }
 }

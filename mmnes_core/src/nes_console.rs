@@ -2,19 +2,20 @@ use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::debug;
+use log::{debug, info};
 use crate::apu::{ApuError, ApuType, APU};
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::cartridge::Cartridge;
+use crate::config_spec::{ConfigSpec, Configurable};
 use crate::controller::{Controller, ControllerType};
 use crate::cpu::{CPU, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::cpu_debugger::CpuSnapshot;
 use crate::dma::PpuDmaType;
 use crate::dma_device::DmaDevice;
-use crate::ines_loader::INesLoader;
+use crate::ines_loader::{INesLoader, Region};
 use crate::input::InputError;
 use crate::input_external::InputExternal;
 use crate::key_event::KeyEvents;
@@ -87,9 +88,18 @@ pub struct NesConsole {
     ppu_counter: CyclesCounter,
 }
 
+impl Configurable for NesConsole {
+    fn set_config(&mut self, config: ConfigSpec) {
+        info!("setting configuration: {}", config.region);
+        // self.cpu.borrow_mut().set_config(config.clone());
+        self.ppu.borrow_mut().set_config(config.clone());
+        // self.apu.borrow_mut().set_config(config.clone());
+    }
+}
+
 impl NesConsole {
-    fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>) -> NesConsole {
-        NesConsole {
+    fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>, config: ConfigSpec) -> NesConsole {
+        let mut console = NesConsole {
             cpu,
             ppu,
             apu,
@@ -98,7 +108,11 @@ impl NesConsole {
             cpu_counter: CyclesCounter::new(CYCLE_START_SEQUENCE),
             apu_counter: CyclesCounter::new(0),
             ppu_counter: CyclesCounter::new(0),
-        }
+        };
+
+        console.set_config(config);
+
+        console
     }
 
     pub fn set_input(&self, events: KeyEvents) -> Result<(), NesConsoleError>{
@@ -339,6 +353,7 @@ pub struct NesConsoleBuilder {
     rom_file: Option<PathBuf>,
     entry_point: Option<u16>,
     cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
+    config: ConfigSpec
 }
 
 impl NesConsoleBuilder {
@@ -358,6 +373,7 @@ impl NesConsoleBuilder {
             rom_file: None,
             entry_point: None,
             cartridge: None,
+            config: ConfigSpec::default(),
         }
     }
 
@@ -531,6 +547,9 @@ impl NesConsoleBuilder {
         debug!("creating device: {:?}", device_type);
 
         match device_type {
+            /***
+             * this needs to be created first as it contains cartridge-specific settings (region, nametable layout, etc ...)
+             ***/
             BusDeviceType::CARTRIDGE(_) => {
                 let cartridge = self.build_cartridge_device()?;
                 let prg_ram = cartridge.borrow().get_prg_ram();
@@ -539,6 +558,10 @@ impl NesConsoleBuilder {
                     bus.borrow_mut().add_device(prg_ram)?;
                 }
                 bus.borrow_mut().add_device(cartridge.clone())?;
+
+                let region = cartridge.borrow().get_region();
+                self.config = ConfigSpec::from_region(region);
+
                 self.cartridge = Some(cartridge.clone());
             },
 
@@ -561,6 +584,7 @@ impl NesConsoleBuilder {
                     .ok_or(NesConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
                 let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu)?;
+
                 bus.borrow_mut().add_device(ppu)?;
                 bus.borrow_mut().add_device(dma)?;
             },
@@ -620,7 +644,7 @@ impl NesConsoleBuilder {
         let controller = self.controller.take()
             .ok_or(NesConsoleError::BuilderError("controller missing".to_string()))?;
 
-        let console = NesConsole::new(cpu, ppu, apu, controller, self.entry_point.take());
+        let console = NesConsole::new(cpu, ppu, apu, controller, self.entry_point.take(), self.config);
 
         Ok(console)
     }
