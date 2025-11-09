@@ -6,11 +6,11 @@ It’s not trying to beat the fastest or most accurate emulators; the goal is to
 > ⚠️ Experimental • Unstable API • For personal use
 
 
-![mm_nes screenshot](docs/mmnes_screenshot5.png)
+![mm_nes screenshot](docs/mmnes_screenshot6.png)
 
 ## Disclaimer
 
-This project is a personal work-in-progress. It is **not intended for use by anyone but me** and is **still under active development**.   
+This project is a personal work-in-progress is **still under active development**.   
 
 **Notes**: 
 - no releases are provided.
@@ -19,7 +19,7 @@ This project is a personal work-in-progress. It is **not intended for use by any
 
 ## Why an LLM for a NES emulator ?
 
-By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, screenshot) into an LLM, we can:
+By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, screenshots) into an LLM, we can:
 - **Guide players in real time** (hints, tips, strategy nudges, “what should I try next?”).
 - **Help developers debug** by explaining what the code is doing and why things break.
 
@@ -29,7 +29,7 @@ By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, s
 
 ### For players
 - **Contextual hints on demand**  
-  Press a hotkey to trigger LLM help (“I’m stuck in World 4-2, what now?”)
+  Press a hotkey to trigger LLM help
   The emulator screenshots the screen, and the LLM replies with a hint.
 - **Coach**  
   Sample the last few seconds of inputs + game state; the model suggests safer routes, boss patterns, or timing (eg: “wait for the 3-cycles pattern, then jump after the second fireball”).
@@ -37,6 +37,7 @@ By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, s
   “Give me 30 lives,” “Slow down the game 10%,” “Make enemies deal half damage.” The LLM maps requests to emulator features.
 - **Auto-achievements summary**  
   After a session, generate a shareable recap: deaths, boss times, secrets found, highlight GIFs.
+
 
 ### For developers
 - **Explain the next N instructions**  
@@ -47,15 +48,6 @@ By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, s
   “Why is the status bar flickering?” The model inspects OAM/PPU state and explains scanline timing hazards.
 
 ---
-
-## Example prompts (internal to emulator)
-
-- Player:
-  > “Given: HP=2, lives=1, level=4-2, last deaths: pits x3, inputs show early jumps. Give a gentle hint, then one stronger hint if asked again.”
-
-- Developer:
-  > “Explain these 512 instructions relative to labels. Note likely side effects on PPU and which flags get touched.”
-
 
 ## NES Accuracy
 
@@ -105,7 +97,7 @@ _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 - [ ] Save states
 - [ ] Rewind
 - [ ] PRG ram persistency
-- [ ] Regionalization (NTSC, PAL, Dendy)
+- [x] Regionalization (NTSC, PAL, Dendy)
 
 ### Debugging
 - [x] CPU disassembler
@@ -115,7 +107,7 @@ _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 - [ ] APU visualizer
 
 ### LLM Integration
-- [ ] Snapshot and hint overlay (✨*in progress*✨)
+- [x] Snapshot and hint overlay
 - [ ] Explain next N instructions
 - [ ] Natural-language cheats
 - [ ] Session recap
