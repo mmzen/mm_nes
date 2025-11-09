@@ -10,9 +10,10 @@ use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::mapper::NesMapper;
 use crate::memory_ciram::PpuNameTableMirroring;
-use crate::mmc1_cartridge::Mmc1Cartridge;
-use crate::nrom_cartridge::NromCartridge;
-use crate::unrom_cartridge::UnromCartridge;
+use crate::mapper::mmc1_cartridge::Mmc1Cartridge;
+use crate::mapper::mmc2_cartridge::Mmc2Cartridge;
+use crate::mapper::nrom_cartridge::NromCartridge;
+use crate::mapper::unrom_cartridge::UnromCartridge;
 
 const HEADER_SIZE: usize = 16;
 const NES_MAGIC: &[u8; 4] = b"NES\x1A";
@@ -62,6 +63,7 @@ impl Loader for INesLoader {
             NesMapper::NROM => Rc::new(RefCell::new(NromCartridge::from_ines(self.file, self.header)?)),
             NesMapper::UxROM => Rc::new(RefCell::new(UnromCartridge::from_ines(self.file, self.header)?)),
             NesMapper::MMC1 => Rc::new(RefCell::new(Mmc1Cartridge::from_ines(self.file, self.header)?)),
+            NesMapper::MMC2 => Rc::new(RefCell::new(Mmc2Cartridge::from_ines(self.file, self.header)?)),
             _ => Err(LoaderError::UnsupportedMapper(self.header.mapper.name().to_string()))?
         };
 

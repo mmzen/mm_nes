@@ -6,7 +6,7 @@ It’s not trying to beat the fastest or most accurate emulators; the goal is to
 > ⚠️ Experimental • Unstable API • For personal use
 
 
-![mm_nes screenshot](docs/mmnes_screenshot6.png)
+![mm_nes screenshot](docs/mmnes_screenshot7.png)
 
 ## Disclaimer
 
@@ -21,6 +21,7 @@ This project is a personal work-in-progress is **still under active development*
 
 By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, screenshots) into an LLM, we can:
 - **Guide players in real time** (hints, tips, strategy nudges, “what should I try next?”).
+- **Assist players** in real time by supporting moves that would lead to a game loss (ie: anticipating a failed jump)
 - **Help developers debug** by explaining what the code is doing and why things break.
 
 ---

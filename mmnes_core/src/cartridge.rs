@@ -51,7 +51,8 @@ pub enum CartridgeType {
     NESCARTRIDGE,
     NROM,
     UNROM,
-    MMC1
+    MMC1,
+    MMC2
 }
 
 impl Display for CartridgeType {
@@ -61,6 +62,7 @@ impl Display for CartridgeType {
             CartridgeType::NROM => { write!(f, "cartridge type: NROM") }
             CartridgeType::UNROM => { write!(f, "cartridge type: UNROM") }
             CartridgeType::MMC1 => { write!(f, "cartridge type: MMC1") }
+            CartridgeType::MMC2 => { write!(f, "cartridge type: MMC2") }
         }
     }
 }

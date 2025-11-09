@@ -1,4 +1,7 @@
-
+pub mod mmc1_cartridge;
+pub mod nrom_cartridge;
+pub mod unrom_cartridge;
+pub(crate) mod mmc2_cartridge;
 
 #[allow(non_camel_case_types)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Default)]

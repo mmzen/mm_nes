@@ -141,7 +141,7 @@ impl BusDevice for SwitchableMemory {
     }
 
     fn get_device_type(&self) -> BusDeviceType {
-        BusDeviceType::WRAM(MemoryType::SwitchableMemory)
+        BusDeviceType::WRAM(MemoryType::Mmc1SwitchableMemory)
     }
 
     fn get_virtual_address_range(&self) -> (u16, u16) {
@@ -515,17 +515,8 @@ impl Memory for Mmc1Cartridge {
             Ok(())
     }
 
-    /***
-     * needed to cross banks, eg: 0xBFFF + 0xC000 are on two different banks
-     ***/
-    fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
-        let lo = self.read_byte(addr)?;
-        let hi = self.read_byte((addr).wrapping_add(1))?;
-        Ok(u16::from_le_bytes([lo, hi]))
-    }
-
     fn size(&self) -> usize {
-        self.prg_rom.size
+        self.prg_rom.size()
     }
 }
 

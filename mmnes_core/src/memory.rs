@@ -9,16 +9,18 @@ use crate::bus::BusError;
 pub enum MemoryType {
     #[default]
     StandardMemory,
-    SwitchableMemory,
+    Mmc1SwitchableMemory,
     PpuCiramMemory,
+    Mmc2SwitchableMemory,
 }
 
 impl Display for MemoryType {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             MemoryType::StandardMemory => write!(f, "memory type: standard Memory"),
-            MemoryType::SwitchableMemory => write!(f, "memory type: switchable Memory"),
+            MemoryType::Mmc1SwitchableMemory => write!(f, "memory type: MMC1 switchable Memory"),
             MemoryType::PpuCiramMemory => write!(f, "memory type: ciram Memory"),
+            MemoryType::Mmc2SwitchableMemory => { write!(f, "memory type: MMC2 switchable Memory") }
         }
     }
 }
@@ -43,7 +45,11 @@ pub trait Memory: Debug {
         unreachable!()
     }
     
-    fn read_word(&self, addr: u16) -> Result<u16, MemoryError>;
+    fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
+        let lo = self.read_byte(addr)?;
+        let hi = self.read_byte(addr.wrapping_add(1))?;
+        Ok(u16::from_le_bytes([lo, hi]))
+    }
     
     fn write_word(&mut self, _addr: u16, _value: u16) -> Result<(), MemoryError> {
         unreachable!()
