@@ -55,13 +55,13 @@ const PPU_INTERNAL_ADDRESS_SPACE: (u16, u16) = (0x0000, 0x3FFF);
 
 
 const PIXEL_X_MAX: u8 = 255;
-const PIXEL_Y_MAX: u8 = 239;
 const SPRITE_WIDTH: u8 = 8;
 const PATTERN_DATA_SIZE: usize = 16;
 const MERGED_PATTERN_DATA_SIZE: usize = 64;
 
-const CLOCK_CYCLES_PER_SCANLINE: u16 = 114;
-
+const PPU_DOTS_PER_SCANLINE: u32 = 341;
+const FIXED_POINT_SHIFT: u32 = 16;
+const FIXED_POINT_ONE: u64 = 1u64 << FIXED_POINT_SHIFT;
 
 #[derive(Debug)]
 enum PpuFlag {
@@ -340,7 +340,9 @@ pub struct Ppu2c02 {
     state: PpuState,
     background_pixels_line: PixelLines,
     sprites_pixels_line: PixelLines,
-    config: ConfigSpec
+    config: ConfigSpec,
+    cycles_per_scanline_fp: u64,
+    cycles_acc_fp: u64,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -409,7 +411,9 @@ impl OAM {
 
 impl Configurable for Ppu2c02 {
     fn set_config(&mut self, config: ConfigSpec) {
-        self.config = config
+        self.config = config;
+        self.recompute_timing();
+        self.state = PpuState::VBlank(self.pre_render_scanline());
     }
 }
 
@@ -757,7 +761,7 @@ impl Ppu2c02 {
         Ok(())
     }
 
-    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: Rc<RefCell<PpuNameTableMirroring>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Self, PpuError> {
+    pub fn new(chr_rom: Rc<RefCell<dyn BusDevice>>, mirroring: Rc<RefCell<PpuNameTableMirroring>>, cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec) -> Result<Self, PpuError> {
         let mut bus: Box<dyn Bus> = Box::new(NESBus::new());
 
         let palette_table = Rc::new(RefCell::new(
@@ -770,7 +774,7 @@ impl Ppu2c02 {
 
         Ppu2c02::create_mirrored_name_tables_and_connect_to_bus(&mut bus, mirroring)?;
 
-        let ppu = Ppu2c02 {
+        let mut ppu = Ppu2c02 {
             register: RefCell::new(Register::new()),
             bus,
             v: RefCell::new(0),
@@ -780,12 +784,18 @@ impl Ppu2c02 {
             latch: RefCell::new(Latch::new()),
             renderer: RefCell::new(Renderer::new()),
             cpu,
-            state: PpuState::VBlank(261),
+            state: PpuState::VBlank(0),
             background_pixels_line: PixelLines::default(),
             sprites_pixels_line: PixelLines::default(),
-            config: ConfigSpec::default(),
+            config,
+            cycles_per_scanline_fp: 0,
+            cycles_acc_fp: 0,
         };
 
+        ppu.recompute_timing();
+        ppu.state = PpuState::VBlank(ppu.pre_render_scanline());
+
+        //debug!("created PPU 2C02 with config: {:?}", ppu.config);
         Ok(ppu)
     }
 
@@ -1237,7 +1247,8 @@ impl Ppu2c02 {
 
     fn is_scanline_in_sprite_range(&self, scanline: u16, sprite: &Sprite, size: u8) -> bool {
         let sprite_y_min = sprite.y as u16;
-        let sprite_y_max = (sprite_y_min + size as u16).clamp(0, PIXEL_Y_MAX as u16);
+        let screen_height = self.config.visible_scanlines;
+        let sprite_y_max = (sprite_y_min + size as u16).min(screen_height);
 
         scanline >= sprite_y_min && scanline < sprite_y_max
     }
@@ -1376,6 +1387,30 @@ impl Ppu2c02 {
         });
     }
 
+    fn recompute_timing(&mut self) {
+        let cycles_per_scanline = (PPU_DOTS_PER_SCANLINE as f64) * (self.config.cpu_clock_hz / self.config.ppu_clock_hz);
+        self.cycles_per_scanline_fp = (cycles_per_scanline * FIXED_POINT_ONE as f64).round() as u64;
+        self.cycles_acc_fp = 0;
+    }
+
+    fn grant_cpu_cycles_for_scanline(&mut self) -> u16 {
+        self.cycles_acc_fp = self.cycles_acc_fp.wrapping_add(self.cycles_per_scanline_fp);
+        let whole = (self.cycles_acc_fp >> FIXED_POINT_SHIFT) as u16;
+        self.cycles_acc_fp &= FIXED_POINT_ONE - 1;
+
+        whole
+    }
+
+    #[inline]
+    fn pre_render_scanline(&self) -> u16 {
+        self.config.scanlines_per_frame - 1
+    }
+
+    #[inline]
+    fn last_visible_scanline(&self) -> u16 {
+        self.config.visible_scanlines - 1
+    }
+
     fn render_scanline(&mut self) -> Result<(), PpuError> {
         //trace!("PPU: scanline starting: {}", self.state);
 
@@ -1395,7 +1430,8 @@ impl Ppu2c02 {
          *
          ***/
         match self.state {
-            PpuState::VBlank(261) => {
+            // pre render line: last line of the frame and go to Rendering(0)
+            PpuState::VBlank(scanline) if scanline == self.pre_render_scanline() => {
                 self.set_flag(Status(VBlank), false);
                 self.set_flag(Status(Sprite0Hit), false);
                 self.set_flag(Status(SpriteOverflow), false);
@@ -1409,7 +1445,8 @@ impl Ppu2c02 {
                 }
             },
 
-            PpuState::Rendering(scanline) if scanline <= 239 => {
+            // rendering phase (scanlines 0 ... visible-1)
+            PpuState::Rendering(scanline) if scanline <= self.last_visible_scanline() => {
                 let show_background = self.get_flag(Mask(ShowBackground));
                 let show_sprites = self.get_flag(Mask(ShowSprites));
 
@@ -1435,22 +1472,25 @@ impl Ppu2c02 {
                 self.state = PpuState::Rendering(scanline + 1);
             },
 
-            PpuState::Rendering(240) => {
+            // post render
+            PpuState::Rendering(scanline) if scanline < self.config.nmi_scanline => {
                 self.renderer.borrow_mut().update();
-                self.state = PpuState::Rendering(241);
+                self.state = PpuState::Rendering(self.config.nmi_scanline);
             },
 
-            PpuState::Rendering(241) => {
+            // post render: NMI
+            PpuState::Rendering(scanline) if scanline == self.config.nmi_scanline => {
                 self.renderer.borrow_mut().reset();
                 self.set_flag(Status(VBlank), true);
-                self.state = PpuState::VBlank(242);
+                self.state = PpuState::VBlank(scanline + 1);
 
                 if self.get_flag(Control(GenerateNmi)) {
                     self.cpu.borrow_mut().signal_nmi()?;
                 }
             },
 
-            PpuState::VBlank(scanline) if scanline >= 242 && scanline <= 260 => {
+            // vblank
+            PpuState::VBlank(scanline) if scanline < self.pre_render_scanline() => {
                 self.state = PpuState::VBlank(scanline + 1);
             },
 
@@ -1464,6 +1504,6 @@ impl Ppu2c02 {
     fn render(&mut self) -> Result<u16, PpuError> {
 
         self.render_scanline()?;
-        Ok(CLOCK_CYCLES_PER_SCANLINE)
+        Ok(self.grant_cpu_cycles_for_scanline())
     }
 }

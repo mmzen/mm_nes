@@ -125,6 +125,35 @@ fn test_load_header_with_chr_rom_size() {
 }
 
 #[test]
+fn test_ines1_chr_ram_when_chr_rom_is_zero() {
+    init();
+
+    // CHR size = 0
+    let header_bytes: Vec<u8> = vec![
+        0x4E, 0x45, 0x53, 0x1A,
+        0x02, // PRG=2
+        0x00, // CHR=0
+        0x00, // byte6
+        0x00, // byte7
+        0x00, 0x00, 0x00, 0x00,
+        0x00, // byte12
+        0x00, 0x00, 0x00,
+    ];
+
+    let mut tmp = NamedTempFile::new().unwrap();
+    tmp.write_all(&header_bytes).unwrap();
+    tmp.flush().unwrap();
+
+    let loader = INesLoader::from_file(tmp.path().into()).unwrap();
+    let h = loader.header();
+
+    assert_eq!(h.prg_rom_size, 2 * 16 * 1024);
+    assert_eq!(h.chr_rom_size, 0);
+    assert_eq!(h.chr_ram_size, 8192);
+    assert_eq!(h.chr_offset(), None);
+}
+
+#[test]
 fn test_load_header_with_various_mapper_numbers_ines1() {
     init();
 

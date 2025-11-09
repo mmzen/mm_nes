@@ -34,6 +34,7 @@ struct AiRequest {
 pub struct AiWorker {
     request_tx: Sender<AiRequest>,
     message_rx: Receiver<AiWorkMessage>,
+    #[allow(dead_code)]
     handle: Option<JoinHandle<()>>,
 }
 

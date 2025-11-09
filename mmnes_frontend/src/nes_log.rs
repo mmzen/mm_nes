@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum NesLogLevel {
     Info,
     Warning,
     Error,
 }
-
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct NesLog<T> {
     timestamp: DateTime<Utc>,

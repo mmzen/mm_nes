@@ -15,7 +15,7 @@ use crate::cpu_6502::Cpu6502;
 use crate::cpu_debugger::CpuSnapshot;
 use crate::dma::PpuDmaType;
 use crate::dma_device::DmaDevice;
-use crate::ines_loader::{INesLoader, Region};
+use crate::ines_loader::INesLoader;
 use crate::input::InputError;
 use crate::input_external::InputExternal;
 use crate::key_event::KeyEvents;
@@ -39,19 +39,6 @@ const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 const CYCLE_START_SEQUENCE: u32 = 7;
 
-/// The cycle credits given to the CPU, the PPU, and the APU
-/// the default value of 114 cycles is the number of cycles
-/// needed for the PPU to render a single scanline.
-const CYCLE_CREDITS: u32 = 114;
-
-/// The maximum number of cycles the CPU can go ahead
-/// before being caught up by the APU.
-const APU_CYCLES_THRESHOLD: u32 = 114;
-
-/// The maximum number of cycles the CPU can go ahead
-/// before being caught up by the PPU.
-const PPU_CYCLES_THRESHOLD: u32 = 114;
-
 ///
 /// CPU cycle counter for CPU, APU and PPU
 ///
@@ -61,6 +48,7 @@ struct CyclesCounter {
     current: u32,
     previous: u32,
     debt: u32,
+    credits: u32,
 }
 
 impl CyclesCounter {
@@ -69,7 +57,12 @@ impl CyclesCounter {
             current,
             previous: current,
             debt: 0,
+            credits: 0,
         }
+    }
+
+    fn set_credits(&mut self, credits: u32) {
+        self.credits = credits;
     }
 
     fn ahead(&self, other: &CyclesCounter, threshold: u32) -> bool {
@@ -91,13 +84,24 @@ pub struct NesConsole {
 impl Configurable for NesConsole {
     fn set_config(&mut self, config: ConfigSpec) {
         info!("setting configuration: {}", config.region);
-        // self.cpu.borrow_mut().set_config(config.clone());
+
+        let ppu_credits = self.compute_ppu_credits(&config);
+        self.ppu_counter.set_credits(ppu_credits);
+
         self.ppu.borrow_mut().set_config(config.clone());
-        // self.apu.borrow_mut().set_config(config.clone());
+        self.apu.borrow_mut().set_config(config.clone());
+
+        // self.cpu.borrow_mut().set_config(config.clone());
     }
 }
 
 impl NesConsole {
+    #[inline]
+    fn compute_ppu_credits(&self, config: &ConfigSpec) -> u32 {
+        let credits = (341.0 * (config.cpu_clock_hz / config.ppu_clock_hz)).floor() as u32;
+        credits.max(1)
+    }
+
     fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>, config: ConfigSpec) -> NesConsole {
         let mut console = NesConsole {
             cpu,
@@ -126,23 +130,29 @@ impl NesConsole {
         Ok(vec)
     }
 
-    pub fn catch_up_ppu_and_apu(&mut self, ppu_threshold: u32, apu_threshold: u32) -> Result<(Option<NesFrame>, Option<NesSamples>), NesConsoleError> {
+    pub fn catch_up_ppu_and_apu(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>), NesConsoleError> {
         let mut out_frame: Option<NesFrame> = None;
         let mut out_samples: Option<NesSamples> = None;
 
-        if self.cpu_counter.ahead(&self.ppu_counter, ppu_threshold) {
-            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, ppu_threshold)?;
-            if let Some(f) = ppu_frame {
-                out_frame = Some(f);
+        while self.cpu_counter.ahead(&self.ppu_counter, self.ppu_counter.credits) {
+            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, self.ppu_counter.credits)?;
+            if let Some(frame) = ppu_frame {
+                out_frame = Some(frame);
             }
 
             self.ppu_counter.current = ppu_cycles;
             self.ppu_counter.previous = self.ppu_counter.current;
         }
 
-        if self.cpu_counter.ahead(&self.apu_counter, apu_threshold) {
-            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, apu_threshold)?;
-            out_samples = apu_samples;
+        while self.cpu_counter.ahead(&self.apu_counter, self.ppu_counter.credits) {
+            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, self.ppu_counter.credits)?;
+            if let Some(sample) = apu_samples {
+                if let Some(acc) = &mut out_samples {
+                    acc.append(sample);
+                } else {
+                    out_samples = Some(sample);
+                }
+            }
 
             self.apu_counter.current = apu_cycles;
             self.apu_counter.previous = self.apu_counter.current;
@@ -162,7 +172,7 @@ impl NesConsole {
         self.cpu_counter.current += self.cpu.borrow_mut().step_instruction()?;
         let snapshot = self.cpu.borrow().snapshot()?;
 
-        let (out_frame ,out_samples) = self.catch_up_ppu_and_apu(PPU_CYCLES_THRESHOLD, APU_CYCLES_THRESHOLD)?;
+        let (out_frame ,out_samples) = self.catch_up_ppu_and_apu()?;
         self.cpu_counter.previous = self.cpu_counter.current;
 
         Ok((out_frame, out_samples, snapshot))
@@ -191,7 +201,7 @@ impl NesConsole {
     }
 
     pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
-        let credits = CYCLE_CREDITS;
+        let credits = self.ppu_counter.credits;
         let out_frame: Option<NesFrame>;
         let mut out_samples: NesSamples = NesSamples::default();
 
@@ -199,7 +209,7 @@ impl NesConsole {
             self.cpu_counter.current = self.cpu.borrow_mut().run(self.cpu_counter.current, credits - self.cpu_counter.debt)?;
             self.cpu_counter.debt = (self.cpu_counter.current - self.cpu_counter.previous) - (credits - self.cpu_counter.debt);
 
-            let (frame, samples) = self.catch_up_ppu_and_apu(PPU_CYCLES_THRESHOLD, APU_CYCLES_THRESHOLD)?;
+            let (frame, samples) = self.catch_up_ppu_and_apu()?;
             self.cpu_counter.previous = self.cpu_counter.current;
 
             if let Some(s) = samples {
@@ -473,12 +483,12 @@ impl NesConsoleBuilder {
 
     fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
                         mirroring: Rc<RefCell<PpuNameTableMirroring>>, bus: Rc<RefCell<dyn Bus>>,
-                        cpu: Rc<RefCell<dyn CPU>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NesConsoleError> {
+                        cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NesConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
         let result = match ppu_type {
             PpuType::NES2C02 => {
-                Ppu2c02::new(chr_rom, mirroring, cpu)?
+                Ppu2c02::new(chr_rom, mirroring, cpu, config)?
             },
         };
 
@@ -510,13 +520,13 @@ impl NesConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
             ApuType::RP2A03 => {
                 let sound_player = SoundPlaybackPassive::new();
-                ApuRp2A03::new(sound_player, cpu, bus)
+                ApuRp2A03::new(sound_player, cpu, bus, config)
             },
         };
 
@@ -561,7 +571,6 @@ impl NesConsoleBuilder {
 
                 let region = cartridge.borrow().get_region();
                 self.config = ConfigSpec::from_region(region);
-
                 self.cartridge = Some(cartridge.clone());
             },
 
@@ -583,7 +592,7 @@ impl NesConsoleBuilder {
                     .map(|cartridge| cartridge.borrow().get_mirroring())
                     .ok_or(NesConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
-                let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu)?;
+                let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu, self.config.clone())?;
 
                 bus.borrow_mut().add_device(ppu)?;
                 bus.borrow_mut().add_device(dma)?;
@@ -596,7 +605,7 @@ impl NesConsoleBuilder {
             }
 
             BusDeviceType::APU(apu_type) => {
-                let apu= self.build_apu_device(apu_type,bus.clone(), cpu)?;
+                let apu= self.build_apu_device(apu_type,bus.clone(), cpu, self.config.clone())?;
                 bus.borrow_mut().add_device(apu)?;
             }
 

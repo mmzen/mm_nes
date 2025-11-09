@@ -390,7 +390,7 @@ impl INesRomHeader {
         let result = match area {
             RomArea::PrgRam => (bytes[8] as usize).max(1) * 8192,
             RomArea::PrgNvRam => 0,
-            RomArea::ChrRam => 8192,
+            RomArea::ChrRam => if bytes[5] == 0 { 8192 } else { 0 },
             RomArea::ChrNvRam => 0,
             _=> { panic!("invalid rom area: {:?}", area) }
         };
@@ -429,22 +429,22 @@ impl INesRomHeader {
 
     fn build_prg_nvram_size(bytes: &[u8], version: &INESVersion) -> usize {
         match *version {
-            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
-            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgNvRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgNvRam),
         }
     }
 
     fn build_chr_ram_size(bytes: &[u8], version: &INESVersion) -> usize {
         match *version {
-            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
-            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::ChrRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::ChrRam),
         }
     }
 
     fn build_chr_nvram_size(bytes: &[u8], version: &INESVersion) -> usize {
         match *version {
-            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::PrgRam),
-            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::PrgRam),
+            INESVersion::V2 => INesRomHeader::build_ram_size_ines2(bytes, RomArea::ChrNvRam),
+            _ => INesRomHeader::build_ram_size_ines1(bytes, RomArea::ChrNvRam),
         }
     }
 

@@ -42,12 +42,14 @@ impl Display for NesRomMetadataWorkerError {
 pub enum NesRomMetadataMessage {
     RequestMetadataByCrc(u32),
     ResponseMetadata(Option<NesRomMetadata>),
+    #[allow(dead_code)]
     Error(String),
 }
 
 pub struct NesRomMetadataWorker {
     request_tx: Sender<NesRomMetadataMessage>,
     response_rx: Receiver<NesRomMetadataMessage>,
+    #[allow(dead_code)]
     pub handle: Option<JoinHandle<()>>,
 }
 

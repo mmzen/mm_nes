@@ -7,6 +7,7 @@ use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::config_spec::{ConfigSpec, Configurable};
 use crate::cpu::CPU;
 use crate::cpu_6502::{APU_DMC_IRQ, APU_FRAME_COUNTER_IRQ};
 use crate::irq_source::IrqSource;
@@ -17,9 +18,6 @@ use crate::sound_playback::SoundPlayback;
 const APU_NAME: &str = "APU RP2A03";
 const APU_EXTERNAL_ADDRESS_SPACE: (u16, u16) = (0x4000, 0x4017);
 const APU_EXTERNAL_MEMORY_SIZE: usize = 32;
-const APU_RATE: f64 = 894_886.5;
-const AUDIO_RATE: f64 = 44_100.0;
-const APU_CYCLES_PER_SAMPLE: f64 = APU_RATE / AUDIO_RATE; // ~20.29
 
 const DUTY_CYCLES: [[u8; 8]; 4] = [
     [0, 0, 0, 0, 0, 0, 0, 1],
@@ -341,9 +339,6 @@ enum ShiftMode {
     Zero,
     One
 }
-const NOISE_PERIOD_DURATIONS: [u16; 16] = [
-    4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068
-];
 
 #[derive(Debug)]
 struct Noise {
@@ -391,10 +386,6 @@ impl Noise {
             envelope: Envelope::new(),
             length_counter: LengthCounter::new(),
         }
-    }
-
-    fn period(value: u8) -> u16 {
-        NOISE_PERIOD_DURATIONS[value as usize]
     }
 }
 
@@ -467,10 +458,6 @@ impl Triangle {
         TRIANGLE_SEQUENCES.len()
     }
 }
-
-const DMC_PERIODS: [u16; 16] = [
-    428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54
-];
 
 #[derive(Debug, PartialEq)]
 enum Reload {
@@ -554,10 +541,6 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         }
     }
 
-    fn period(value: u8) -> u16 {
-        DMC_PERIODS[value as usize]
-    }
-
     fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
         match self.current_address {
             Some(addr) => {
@@ -633,26 +616,22 @@ enum FrameCounterMode {
     FiveStep
 }
 
-const FRAME_COUNTER_4_STEPS_EVENTS: [u32; 4] = [3728, 7456, 11185, 14914];
-
 /***
  * quarter_frame, half_frame, interrupt flag
  */
 const FRAME_COUNTER_4_STEPS_SEQUENCES: [(bool, bool, bool); 4] = [
-    (true,  false, false), // step 0 (3728)  : quarter
-    (true,  true, false ), // step 1 (7456)  : quarter + half
-    (true,  false, false), // step 2 (11185) : quarter
-    (true,  true, true ), // step 3 (14914) : quarter + half + irq
+    (true,  false, false), // step 0 : quarter
+    (true,  true, false ), // step 1 : quarter + half
+    (true,  false, false), // step 2 : quarter
+    (true,  true, true ),  // step 3 : quarter + half + irq
 ];
 
-const FRAME_COUNTER_5_STEPS_EVENTS: [u32; 5] = [3728, 7456, 11185, 14914, 18640];
-
 const FRAME_COUNTER_5_STEPS_SEQUENCES: [(bool, bool, bool); 5] = [
-    (true,  false, false), // step 0 (3728)  : quarter
-    (true,  true, false ), // step 1 (7456)  : quarter + half
-    (true,  false, false), // step 2 (11185) : quarter
-    (false, false, false), // step 3 (14914) : nothing
-    (true,  true, false), // step 4 (18640) : quarter + half
+    (true,  false, false), // step 0 : quarter
+    (true,  true, false ), // step 1 : quarter + half
+    (true,  false, false), // step 2 : quarter
+    (false, false, false), // step 3 : blank
+    (true,  true, false),  // step 4 : quarter + half
 ];
 
 #[derive(Debug)]
@@ -691,13 +670,6 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
         self.apu_cycle = 0;
         self.next_step = 0;
     }
-
-    fn frame_tables(&self) -> (&'static [u32], &'static [(bool, bool, bool)]) {
-        match self.mode {
-            FrameCounterMode::FourStep => (&FRAME_COUNTER_4_STEPS_EVENTS, &FRAME_COUNTER_4_STEPS_SEQUENCES),
-            FrameCounterMode::FiveStep => (&FRAME_COUNTER_5_STEPS_EVENTS, &FRAME_COUNTER_5_STEPS_SEQUENCES),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -708,8 +680,11 @@ pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> {
     triangle: Triangle,
     dmc: Dmc<U, V>,
     frame_counter: FrameCounter<U>,
+    config: ConfigSpec,
+    frame_events_4: [u32; 4],
+    frame_events_5: [u32; 5],
+    sound_player: T,
     apu_cycles_acc: f64,
-    sound_player: T
 }
 
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03<T, U, V> {
@@ -796,18 +771,57 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, 
     }
 }
 
+impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> Configurable for ApuRp2A03<T, U, V> {
+    fn set_config(&mut self, config: ConfigSpec) {
+        self.config = config;
+        self.recompute_timing();
+    }
+}
+
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
-    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
-        ApuRp2A03 {
+
+    fn recompute_timing(&mut self) {
+
+        // frame-sequencer scheduling (in APU cycles)
+        // quarter-frame rate = apu_frame_counter_rate_hz * 4
+        // example: NTSC = 60 * 4 = 240 Hz, PAL = 50 * 4 = 200 Hz, Dendy = 59 * 4 = 236 Hz
+        let quarter = self.config.apu_clock_hz / (self.config.apu_frame_counter_rate_hz * 4.0);
+
+        // 4-step mode: events at 1,2,3,4 quarters
+        self.frame_events_4 = [
+            (1.0 * quarter).round() as u32,
+            (2.0 * quarter).round() as u32,
+            (3.0 * quarter).round() as u32,
+            (4.0 * quarter).round() as u32,
+        ];
+
+        // 5-step mode: events at 1,2,3,4,5 quarters
+        self.frame_events_5 = [
+            (1.0 * quarter).round() as u32,
+            (2.0 * quarter).round() as u32,
+            (3.0 * quarter).round() as u32,
+            (4.0 * quarter).round() as u32,
+            (5.0 * quarter).round() as u32,
+        ];
+    }
+
+    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>, config: ConfigSpec) -> ApuRp2A03<T, U, V> {
+        let mut apu = ApuRp2A03 {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
             noise: Noise::new(),
             triangle: Triangle::new(),
             dmc: Dmc::new(cpu.clone(), bus.clone()),
             frame_counter: FrameCounter::new(cpu.clone()),
+            config,
+            frame_events_4: [0; 4],
+            frame_events_5: [0; 5],
             sound_player,
             apu_cycles_acc: 0.0
-        }
+        };
+
+        apu.recompute_timing();
+        apu
     }
 
     fn read_pulse(&self, _: u16) -> Result<u8, MemoryError> {
@@ -948,7 +962,8 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             dmc.reload = Reload::None
         }
 
-        dmc.timer_period = Dmc::<U, V>::period(value & 0x0F);
+        let index = (value & 0x0F) as usize;
+        dmc.timer_period = self.config.dmc_period_table[index] ;
 
         Ok(())
     }
@@ -1093,8 +1108,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
     fn write_noise_mode_and_period(&mut self, value: u8) -> Result<(), MemoryError> {
         let noise = &mut self.noise;
 
-        let idx = value & 0x0F;
-        noise.timer_period = Noise::period(idx);
+        let index = (value & 0x0F) as usize;
+        noise.timer_period = self.config.noise_period_table[index];
+
         noise.shift_mode = if (value & 0x80) == 0 {
             ShiftMode::Zero
         } else {
@@ -1238,7 +1254,10 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
     }
 
     fn clock_frame_sequencer(&mut self, cycle: u32) -> Result<(), ApuError> {
-        let (events, quarter_half_interrupt) = self.frame_counter.frame_tables();
+        let (events, quarter_half_interrupt): (Vec<u32>, &'static [(bool, bool, bool)]) = match self.frame_counter.mode {
+            FrameCounterMode::FourStep => (self.frame_events_4.as_slice().to_vec(), &FRAME_COUNTER_4_STEPS_SEQUENCES),
+            FrameCounterMode::FiveStep => (self.frame_events_5.as_slice().to_vec(), &FRAME_COUNTER_5_STEPS_SEQUENCES),
+        };
 
         self.frame_counter.apu_cycle += cycle;
 
@@ -1340,24 +1359,24 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         for counter in 0..credits {
 
             /***
-             * DMC channel is clocked at the CPU clock rate
+             * DMC and triangle channels are clocked at the CPU clock rate
              */
             self.clock_dmc_timer()?;
+            self.clock_triangle_timer();
 
             /***
              * other channels are the frame counter are clocked at the APU clock rate
              */
             if counter % 2 == 0 {
                 self.clock_pulse_timers();
-                self.clock_triangle_timer();
                 self.clock_noise_timer();
                 self.clock_frame_sequencer(1)?;
 
                 self.apu_cycles_acc += 1.0;
 
-                while self.apu_cycles_acc >= APU_CYCLES_PER_SAMPLE {
+                while self.apu_cycles_acc >= self.config.cycles_per_sample {
                     self.clock_mixer();
-                    self.apu_cycles_acc -= APU_CYCLES_PER_SAMPLE;
+                    self.apu_cycles_acc -= self.config.cycles_per_sample;
                 }
             }
         }

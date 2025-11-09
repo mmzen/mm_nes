@@ -1,5 +1,6 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use crate::config_spec::Configurable;
 use crate::cpu::CpuError;
 use crate::irq_source::IrqError;
 use crate::memory::MemoryError;
@@ -64,7 +65,7 @@ impl Display for ApuError {
 }
 
 #[allow(dead_code)]
-pub trait APU {
+pub trait APU: Configurable {
     fn reset(&mut self) -> Result<(), ApuError>;
     fn panic(&self, error: &ApuError);
 

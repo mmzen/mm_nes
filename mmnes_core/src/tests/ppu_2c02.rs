@@ -3,7 +3,9 @@ use std::rc::Rc;
 use log::debug;
 use crate::bus::MockBusStub;
 use crate::bus_device::{BusDeviceType, MockBusDeviceStub};
+use crate::config_spec::ConfigSpec;
 use crate::cpu::MockCpuStub;
+use crate::ines_loader::Region;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_ciram::PpuNameTableMirroring;
 use crate::ppu_2c02::Ppu2c02;
@@ -51,10 +53,13 @@ fn create_ppu_with_nametable_mirroring(mirroring: PpuNameTableMirroring) -> Ppu2
         }
     });
 
+    let config = ConfigSpec::from_region(Region::NTSC);
+
     Ppu2c02::new(
         Rc::new(RefCell::new(chr_rom)),
         Rc::new(RefCell::new(mirroring)),
-        Rc::new(RefCell::new(cpu))
+        Rc::new(RefCell::new(cpu)),
+        config,
     ).unwrap()
 }
 

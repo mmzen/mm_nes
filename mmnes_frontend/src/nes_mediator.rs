@@ -4,7 +4,6 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
 use eframe::egui::ColorImage;
 use mmnes_core::nes_console::NesConsoleError;
 use mmretrodb::nes_rom_metadata::NesRomMetadata;
-use crate::nes_log::NesLog;
 use crate::nes_message::NesMessage;
 
 #[derive(Debug)]

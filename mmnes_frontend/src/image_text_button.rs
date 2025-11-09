@@ -49,11 +49,13 @@ impl<'a> ImageTextButton<'a> {
         self
     }
 
+    #[allow(dead_code)]
     pub fn selected(mut self, s: bool) -> ImageTextButton<'a> {
         self.selected = s;
         self
     }
 
+    #[allow(dead_code)]
     pub fn min_size(mut self, s: Vec2) -> ImageTextButton<'a> {
         self.min_size = s;
         self
@@ -100,6 +102,7 @@ impl<'a> Widget for ImageTextButton<'a> {
         ui.painter().rect_filled(rect, rounding, fill);
         ui.painter().rect_stroke(rect, rounding, stroke, StrokeKind::Outside);
 
+        #[allow(deprecated)]
         let mut child = ui.child_ui(rect, Layout::centered_and_justified(Direction::LeftToRight), None);
 
         if let Some(texture) = self.icon {
