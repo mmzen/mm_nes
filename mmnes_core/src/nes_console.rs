@@ -115,6 +115,9 @@ impl NesConsole {
         credits.max(1)
     }
 
+    /***
+     * TODO - incorrect : the result here is the number of samples...should be the APU credits in terms of CPU cycles
+     ***/
     fn compute_apu_credits(&self, config: &ConfigSpec) -> u32 {
         let credits = (config.apu_sample_rate_hz / config.frame_rate_hz).floor() as u32;
         credits.max(1)
