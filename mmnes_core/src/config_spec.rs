@@ -1,4 +1,5 @@
 use std::time::Duration;
+use log::warn;
 use crate::ines_loader::Region;
 
 /***
@@ -136,7 +137,10 @@ impl ConfigSpec {
             Region::NTSC => ConfigSpec::ntsc(),
             Region::PAL => ConfigSpec::pal(),
             Region::Dendy => ConfigSpec::dendy(),
-            _ => { panic!("unsupported region: {:?}", region); }
+            _ => {
+                warn!("unsupported region: {:?}", region);
+                ConfigSpec::ntsc()
+            }
         }
     }
 }

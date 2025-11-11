@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::{spawn, JoinHandle};
-use std::time::{Duration};
 use log::{error, LevelFilter};
 use simplelog::{Config, SimpleLogger};
 use clap::{Parser};
