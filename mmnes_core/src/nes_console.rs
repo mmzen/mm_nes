@@ -89,7 +89,13 @@ impl Configurable for NesConsole {
         self.config = config.clone();
 
         let ppu_credits = self.compute_ppu_credits(&config);
+        let apu_credits = self.compute_apu_credits(&config);
+
+        info!("setting ppu credits: {}", ppu_credits);
         self.ppu_counter.set_credits(ppu_credits);
+
+        info!("setting apu credits: {}", apu_credits);
+        self.apu_counter.set_credits(apu_credits);
 
         self.ppu.borrow_mut().set_config(config.clone());
         self.apu.borrow_mut().set_config(config.clone());
@@ -104,9 +110,13 @@ impl NesConsole {
         &self.config
     }    
     
-    #[inline]
     fn compute_ppu_credits(&self, config: &ConfigSpec) -> u32 {
         let credits = (341.0 * (config.cpu_clock_hz / config.ppu_clock_hz)).floor() as u32;
+        credits.max(1)
+    }
+
+    fn compute_apu_credits(&self, config: &ConfigSpec) -> u32 {
+        let credits = (config.apu_sample_rate_hz / config.frame_rate_hz).floor() as u32;
         credits.max(1)
     }
 
@@ -153,8 +163,8 @@ impl NesConsole {
             self.ppu_counter.previous = self.ppu_counter.current;
         }
 
-        while self.cpu_counter.ahead(&self.apu_counter, self.ppu_counter.credits) {
-            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, self.ppu_counter.credits)?;
+        while self.cpu_counter.ahead(&self.apu_counter, self.apu_counter.credits) {
+            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, self.apu_counter.credits)?;
             if let Some(sample) = apu_samples {
                 if let Some(acc) = &mut out_samples {
                     acc.append(sample);

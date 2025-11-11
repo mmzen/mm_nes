@@ -51,6 +51,7 @@ pub struct ConfigSpec {
     pub cycles_per_sample: f64,
     pub dmc_period_table: &'static [u16; 16],   // region-specific tables
     pub noise_period_table: &'static [u16; 16], // region-specific tables
+    pub apu_sample_rate_hz: f64,                // 44100 Hz
 
     pub pal_emphasis_rg_swapped: bool,  // true for PAL PPUs
 
@@ -84,6 +85,7 @@ impl ConfigSpec {
             cycles_per_sample: 21_477_272.0 / 12.0 / 2.0 / 44_100.0,
             dmc_period_table: &DMC_PERIOD_TABLE_NTSC,
             noise_period_table: &NOISE_PERIOD_TABLE_NTSC,
+            apu_sample_rate_hz: 44_100.0,
             pal_emphasis_rg_swapped: false,
         }
     }
@@ -106,6 +108,7 @@ impl ConfigSpec {
             cycles_per_sample: 26_601_712.0 / 16.0 / 2.0 / 44_100.0,
             dmc_period_table:    &DMC_PERIOD_TABLE_PAL,
             noise_period_table:  &NOISE_PERIOD_TABLE_PAL,
+            apu_sample_rate_hz: 44_100.0,
             pal_emphasis_rg_swapped: true,
         }
     }
@@ -128,6 +131,7 @@ impl ConfigSpec {
             cycles_per_sample: 26_601_712.0 / 15.0 / 2.0 / 44_100.0,
             dmc_period_table:    &DMC_PERIOD_TABLE_NTSC,
             noise_period_table:  &NOISE_PERIOD_TABLE_NTSC,
+            apu_sample_rate_hz: 44_100.0,
             pal_emphasis_rg_swapped: true,
         }
     }

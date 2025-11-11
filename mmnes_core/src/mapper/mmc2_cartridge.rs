@@ -30,7 +30,7 @@ enum Latch {
 
 impl Latch {
 
-    fn to_index(&self) -> usize {
+    fn index(&self) -> usize {
         match self {
             Latch::FD => 0,
             Latch::FE => 1,
@@ -40,28 +40,24 @@ impl Latch {
 
 #[derive(Debug)]
 struct Mmc2PrgRom {
-    name: String,
     size: usize,
     memory_banks: Vec<MemoryBank>,
     memory_bank_map: [usize; 4],
-    num_memory_banks: usize,
 }
 
 impl Mmc2PrgRom {
-    fn new(name: String, size: usize, memory_banks: Vec<MemoryBank>) -> Result<Mmc2PrgRom, CartridgeError> {
+    fn new(memory_banks: Vec<MemoryBank>) -> Result<Mmc2PrgRom, CartridgeError> {
         let num_memory_banks = memory_banks.len();
 
         if num_memory_banks < 4 {
             Err(CartridgeError::IllegalState(format!("number of memory banks must be at least 4: {}", num_memory_banks)))
         } else {
-            let memory_bank_map = [0, memory_banks.len() - 3, memory_banks.len() - 2, memory_banks.len() - 1, ];
+            let memory_bank_map = [0, memory_banks.len() - 3, memory_banks.len() - 2, memory_banks.len() - 1];
 
             let prg_rom = Mmc2PrgRom {
-                name,
-                size,
+                size: (PRG_ROM_ADDRESS_SPACE.1 - PRG_ROM_ADDRESS_SPACE.0 + 1) as usize,
                 memory_banks,
-                memory_bank_map,
-                num_memory_banks,
+                memory_bank_map
             };
 
             Ok(prg_rom)
@@ -91,7 +87,6 @@ impl Memory for Mmc2PrgRom {
 
 #[derive(Debug)]
 struct Mmc2ChrRom {
-    name: String,
     size: usize,
     memory_banks: Vec<MemoryBank>,
     memory_bank_map_0x0000: [usize; 2],
@@ -102,11 +97,10 @@ struct Mmc2ChrRom {
 
 impl Mmc2ChrRom {
 
-    fn new(name: String, size: usize, memory_banks: Vec<MemoryBank>) -> Mmc2ChrRom {
+    fn new(memory_banks: Vec<MemoryBank>) -> Mmc2ChrRom {
 
         Mmc2ChrRom {
-            name,
-            size,
+            size: (PPU_ADDRESS_SPACE.1 - PPU_ADDRESS_SPACE.0 + 1) as usize,
             memory_banks,
             memory_bank_map_0x0000: [0; 2],
             memory_bank_map_0x1000: [0; 2],
@@ -132,8 +126,8 @@ impl Memory for Mmc2ChrRom {
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
 
         let index = match addr {
-            0x0000..=0x0FFF => self.memory_bank_map_0x0000[self.latch0.get().to_index()],
-            0x1000..=0x1FFF => self.memory_bank_map_0x1000[self.latch1.get().to_index()],
+            0x0000..=0x0FFF => self.memory_bank_map_0x0000[self.latch0.get().index()],
+            0x1000..=0x1FFF => self.memory_bank_map_0x1000[self.latch1.get().index()],
             _ => panic!("invalid address: 0x{:04X}", addr),
         };
 
@@ -151,7 +145,7 @@ impl Memory for Mmc2ChrRom {
 
 impl BusDevice for Mmc2ChrRom {
     fn get_name(&self) -> String {
-        format!("{} ({})", MAPPER_NAME, self.name)
+        format!("{} (chr_rom)", MAPPER_NAME)
     }
 
     fn get_device_type(&self) -> BusDeviceType {
@@ -186,9 +180,9 @@ impl Mmc2Cartridge {
         info!("chr_rom: bank size: {}, number of banks: {}", chr_rom_size, chr_memory_banks.len());
 
         let cartridge = Mmc2Cartridge {
-            prg_rom: Mmc2PrgRom::new("prg_rom".to_string(), (PRG_ROM_ADDRESS_SPACE.1 - PRG_ROM_ADDRESS_SPACE.0 + 1) as usize, prg_rom_memory_banks)?,
+            prg_rom: Mmc2PrgRom::new(prg_rom_memory_banks)?,
             prg_ram: Rc::new(RefCell::new(prg_ram_memory_bank)),
-            chr_rom: Rc::new(RefCell::new(Mmc2ChrRom::new("chr_rom".to_string(), (PPU_ADDRESS_SPACE.1 - PPU_ADDRESS_SPACE.0 + 1) as usize, chr_memory_banks))),
+            chr_rom: Rc::new(RefCell::new(Mmc2ChrRom::new(chr_memory_banks))),
             device_type: BusDeviceType::CARTRIDGE(MMC2),
             mirroring: Rc::new(RefCell::new(mirroring)),
             region,
@@ -201,7 +195,7 @@ impl Mmc2Cartridge {
 
 impl<'a> BusDevice for Mmc2Cartridge {
     fn get_name(&self) -> String {
-        format!("{}", MAPPER_NAME)
+        format!("{} (prg_rom)", MAPPER_NAME)
     }
 
     fn get_device_type(&self) -> BusDeviceType {
@@ -220,11 +214,12 @@ impl<'a> Memory for Mmc2Cartridge {
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
         match addr {
+            0x0000..=0x1FFF => {},
             0x2000..=0x2FFF => self.prg_rom.memory_bank_map[0] = (value & 0x0F) as usize,
-            0x3000..=0x3FFF => self.chr_rom.borrow_mut().memory_bank_map_0x0000[0] = (value & 0x1F) as usize,
-            0x4000..=0x4FFF => self.chr_rom.borrow_mut().memory_bank_map_0x0000[1] = (value & 0x1F) as usize,
-            0x5000..=0x5FFF => self.chr_rom.borrow_mut().memory_bank_map_0x1000[0] = (value & 0x1F) as usize,
-            0x6000..=0x6FFF => self.chr_rom.borrow_mut().memory_bank_map_0x1000[1] = (value & 0x1F) as usize,
+            0x3000..=0x3FFF => self.chr_rom.borrow_mut().memory_bank_map_0x0000[Latch::FD.index()] = (value & 0x1F) as usize,
+            0x4000..=0x4FFF => self.chr_rom.borrow_mut().memory_bank_map_0x0000[Latch::FE.index()] = (value & 0x1F) as usize,
+            0x5000..=0x5FFF => self.chr_rom.borrow_mut().memory_bank_map_0x1000[Latch::FD.index()] = (value & 0x1F) as usize,
+            0x6000..=0x6FFF => self.chr_rom.borrow_mut().memory_bank_map_0x1000[Latch::FE.index()] = (value & 0x1F) as usize,
             0x7000..=0x7FFF => {
                 match value & 0x01 {
                     0 => *self.mirroring.borrow_mut() = PpuNameTableMirroring::Vertical,
