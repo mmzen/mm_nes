@@ -1336,6 +1336,10 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         self.noise.reset();
         self.dmc.reset();
         self.frame_counter.reset();
+        self.apu_cycles_acc = 0f64;
+        self.sound_player.clear();
+        
+        self.recompute_timing();
         Ok(())
     }
 

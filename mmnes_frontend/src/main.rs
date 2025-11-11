@@ -42,9 +42,6 @@ const FRAME_BUFFER_HEIGHT: usize = 240;
 const CHANNEL_BOUND_SIZE: usize = 10;
 const DEBUG_CHANNEL_BOUND_SIZE: usize = 100;
 const ERROR_BOUND_SIZE: usize = 10;
-const FRAMES_PER_SECOND: f64 = 60.098_8;
-const SPIN_BEFORE: Duration = Duration::from_micros(500);
-
 const VIEWPORT_HEIGHT: f32 = 600.0;
 const VIEWPORT_WIDTH: f32 = 900.0;
 

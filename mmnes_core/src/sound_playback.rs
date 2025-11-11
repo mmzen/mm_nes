@@ -4,6 +4,7 @@ pub trait SoundPlayback : Debug {
     fn push_sample(&mut self, sample: f32);
     fn samples(&mut self) -> Vec<f32>;
     fn resume(&self);
+    fn clear(&mut self);
 }
 
 #[derive(Debug, PartialEq)]

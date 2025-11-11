@@ -20,9 +20,10 @@ use mmnes_core::nes_console::{NesConsole, NesConsoleBuilder, NesConsoleError};
 use mmnes_core::nes_frame::NesFrame;
 use mmnes_core::nes_samples::NesSamples;
 use mmnes_core::ppu::PpuType::NES2C02;
-use crate::{FRAMES_PER_SECOND, SPIN_BEFORE};
 use crate::nes_message::NesMessage;
 use crate::sound_player::SoundPlayer;
+
+const SPIN_BEFORE: Duration = Duration::from_micros(500);
 
 #[derive(Debug, Clone, PartialEq)]
 enum NesFrontEndState {
@@ -57,6 +58,12 @@ impl NesFrontEnd {
     fn nes_mut(&mut self) -> Result<&mut NesConsole, NesConsoleError> {
         self.nes
             .as_mut()
+            .ok_or_else(|| NesConsoleError::InternalError("emulator is not created".to_string()))
+    }
+
+    fn nes(&self) -> Result<&NesConsole, NesConsoleError> {
+        self.nes
+            .as_ref()
             .ok_or_else(|| NesConsoleError::InternalError("emulator is not created".to_string()))
     }
 
@@ -239,8 +246,7 @@ impl NesFrontEnd {
 
 
     pub fn run(&mut self) -> Result<(), NesConsoleError> {
-        let frame_duration = Duration::from_secs_f64(1.0 / FRAMES_PER_SECOND);
-        let mut next_frame = Instant::now() + frame_duration;
+        let mut next_frame = Instant::now();
         let mut sound_player = SoundPlayer::new().map_err(|e| NesConsoleError::ControllerError(e.to_string()))?;
 
         loop {
@@ -249,10 +255,11 @@ impl NesFrontEnd {
             match self.state {
                 NesFrontEndState::Running => {
                     let (frame, samples) = self.nes_mut()?.step_frame()?;
+
                     self.process_frame(frame)?;
                     self.process_samples(samples, &mut sound_player)?;
 
-                    next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+                    next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, self.nes()?.config().frame_duration);
                 },
 
                 NesFrontEndState::Debug(DebugCommand::StepInstruction) => {
@@ -260,7 +267,7 @@ impl NesFrontEnd {
 
                     if let Some(frame) = frame {
                         self.process_frame(frame)?;
-                        next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+                        next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, self.nes()?.config().frame_duration);
                     }
 
                     if let Some(samples) = samples {
@@ -278,7 +285,7 @@ impl NesFrontEnd {
                     self.process_frame(frame)?;
                     self.process_samples(samples, &mut sound_player)?;
 
-                    next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, frame_duration);
+                    next_frame = NesFrontEnd::sleep_until_next_frame(next_frame, self.nes()?.config().frame_duration);
                     self.send_debug_message(NesMessage::CpuSnapshotSet(snapshots))?;
                 },
 

@@ -79,11 +79,14 @@ pub struct NesConsole {
     cpu_counter: CyclesCounter,
     apu_counter: CyclesCounter,
     ppu_counter: CyclesCounter,
+    config: ConfigSpec,
 }
 
 impl Configurable for NesConsole {
     fn set_config(&mut self, config: ConfigSpec) {
         info!("setting configuration: {}", config.region);
+
+        self.config = config.clone();
 
         let ppu_credits = self.compute_ppu_credits(&config);
         self.ppu_counter.set_credits(ppu_credits);
@@ -96,6 +99,11 @@ impl Configurable for NesConsole {
 }
 
 impl NesConsole {
+    
+    pub fn config(&self) -> &ConfigSpec {
+        &self.config
+    }    
+    
     #[inline]
     fn compute_ppu_credits(&self, config: &ConfigSpec) -> u32 {
         let credits = (341.0 * (config.cpu_clock_hz / config.ppu_clock_hz)).floor() as u32;
@@ -112,6 +120,7 @@ impl NesConsole {
             cpu_counter: CyclesCounter::new(CYCLE_START_SEQUENCE),
             apu_counter: CyclesCounter::new(0),
             ppu_counter: CyclesCounter::new(0),
+            config: config.clone()
         };
 
         console.set_config(config);
@@ -253,6 +262,7 @@ impl NesConsole {
 
         self.reset_counters();
         self.reset_entry_point()?;
+        self.set_config(self.config.clone());
 
         Ok(())
     }

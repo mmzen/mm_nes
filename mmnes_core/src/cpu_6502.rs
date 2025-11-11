@@ -377,6 +377,8 @@ impl CPU for Cpu6502 {
         self.registers.set_status(StatusFlag::InterruptDisable, true);
         self.registers.set_status(StatusFlag::Unused, true);
         self.registers.sp = 0xFD;
+        self.instructions_executed = 0;
+        self.cycles = 0;
         self.set_pc_indirect(RESET_VECTOR)?;
 
         Ok(())

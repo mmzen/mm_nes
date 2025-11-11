@@ -424,13 +424,23 @@ impl PPU for Ppu2c02 {
         self.register.borrow_mut().control = 0;
         self.register.borrow_mut().mask = 0;
         self.register.borrow_mut().status = 0;
+        self.register.borrow_mut().oam_addr = 0;
         self.register.borrow_mut().scroll = 0;
         self.register.borrow_mut().data = 0;
 
-        self.latch.borrow_mut().reset();
         *self.v.borrow_mut() = 0;
+        self.t = 0;
+        self.x = 0;
+        self.oam = OAM::default();
+        self.latch.borrow_mut().reset();
+        self.state = PpuState::VBlank(0);
+        self.background_pixels_line = PixelLines::default();
+        self.sprites_pixels_line = PixelLines::default();
+        self.renderer = RefCell::new(Renderer::new());
 
         self.set_flag(Status(VBlank), true);
+
+        self.recompute_timing();
 
         Ok(())
     }

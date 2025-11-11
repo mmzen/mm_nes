@@ -23,6 +23,10 @@ impl SoundPlayback for SoundPlaybackPassive {
     fn resume(&self) {
         unreachable!()
     }
+
+    fn clear(&mut self) {
+        self.buffer.clear();
+    }
 }
 
 impl SoundPlaybackPassive {

@@ -42,6 +42,11 @@ impl SoundPlayer {
         self.audio_queue.resume();
     }
 
+    pub fn clear(&mut self) {
+        self.batch_buffer.clear();
+        self.audio_queue.clear();
+    }
+
     #[allow(dead_code)]
     pub fn pause(&mut self) {
         self.audio_queue.pause();

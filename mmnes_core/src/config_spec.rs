@@ -1,3 +1,4 @@
+use std::time::Duration;
 use crate::ines_loader::Region;
 
 /***
@@ -42,6 +43,8 @@ pub struct ConfigSpec {
     pub post_render_lines: u16,         // 1 (NTSC/PAL), 51 (Dendy)
     pub vblank_lines_after_nmi: u16,    // 20 (NTSC/Dendy), 70 (PAL)
     pub nmi_scanline: u16,              // 241 (NTSC), 240 (PAL), 291 (Dendy)
+    pub frame_rate_hz: f64,             // derived ppu_clock_hz
+    pub frame_duration: Duration,       // 1 / frame_rate_hz
 
     pub apu_frame_counter_rate_hz: f64, // ~60 (NTSC), ~50 (PAL), ~59 (Dendy)
     pub cycles_per_sample: f64,
@@ -74,6 +77,8 @@ impl ConfigSpec {
             post_render_lines: 1,
             vblank_lines_after_nmi: 20,
             nmi_scanline: 241,
+            frame_rate_hz: (21_477_272.0 / 12.0 * 3.0) / (341.0 * 262.0),
+            frame_duration: Duration::from_secs_f64(1.0 / ((21_477_272.0 / 12.0 * 3.0) / (341.0 * 262.0))),
             apu_frame_counter_rate_hz: 60.0,
             cycles_per_sample: 21_477_272.0 / 12.0 / 2.0 / 44_100.0,
             dmc_period_table: &DMC_PERIOD_TABLE_NTSC,
@@ -94,8 +99,10 @@ impl ConfigSpec {
             post_render_lines:   1,
             vblank_lines_after_nmi: 70,
             nmi_scanline:        240,
+            frame_rate_hz: (26_601_712.0 / 5.0) / (341.0 * 312.0),
+            frame_duration: Duration::from_secs_f64(1.0 / ((26_601_712.0 / 5.0) / (341.0 * 312.0))),
             apu_frame_counter_rate_hz: 50.0,
-            cycles_per_sample: 26_601_712.0 / 15.0 / 2.0 / 44_100.0,
+            cycles_per_sample: 26_601_712.0 / 16.0 / 2.0 / 44_100.0,
             dmc_period_table:    &DMC_PERIOD_TABLE_PAL,
             noise_period_table:  &NOISE_PERIOD_TABLE_PAL,
             pal_emphasis_rg_swapped: true,
@@ -114,8 +121,10 @@ impl ConfigSpec {
             post_render_lines:   51,
             vblank_lines_after_nmi: 20,
             nmi_scanline:        291,
+            frame_rate_hz: (26_601_712.0 / 5.0) / (341.0 * 312.0),
+            frame_duration: Duration::from_secs_f64(1.0 / ((26_601_712.0 / 5.0) / (341.0 * 312.0))),
             apu_frame_counter_rate_hz: 59.0,
-            cycles_per_sample: 26_601_712.0 / 16.0 / 2.0 / 44_100.0,
+            cycles_per_sample: 26_601_712.0 / 15.0 / 2.0 / 44_100.0,
             dmc_period_table:    &DMC_PERIOD_TABLE_NTSC,
             noise_period_table:  &NOISE_PERIOD_TABLE_NTSC,
             pal_emphasis_rg_swapped: true,
