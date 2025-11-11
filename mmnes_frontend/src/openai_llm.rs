@@ -39,19 +39,25 @@ impl LLMClient for OpenAILLM {
 
 impl OpenAILLM {
     pub fn new(endpoint: impl Into<String>, api_key: impl Into<String>, model: impl Into<String>) -> Result<OpenAILLM, LLMClientError> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .build()
-            .or(Err(LLMClientError::ConfigurationError("could not build HTTP client".to_string())))?;
+        let api_key_str = api_key.into();
 
-        let openai = OpenAILLM {
-            endpoint: endpoint.into(),
-            api_key: api_key.into(),
-            model: model.into(),
-            client
-        };
+        if api_key_str.is_empty() {
+            Err(LLMClientError::ConfigurationError("API key is required".to_string()))
+        } else {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .or(Err(LLMClientError::ConfigurationError("could not build HTTP client".to_string())))?;
 
-        Ok(openai)
+            let openai = OpenAILLM {
+                endpoint: endpoint.into(),
+                api_key: api_key_str,
+                model: model.into(),
+                client
+            };
+
+            Ok(openai)
+        }
     }
 
     fn build_instructions(rom_title: Option<String>) -> String {

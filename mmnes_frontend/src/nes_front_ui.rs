@@ -100,8 +100,10 @@ impl NesFrontUI {
             shadow: Default::default(),
         };
 
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .map_err(|e| NesConsoleError::InternalError(format!("OpenAI API key (OPENAI_API_KEY) not set: {}", e)))?;
+        let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|e| {
+            warn!("OpenAI API key (OPENAI_API_KEY) not set: {}", e);
+            String::default()
+        });
 
         let nes_mediator = Rc::new(RefCell::new(NesMediator::new(frame_rx, command_tx, debug_rx, error_rx)));
 
