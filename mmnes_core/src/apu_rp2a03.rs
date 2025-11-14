@@ -467,6 +467,7 @@ enum Reload {
 
 #[derive(Debug)]
 struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
+    enabled: bool,
     irq_enable: bool,
     timer_period: u16,
     timer_counter: u16,
@@ -486,6 +487,7 @@ struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
 
 impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
     fn reset(&mut self) {
+        self.enabled = false;
         self.irq_enable = false;
         self.timer_period = 0;
         self.timer_counter = 0;
@@ -506,7 +508,11 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
     }
 
     fn get_sample(&self) -> f32 {
+        if self.is_muted() == true {
+            0.0
+        } else {
         self.output_level as f32
+            }
     }
 }
 
@@ -523,6 +529,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> IrqSource<U> for Dmc<U, V> {
 impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     fn new(cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
         Dmc {
+            enabled: false,
             irq_enable: false,
             timer_period: 0,
             timer_counter: 0,
@@ -580,7 +587,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             } else {
                 self.silenced = true;
 
-                if self.bytes_remaining == 0 {
+                if self.bytes_remaining == 0 && self.enabled == true {
                     match self.reload {
                         Reload::Loop => {
                             self.reload_sample_window()
@@ -1050,12 +1057,19 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
 
         if dmc_bit == true {
-            if self.dmc.bytes_remaining == 0 {
-                self.dmc.reload_sample_window();
+            if self.dmc.enabled == false {
+                self.dmc.enabled = true;
+                if self.dmc.bytes_remaining == 0 {
+                    self.dmc.reload_sample_window();
+                }
             }
         } else {
+            self.dmc.enabled = false;
             self.dmc.sample_buffer = None;
             self.dmc.bytes_remaining = 0;
+            self.dmc.bits_remaining = 0;
+            self.dmc.silenced = true;
+            self.dmc.output_level = 0;
         }
 
         self.dmc.clear_interrupt().map_err(|e|
@@ -1180,6 +1194,10 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
 
     fn clock_dmc_timer(&mut self) -> Result<(), ApuError> {
         let dmc = &mut self.dmc;
+
+        if dmc.enabled == false {
+            return Ok(())
+        }
 
         // dma prefetch
         dmc.cond_dma_prefetch()?;
