@@ -767,7 +767,7 @@ impl Ppu2c02 {
     fn create_mirrored_name_tables_and_connect_to_bus(bus: &mut Box<dyn Bus>, mirroring: Rc<RefCell<PpuNameTableMirroring>>) -> Result<(), PpuError> {
         let ciram_memory = CiramMemory::new(mirroring);
         bus.add_device(Rc::new(RefCell::new(ciram_memory)))?;
-        
+
         Ok(())
     }
 
@@ -988,6 +988,19 @@ impl Ppu2c02 {
     }
 
     fn detect_sprite_0_hit_and_set_status_flag(&self, pixel_pos_x: u8) {
+        if pixel_pos_x == PIXEL_X_MAX {
+            return;
+        }
+
+        if pixel_pos_x < 8 {
+            let bg_left_enabled = self.get_flag(Mask(MaskFlag::ShowLeftmostBackground));
+            let sprite_left_enabled = self.get_flag(Mask(MaskFlag::ShowLeftmostSprites));
+
+            if !bg_left_enabled || !sprite_left_enabled {
+                return;
+            }
+        }
+
         let background_transparency = self.background_pixels_line.is_transparent(pixel_pos_x);
         let sprite_transparency = self.sprites_pixels_line.is_transparent(pixel_pos_x);
 
@@ -1179,12 +1192,12 @@ impl Ppu2c02 {
         if fine_y < 7 {
             (name_table_addr, fine_y + 1, coarse_y)
         } else if coarse_y == 29 {
-                let addr = name_table_addr ^ 0x0800;
-                (addr, 0, 0)
+            let addr = name_table_addr ^ 0x0800;
+            (addr, 0, 0)
         } else if coarse_y == 31 {
-                (name_table_addr, 0, 0)
+            (name_table_addr, 0, 0)
         } else {
-                (name_table_addr, 0, coarse_y + 1)
+            (name_table_addr, 0, coarse_y + 1)
         }
     }
 
@@ -1220,6 +1233,7 @@ impl Ppu2c02 {
         self.background_pixels_line.clear();
 
         let mut pixel_pos_x= 0u8;
+
         loop {
             let pattern_table_addr = self.get_background_pattern_table_addr();
             let tile =  self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
@@ -1245,6 +1259,19 @@ impl Ppu2c02 {
             }
         }
 
+        // simulate prefetch two more tiles (off-screen), to trigger mapper CHR reads
+        let prefetch_tiles = 2;
+        for _ in 0..prefetch_tiles {
+            let pattern_table_addr = self.get_background_pattern_table_addr();
+            let tile = self.get_tile(coarse_x, coarse_y, name_table_addr, pattern_table_addr, attribute_table_addr)?;
+
+            let _ = self.fetch_line_pattern_data(tile.as_ref(), fine_y, 0, 8);
+
+            (name_table_addr, coarse_x) = self.coarse_x_increment(name_table_addr, coarse_x);
+            attribute_table_addr = self.get_attribute_table_addr(name_table_addr);
+        }
+        // pre fetch
+
         name_table_addr = self.get_name_table_addr_from_v();
         (name_table_addr, fine_y, coarse_y) = self.fine_and_coarse_y_increment(name_table_addr, fine_y, coarse_y);
 
@@ -1256,11 +1283,10 @@ impl Ppu2c02 {
     }
 
     fn is_scanline_in_sprite_range(&self, scanline: u16, sprite: &Sprite, size: u8) -> bool {
-        let sprite_y_min = sprite.y as u16;
-        let screen_height = self.config.visible_scanlines;
-        let sprite_y_max = (sprite_y_min + size as u16).min(screen_height);
+        let top = sprite.y as u16 + 1;
+        let bottom = top + size as u16;
 
-        scanline >= sprite_y_min && scanline < sprite_y_max
+        scanline >= top && scanline < bottom
     }
 
     fn get_flip_values(&self, sprite: &Sprite) -> (bool, bool) {
@@ -1307,30 +1333,27 @@ impl Ppu2c02 {
         self.oam.clear_secondary();
         let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
 
+        let mut count = 0usize;
         for i in 0..self.oam.primary.len() {
             let sprite = &self.oam.primary[i];
 
             if self.is_scanline_in_sprite_range(scanline, sprite, sprite_size) {
-                //trace!("sprite: {:?}", sprite);
-                self.oam.secondary[self.oam.sprite_count] = sprite.clone();
+                if count < self.oam.secondary.len() {
+                    self.oam.secondary[count] = *sprite;
 
-                if i == 0 {
-                    self.oam.secondary[self.oam.sprite_count].sprite0 = true;
-                }
+                    if i == 0 {
+                        self.oam.secondary[count].sprite0 = true;
+                    }
 
-                self.oam.sprite_count += 1;
-
-                if self.oam.sprite_count == self.oam.secondary.len() {
-                    break
+                    count += 1;
+                } else {
+                    self.set_flag(Status(SpriteOverflow), true);
+                    break;
                 }
             }
         }
 
-        //trace!("evaluated {} sprites for next scanline ({} -> {})", self.oam.sprite_count, scanline, scanline + 1);
-        Ok(())
-    }
-
-    fn do_pre_fetch(&mut self, _scanline: u16) -> Result<(), PpuError> {
+        self.oam.sprite_count = count;
         Ok(())
     }
 
@@ -1367,8 +1390,8 @@ impl Ppu2c02 {
             let sprite = &self.oam.secondary[i];
             let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
 
-            let pixel_pos_y = scanline as u8 - (sprite.y + 1);
-            let width = if PIXEL_X_MAX - sprite.x > SPRITE_WIDTH { SPRITE_WIDTH as usize } else { (PIXEL_X_MAX - sprite.x) as usize };
+            let pixel_pos_y = (scanline).wrapping_sub(sprite.y as u16 + 1) as u8;
+            let width = (SPRITE_WIDTH as u16).min((PIXEL_X_MAX as u16).saturating_sub(sprite.x as u16) + 1) as usize;
 
             let (tile, tile_offset) = self.get_tile_by_sprite_definition(sprite, is_sprite_8x16, pixel_pos_y, sprite_pattern_table_addr)?;
 
@@ -1452,6 +1475,7 @@ impl Ppu2c02 {
                 if self.get_flag(Mask(ShowBackground)) || self.get_flag(Mask(ShowSprites)) {
                     self.put_horizontal_t_into_v();
                     self.put_vertical_t_into_v();
+                    self.do_sprite_evaluation(0)?;
                 }
             },
 
@@ -1469,8 +1493,7 @@ impl Ppu2c02 {
                 }
 
                 if show_background || show_sprites {
-                    self.do_sprite_evaluation(scanline)?;
-                    self.do_pre_fetch(scanline)?;
+                    self.do_sprite_evaluation(scanline + 1)?;
                     self.put_horizontal_t_into_v();
                 } else {
                     self.oam.clear_secondary();

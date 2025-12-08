@@ -115,12 +115,12 @@ impl NesConsole {
         credits.max(1)
     }
 
+
     /***
-     * TODO - incorrect : the result here is the number of samples...should be the APU credits in terms of CPU cycles
+     * Give as many credits to the APU than to the PPU
      ***/
     fn compute_apu_credits(&self, config: &ConfigSpec) -> u32 {
-        let credits = (config.apu_sample_rate_hz / config.frame_rate_hz).floor() as u32;
-        credits.max(1)
+        self.compute_ppu_credits(&config)
     }
 
     fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>, config: ConfigSpec) -> NesConsole {
@@ -223,16 +223,11 @@ impl NesConsole {
     }
 
     pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
-        let credits = self.ppu_counter.credits;
         let out_frame: Option<NesFrame>;
         let mut out_samples: NesSamples = NesSamples::default();
 
         loop {
-            self.cpu_counter.current = self.cpu.borrow_mut().run(self.cpu_counter.current, credits - self.cpu_counter.debt)?;
-            self.cpu_counter.debt = (self.cpu_counter.current - self.cpu_counter.previous) - (credits - self.cpu_counter.debt);
-
-            let (frame, samples) = self.catch_up_ppu_and_apu()?;
-            self.cpu_counter.previous = self.cpu_counter.current;
+            let (frame, samples, snapshot) = self.step_instruction()?;
 
             if let Some(s) = samples {
                 out_samples.append(s);

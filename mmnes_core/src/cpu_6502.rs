@@ -60,7 +60,7 @@ enum Operand {
 }
 
 impl Display for Operand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Operand::Byte(val) => write!(f, "byte: 0x{:02X}", val),
             Operand::Address(addr) => write!(f, "word: 0x{:04X}", addr),
@@ -379,6 +379,8 @@ impl CPU for Cpu6502 {
         self.registers.sp = 0xFD;
         self.instructions_executed = 0;
         self.cycles = 0;
+
+        self.interrupt = InterruptMask::default();
         self.set_pc_indirect(RESET_VECTOR)?;
 
         Ok(())
@@ -438,11 +440,11 @@ impl CPU for Cpu6502 {
         }
 
         self.instructions_executed += 1;
-        self.cycles += cycles;
 
-        self.interrupt()?;  // some additional cycles are probably needed here (7?)
+        let interrupt_cycles = self.interrupt()?;
+        self.cycles += cycles + interrupt_cycles;
 
-        Ok(cycles)
+        Ok(cycles + interrupt_cycles)
     }
 
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError> {
@@ -529,15 +531,21 @@ impl Cpu6502 {
         }
     }
 
-    fn interrupt(&mut self) -> Result<(), CpuError> {
-        if self.is_asserted_nmi()? {
-            self.nmi()?;
+    const INTERRUPT_HANDLER_NUM_CYCLES: u32 = 7;
+
+    fn interrupt(&mut self) -> Result<u32, CpuError> {
+        let cycle = if self.is_asserted_nmi()? {
             self.clear_nmi()?;
+            self.nmi()?;
+            Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES
         } else if self.is_asserted_irq()? && !self.registers.get_status(StatusFlag::InterruptDisable) {
             self.irq()?;
-        }
+            Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES
+        } else {
+            0
+        };
 
-        Ok(())
+        Ok(cycle)
     }
 
     fn build_instruction_table() -> Vec<Instruction> {
@@ -853,19 +861,26 @@ impl Cpu6502 {
         (instruction.execute)(instruction, self, operand)
     }
 
-    fn interrupt_preamble(&mut self) -> Result<(), CpuError> {
+    fn interrupt_preamble(&mut self, brk: bool) -> Result<(), CpuError> {
         self.registers.p &= !StatusFlag::BreakCommand.bits();
 
         self.push_stack((self.registers.pc >> 8) as u8)?;
         self.push_stack((self.registers.pc & 0xFF) as u8)?;
-        self.push_stack(self.registers.p)?;
+
+        let status = if brk == true {
+            self.registers.p | StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits()
+        } else {
+            (self.registers.p & !StatusFlag::BreakCommand.bits()) | StatusFlag::Unused.bits()
+        };
+
+        self.push_stack(status)?;
 
         self.registers.set_status(StatusFlag::InterruptDisable, true);
         Ok(())
     }
 
     fn nmi(&mut self) -> Result<(), CpuError> {
-        self.interrupt_preamble()?;
+        self.interrupt_preamble(false)?;
         self.registers.pc = self.bus.borrow().read_word(NMI_VECTOR)?;
         //debug!("CPU: NMI interrupt: program counter: 0x{:04X}", self.registers.pc);
 
@@ -873,7 +888,7 @@ impl Cpu6502 {
     }
 
     fn irq(&mut self) -> Result<(), CpuError> {
-        self.interrupt_preamble()?;
+        self.interrupt_preamble(false)?;
 
         let addr = if self.is_asserted_nmi()? {
             self.clear_nmi()?;
@@ -1062,13 +1077,13 @@ impl Instruction {
     }
 
     fn brk_force_break(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        cpu.registers.p |= StatusFlag::BreakCommand.bits();
-
         let next_pc = cpu.registers.safe_pc_add(2)?;
 
         cpu.push_stack((next_pc >> 8) as u8)?;
         cpu.push_stack((next_pc & 0xFF) as u8)?;
-        cpu.push_stack(cpu.registers.p)?;
+
+        let status = cpu.registers.p | StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits();
+        cpu.push_stack(status)?;
 
         cpu.registers.set_status(StatusFlag::InterruptDisable, true);
 
@@ -1330,17 +1345,6 @@ impl Instruction {
         Ok(0)
     }
 
-    /***
-     * MN-23 status flags is wrong
-     *
-     *   https://www.masswerk.at/6502/6502_instruction_set.html#PHP
-     *
-     *   SR: N V - B D I Z C
-     *       0 0 - - 0 0 1 1
-     *
-     *     PHP  ->  0 0 1 1 0 0 1 1  =  $33
-     *     PLP  <-  0 0 - - 0 0 1 1  =  $03
-     ***/
     fn php_push_processor_status_on_stack(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
         let value = cpu.registers.p | StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits();
         cpu.push_stack(value)?;
@@ -1686,10 +1690,7 @@ impl Instruction {
      *   (pulled low), i.e. either a 'bad line' or sprite DMA starts, in the second half of the cycle
      *   following the opcode fetch. 'For example, it never seems to occur if either the screen is
      *   blanked or C128 2MHz mode is enabled.' For this reason you will have to choose a
-     *   suitable target address based on what kind of values you want to store. 'For $fe00
-     *   there's no problem, since anding with $ff is the same as not anding. And if your values don't
-     *   mind whether they are anded, e.g. if they are all $00-$7f for shy $7e00,x, there is also no
-     *   difference whether the and works or not.'
+     *   suitable target address based on what kind of values you want to store.
      *  - https://hitmen.c02.at/files/docs/c64/NoMoreSecrets-NMOS6510UnintendedOpcodes-20162412.pdf
      ***/
     fn sha_stores_a_and_x_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
