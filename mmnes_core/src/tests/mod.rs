@@ -18,6 +18,7 @@ mod nes_samples;
 mod cartridge;
 mod memory_ciram;
 mod ines_loader;
+mod singlestep;
 
 static START: Once = Once::new();
 

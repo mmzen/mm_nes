@@ -36,7 +36,7 @@ macro_rules! add_instruction {
             };
         }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum OpCode {
     ADC, ALR, ANC, AND, ANE, ARR, ASL, BCC, BCS, BEQ, BIT, BMI, BNE, BPL, BRK, BVC, BVS, CLC, CLD,
     CLI, CLV, CMP, CPX, CPY, DCP, DEC, DEX, DEY, EOR, INC, INX, INY, ISB, JAM, JMP, JSR, LAS, LAX,
@@ -73,7 +73,7 @@ impl Display for Operand {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum AddressingMode {
     Implicit,               // implicit addressing mode
     Accumulator,            // val = A
@@ -271,9 +271,16 @@ impl Cpu6502Snapshot {
             (AddressingMode::Accumulator, _, _) =>
                 "A".to_string(),
 
-            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) |
-            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JSR) =>
+            (AddressingMode::Absolute, Operand::Address(addr), OpCode::JMP) =>
                 format!("${:04X}", *addr),
+
+            // JSR handles operand fetching internally, so we read address for display
+            (AddressingMode::Absolute, Operand::None, OpCode::JSR) => {
+                let pc_plus_1 = registers.safe_pc_add(1)?;
+                let addr = bus.borrow().trace_read_byte(pc_plus_1)? as u16
+                    | ((bus.borrow().trace_read_byte(registers.safe_pc_add(2)?)? as u16) << 8);
+                format!("${:04X}", addr)
+            },
 
             (AddressingMode::Absolute, Operand::Address(addr), _) =>
                 format!("${:04X} = {:02X}", *addr, bus.borrow().trace_read_byte(*addr)?),
@@ -616,14 +623,19 @@ impl Cpu6502 {
     }
 
     fn pop_stack(&mut self) -> Result<u8, CpuError> {
-        let mut addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
-        addr = Cpu6502::stack_wrapping_add(addr, 1);
+        let current_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
 
-        //debug!("CPU: sp (before pop): 0x{:02X}, popping at 0x{:04X}", self.registers.sp, addr);
-        let value = self.bus.borrow().read_byte(addr)?;
-        self.is_valid_stack_addr(addr)?;
+        // Dummy read from current SP location (6502 timing - internal SP increment)
+        let _ = self.bus.borrow().read_byte(current_addr)?;
 
-        self.registers.sp = addr as u8;
+        // Now increment SP and read actual value
+        let new_addr = Cpu6502::stack_wrapping_add(current_addr, 1);
+
+        //debug!("CPU: sp (before pop): 0x{:02X}, popping at 0x{:04X}", self.registers.sp, new_addr);
+        let value = self.bus.borrow().read_byte(new_addr)?;
+        self.is_valid_stack_addr(new_addr)?;
+
+        self.registers.sp = new_addr as u8;
         //debug!("CPU: sp (after pop): 0x{:02X}, popped value {:02X}", self.registers.sp, value);
 
         Ok(value)
@@ -666,6 +678,42 @@ impl Cpu6502 {
         result
     }
 
+    /// SBC operation core - performs subtraction with borrow on the given value
+    /// Used by illegal opcodes that need to SBC without re-reading memory
+    fn sbc_operation(&mut self, value: u8) {
+        let carry = self.registers.get_status(StatusFlag::Carry) as u8;
+        let a = self.registers.a;
+        let (t0, overflow0) = a.overflowing_sub(value);
+        let (t1, overflow1) = t0.overflowing_sub(1 - carry);
+
+        self.registers.a = t1;
+
+        self.registers.set_status(StatusFlag::Carry, !(overflow0 | overflow1));
+        self.registers.set_status(StatusFlag::Zero, self.registers.a == 0);
+        self.registers.set_status(StatusFlag::Negative, self.registers.a & 0x80 != 0);
+
+        let overflow = ((a ^ self.registers.a) & 0x80 != 0) && ((a ^ value) & 0x80 != 0);
+        self.registers.set_status(StatusFlag::Overflow, overflow);
+    }
+
+    /// ADC operation core - performs addition with carry on the given value
+    /// Used by illegal opcodes that need to ADC without re-reading memory
+    fn adc_operation(&mut self, value: u8) {
+        let carry = self.registers.get_status(StatusFlag::Carry) as u8;
+        let a = self.registers.a;
+        let (t0, overflow0) = a.overflowing_add(value);
+        let (t1, overflow1) = t0.overflowing_add(carry);
+
+        self.registers.a = t1;
+
+        self.registers.set_status(StatusFlag::Carry, overflow0 | overflow1);
+        self.registers.set_status(StatusFlag::Zero, self.registers.a == 0);
+        self.registers.set_status(StatusFlag::Negative, self.registers.a & 0x80 != 0);
+
+        let overflow = ((a ^ self.registers.a) & 0x80 != 0) && !((a ^ value) & 0x80 != 0);
+        self.registers.set_status(StatusFlag::Overflow, overflow);
+    }
+
     fn overwrite(&mut self, operand: &Operand, value: u8) -> Result<(), CpuError> {
         match operand {
             Operand::Address(addr) |
@@ -676,6 +724,31 @@ impl Cpu6502 {
 
             Operand::Accumulator => {
                 self.registers.a = value;
+                Ok(())
+            },
+
+            _ => {
+                Err(CpuError::InvalidOperand(format!("{}", operand)))
+            }
+        }
+    }
+
+    /// RMW (Read-Modify-Write) overwrite - writes old value before new value
+    /// This is required for cycle-accurate 6502 emulation as RMW instructions
+    /// perform a dummy write of the old value before writing the new value.
+    fn rmw_overwrite(&mut self, operand: &Operand, old_value: u8, new_value: u8) -> Result<(), CpuError> {
+        match operand {
+            Operand::Address(addr) |
+            Operand::AddressAndEffectiveAddress(_, addr, _) => {
+                // 6502 RMW: write old value (dummy), then write new value
+                self.bus.borrow_mut().write_byte(*addr, old_value)?;
+                self.bus.borrow_mut().write_byte(*addr, new_value)?;
+                Ok(())
+            },
+
+            Operand::Accumulator => {
+                // Accumulator mode doesn't have this behavior
+                self.registers.a = new_value;
                 Ok(())
             },
 
@@ -725,6 +798,56 @@ impl Cpu6502 {
         value
     }
 
+    /// Performs a dummy read for absolute indexed write operations.
+    /// For absolute indexed modes (absx, absy), the 6502 always does a read before the write,
+    /// even when the page boundary is not crossed. When page is crossed, the read
+    /// is from the "wrong" address (base page + indexed low byte).
+    ///
+    /// Note: Zero-page indexed modes already have their dummy read in fetch_operand,
+    /// so we only apply this for absolute indexed and indirect indexed Y modes.
+    fn indexed_write_dummy_read(&self, addr_mode: AddressingMode, operand: &Operand) -> Result<(), CpuError> {
+        // Apply to absolute indexed modes and indirect indexed Y
+        let needs_dummy_read = matches!(addr_mode,
+            AddressingMode::AbsoluteIndexedX | AddressingMode::AbsoluteIndexedY | AddressingMode::IndirectIndexedY);
+
+        if needs_dummy_read {
+            if let Operand::AddressAndEffectiveAddress(base, effective, page_crossed) = operand {
+                // Calculate the dummy read address:
+                // - If page crossed: read from (base_high | effective_low) - the "wrong" address
+                // - If not crossed: read from effective address (still a dummy read)
+                let dummy_addr = if *page_crossed {
+                    (*base & 0xFF00) | (*effective & 0x00FF)
+                } else {
+                    *effective
+                };
+                let _ = self.bus.borrow().read_byte(dummy_addr)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Performs a dummy read for indexed READ operations when page is crossed.
+    /// For indexed read operations (absx, absy, (ind),y), when page boundary IS crossed,
+    /// the 6502 first reads from the "wrong" address before reading from the correct address.
+    /// This only applies when page is crossed (unlike writes which always do the dummy read).
+    fn indexed_read_page_crossed_dummy(&self, addr_mode: AddressingMode, operand: &Operand) -> Result<(), CpuError> {
+        // Apply to absolute indexed modes and indirect indexed Y for reads
+        let is_indexed = matches!(addr_mode,
+            AddressingMode::AbsoluteIndexedX | AddressingMode::AbsoluteIndexedY | AddressingMode::IndirectIndexedY);
+
+        if is_indexed {
+            if let Operand::AddressAndEffectiveAddress(base, effective, page_crossed) = operand {
+                // Only do dummy read when page is crossed
+                if *page_crossed {
+                    // Dummy read from "wrong" address (base_high | effective_low)
+                    let dummy_addr = (*base & 0xFF00) | (*effective & 0x00FF);
+                    let _ = self.bus.borrow().read_byte(dummy_addr)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn is_page_crossed(addr1: u16, addr2: u16) -> bool {
         let page1 = addr1 & 0xFF00;
         let page2 = addr2 & 0xFF00;
@@ -734,6 +857,25 @@ impl Cpu6502 {
 
     fn get_cycles_by_page_crossing_for_conditional_jump(&self, source: u16, destination: u16) -> u32 {
         if Cpu6502::is_page_crossed(source, destination) { 2 } else { 1 }
+    }
+
+    /// Perform cycle-accurate bus reads for taken branch instructions.
+    /// When a branch is taken:
+    /// - Cycle 3: Dummy read of next opcode byte (at PC after branch instruction)
+    /// - Cycle 4 (if page crossed): Dummy read from wrong address
+    fn branch_taken_dummy_reads(&self, source_pc: u16, dest_addr: u16) -> Result<(), CpuError> {
+        // Cycle 3: Always read from the address after the branch instruction
+        // (This would have been the next opcode if branch wasn't taken)
+        let _ = self.bus.borrow().read_byte(source_pc)?;
+
+        // Cycle 4: If page crossed, read from wrong address
+        // The wrong address is: same page as source, but low byte from destination
+        if Cpu6502::is_page_crossed(source_pc, dest_addr) {
+            let wrong_addr = (source_pc & 0xFF00) | (dest_addr & 0x00FF);
+            let _ = self.bus.borrow().read_byte(wrong_addr)?;
+        }
+
+        Ok(())
     }
 
     fn get_cycles_by_page_crossing_for_load(&self, operand: &Operand) -> u32 {
@@ -759,10 +901,14 @@ impl Cpu6502 {
 
         let operand = match instruction.addressing_mode {
             AddressingMode::Implicit => {
+                // Dummy read of next byte (6502 always reads on every cycle)
+                let _ = bus.borrow().read_byte(registers.safe_pc_add(1)?)?;
                 Operand::None
             },
 
             AddressingMode::Accumulator => {
+                // Dummy read of next byte (6502 always reads on every cycle)
+                let _ = bus.borrow().read_byte(registers.safe_pc_add(1)?)?;
                 Operand::Accumulator
             },
 
@@ -773,10 +919,15 @@ impl Cpu6502 {
             },
 
             AddressingMode::Absolute => {
-                let pc = registers.safe_pc_add(1)?;
-                let addr = bus.borrow().read_word(pc)?;
-
-                Operand::Address(addr)
+                // JSR handles its own operand fetching with special cycle timing
+                // (ADL read, stack operations, then ADH read)
+                if instruction.opcode == OpCode::JSR {
+                    Operand::None
+                } else {
+                    let pc = registers.safe_pc_add(1)?;
+                    let addr = bus.borrow().read_word(pc)?;
+                    Operand::Address(addr)
+                }
             },
 
             AddressingMode::AbsoluteIndexedX => {
@@ -807,6 +958,8 @@ impl Cpu6502 {
             AddressingMode::ZeroPageIndexedX => {
                 let pc = registers.safe_pc_add(1)?;
                 let addr = bus.borrow().read_byte(pc)?;
+                // Dummy read from base address before adding index (6502 timing)
+                let _ = bus.borrow().read_byte(addr as u16)?;
                 let effective_addr = addr.wrapping_add(registers.x) as u16;
 
                 Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, false)
@@ -815,6 +968,8 @@ impl Cpu6502 {
             AddressingMode::ZeroPageIndexedY => {
                 let pc = registers.safe_pc_add(1)?;
                 let addr = bus.borrow().read_byte(pc)?;
+                // Dummy read from base address before adding index (6502 timing)
+                let _ = bus.borrow().read_byte(addr as u16)?;
                 let effective_addr = addr.wrapping_add(registers.y) as u16;
                 let page_crossed = Cpu6502::is_page_crossed(addr as u16, effective_addr);
 
@@ -832,6 +987,8 @@ impl Cpu6502 {
             AddressingMode::IndirectIndexedX => {
                 let pc = registers.safe_pc_add(1)?;
                 let addr = bus.borrow().read_byte(pc)?;
+                // Dummy read from base address before adding X (6502 timing)
+                let _ = bus.borrow().read_byte(addr as u16)?;
                 let indirect_addr = addr.wrapping_add(registers.x);
                 let effective_addr = Cpu6502::read_word_with_page_wrap(indirect_addr as u16, bus)?;
 
@@ -845,7 +1002,8 @@ impl Cpu6502 {
                 let effective_addr = indirect_addr.wrapping_add(registers.y as u16);
                 let page_crossed = Cpu6502::is_page_crossed(indirect_addr, effective_addr);
 
-                Operand::AddressAndEffectiveAddress(addr as u16, effective_addr, page_crossed)
+                // Store indirect_addr as base (needed for correct dummy read calculation in writes)
+                Operand::AddressAndEffectiveAddress(indirect_addr, effective_addr, page_crossed)
             },
 
             AddressingMode::Relative => {
@@ -1037,6 +1195,16 @@ impl Cpu6502 {
         self.pending_nmi = false;
         self.nmi_line_low = false;
     }
+
+    #[cfg(test)]
+    pub fn set_state_for_test(&mut self, pc: u16, sp: u8, a: u8, x: u8, y: u8, p: u8) {
+        self.registers.pc = pc;
+        self.registers.sp = sp;
+        self.registers.a = a;
+        self.registers.x = x;
+        self.registers.y = y;
+        self.registers.p = p;
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1052,6 +1220,7 @@ struct Instruction {
 impl Instruction {
 
     fn adc_add_memory_to_accumulator_with_carry(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let carry = cpu.registers.get_status(StatusFlag::Carry) as u8;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
@@ -1073,6 +1242,7 @@ impl Instruction {
     }
 
     fn and_and_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1085,11 +1255,13 @@ impl Instruction {
     }
 
     fn asl_shift_left_one_bit(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For absolute indexed RMW, dummy read from wrong/effective address before value read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let result = cpu.shift_left_and_update_carry_flags(value);
 
         cpu.update_flags_zero_negative(result);
-        cpu.overwrite(operand, result)?;
+        cpu.rmw_overwrite(operand, value, result)?;
 
         Ok(0)
     }
@@ -1097,7 +1269,11 @@ impl Instruction {
     fn bcc_branch_on_carry_clear(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Carry) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1111,7 +1287,11 @@ impl Instruction {
     fn bcs_branch_on_carry_set(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Carry) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1134,7 +1314,11 @@ impl Instruction {
     fn beq_branch_on_result_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Zero) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1160,7 +1344,11 @@ impl Instruction {
     fn bmi_branch_on_result_minus(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Negative) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1174,7 +1362,11 @@ impl Instruction {
     fn bne_branch_on_result_not_zero(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Zero) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1188,7 +1380,11 @@ impl Instruction {
     fn bpl_branch_on_result_plus(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Negative) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1209,7 +1405,11 @@ impl Instruction {
     fn bvc_branch_on_overflow_clear(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if !cpu.registers.get_status(StatusFlag::Overflow) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1223,7 +1423,11 @@ impl Instruction {
     fn bvs_branch_on_overflow_set(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
         if cpu.registers.get_status(StatusFlag::Overflow) {
             let addr = cpu.get_operand_word_value(operand)?;
-            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(cpu.registers.safe_pc_add(self.bytes as i16)?, addr);
+            let source_pc = cpu.registers.safe_pc_add(self.bytes as i16)?;
+            let cycles = cpu.get_cycles_by_page_crossing_for_conditional_jump(source_pc, addr);
+
+            // Cycle-accurate dummy reads for taken branch
+            cpu.branch_taken_dummy_reads(source_pc, addr)?;
 
             //debug!("CPU: branching to address {:04X}", addr);
             cpu.registers.set_pc(addr);
@@ -1255,6 +1459,7 @@ impl Instruction {
     }
 
     fn cmp_compare_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1292,11 +1497,13 @@ impl Instruction {
     }
 
     fn dec_decrement_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For absolute indexed RMW, dummy read from wrong/effective address before value read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let result = value.wrapping_sub(1);
 
         cpu.update_flags_zero_negative(result);
-        cpu.overwrite(operand, result)?;
+        cpu.rmw_overwrite(operand, value, result)?;
 
         Ok(0)
     }
@@ -1320,6 +1527,7 @@ impl Instruction {
     }
 
     fn eor_exclusive_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1332,11 +1540,13 @@ impl Instruction {
     }
 
     fn inc_increment_memory_by_one(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For absolute indexed RMW, dummy read from wrong/effective address before value read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let result = value.wrapping_add(1);
 
         cpu.update_flags_zero_negative(result);
-        cpu.overwrite(operand, result)?;
+        cpu.rmw_overwrite(operand, value, result)?;
 
         Ok(0)
     }
@@ -1368,20 +1578,50 @@ impl Instruction {
         Ok(0)
     }
 
-    fn jsr_jump_to_new_location_saving_return_address(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        let addr = cpu.get_operand_word_value(operand)?;
-        let pc = cpu.registers.safe_pc_add(2)?;
 
-        cpu.push_stack((pc >> 8) as u8)?;
-        cpu.push_stack(pc as u8)?;
+    fn jsr_jump_to_new_location_saving_return_address(&self, cpu: &mut Cpu6502, _operand: &Operand) -> Result<u32, CpuError> {
+        // JSR has a unique cycle sequence that differs from normal absolute addressing:
+        // Cycle 1: Fetch opcode (already done)
+        // Cycle 2: Fetch ADL (low byte of target address)
+        // Cycle 3: Dummy read from stack location (internal operation)
+        // Cycle 4: Push PCH
+        // Cycle 5: Push PCL
+        // Cycle 6: Fetch ADH (high byte of target address)
+        //
+        // Note: The operand was pre-fetched with both bytes read together,
+        // so we ignore it and re-read the bytes in the correct order.
+        // The duplicate reads don't affect correctness, just cycle tracing.
 
-        cpu.registers.set_pc(addr);
+        let pc_plus_1 = cpu.registers.safe_pc_add(1)?;
+        let pc_plus_2 = cpu.registers.safe_pc_add(2)?;
+
+        // Cycle 2: Already done in fetch_operand, re-read ADL for proper ordering
+        // (This read is "wasted" but needed for cycle-accurate bus tracing)
+        let adl = cpu.bus.borrow().read_byte(pc_plus_1)?;
+
+        // Cycle 3: Dummy read from current stack location
+        let stack_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let _ = cpu.bus.borrow().read_byte(stack_addr)?;
+
+        // Cycle 4: Push PCH (return address high byte)
+        cpu.push_stack((pc_plus_2 >> 8) as u8)?;
+
+        // Cycle 5: Push PCL (return address low byte)
+        cpu.push_stack(pc_plus_2 as u8)?;
+
+        // Cycle 6: Fetch ADH (high byte of target)
+        let adh = cpu.bus.borrow().read_byte(pc_plus_2)?;
+
+        // Set PC to target address
+        let target_addr = (adh as u16) << 8 | adl as u16;
+        cpu.registers.set_pc(target_addr);
 
         Ok(0)
     }
 
 
     fn lda_load_accumulator_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1394,6 +1634,7 @@ impl Instruction {
     }
 
     fn ldx_load_index_x_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1406,6 +1647,7 @@ impl Instruction {
     }
 
     fn ldy_load_index_y_with_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1418,21 +1660,37 @@ impl Instruction {
     }
 
     fn lsr_shift_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For absolute indexed RMW, dummy read from wrong/effective address before value read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let result = cpu.shift_right_and_update_carry_flags(value);
 
         cpu.update_flags_zero_negative(result);
-        cpu.overwrite(operand, result)?;
+        cpu.rmw_overwrite(operand, value, result)?;
 
         Ok(0)
     }
 
     fn nop_no_operation(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For non-implicit modes, NOP reads from the address (and discards result)
+        // Indexed modes need dummy read on page crossing
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
+
+        // Read from operand address (discarded, but needed for bus cycle accuracy)
+        match operand {
+            Operand::Address(_) | Operand::AddressAndEffectiveAddress(_, _, _) => {
+                let _ = cpu.get_operand_byte_value(operand)?;
+            },
+            _ => {}
+        }
+
         let cycle = cpu.get_cycles_by_page_crossing_for_load(operand);
         Ok(cycle)
     }
 
     fn ora_or_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // Dummy read from wrong address when page crossed (indexed modes)
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
@@ -1486,11 +1744,13 @@ impl Instruction {
     }
 
     fn rol_rotate_one_bit_left(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For absolute indexed RMW, dummy read from wrong/effective address before value read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x01 } else { 0 };
         let result = (value << 1) | carry_in;
 
-        cpu.overwrite(operand, result)?;
+        cpu.rmw_overwrite(operand, value, result)?;
 
         cpu.registers.set_status(StatusFlag::Carry, value & 0x80 != 0);
         cpu.registers.set_status(StatusFlag::Zero, result == 0);
@@ -1500,11 +1760,13 @@ impl Instruction {
     }
 
     fn ror_rotate_one_bit_right(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // For absolute indexed RMW, dummy read from wrong/effective address before value read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
         let result = (value >> 1) | carry_in;
 
-        cpu.overwrite(operand, result)?;
+        cpu.rmw_overwrite(operand, value, result)?;
 
         cpu.registers.set_status(StatusFlag::Carry, value & 0x01 != 0);
         cpu.registers.set_status(StatusFlag::Zero, result == 0);
@@ -1513,43 +1775,91 @@ impl Instruction {
         Ok(0)
     }
 
-    fn rti_return_from_interrupt(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        let status = cpu.pop_stack()?;
 
+    fn rti_return_from_interrupt(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
+        // RTI cycle sequence:
+        // Cycle 1: Fetch opcode (already done)
+        // Cycle 2: Dummy read of next byte (done by fetch_operand for Implicit mode)
+        // Cycle 3: Dummy read from stack location (SP)
+        // Cycle 4: Increment SP, read P (status) from stack
+        // Cycle 5: Increment SP, read PCL from stack
+        // Cycle 6: Increment SP, read PCH from stack
+
+        // Cycle 3: Dummy read from current stack location
+        let stack_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let _ = cpu.bus.borrow().read_byte(stack_addr)?;
+
+        // Cycle 4: Increment SP and read status
+        cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
+        let status_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let status = cpu.bus.borrow().read_byte(status_addr)?;
+
+        // Cycle 5: Increment SP and read PCL
+        cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
+        let pcl_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let pcl = cpu.bus.borrow().read_byte(pcl_addr)?;
+
+        // Cycle 6: Increment SP and read PCH
+        cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
+        let pch_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let pch = cpu.bus.borrow().read_byte(pch_addr)?;
+
+        // Handle I flag changes with delay
         let new_i_flag = (status & StatusFlag::InterruptDisable.bits()) != 0;
         let old_i_flag = cpu.registers.get_status(StatusFlag::InterruptDisable);
 
-        cpu.registers.p = (status & 0xCB) | 0x20;
+        // Restore P: ignore bit 4 (B flag, doesn't exist in CPU), keep bit 5 always set
+        // Mask: clear bit 4, set bit 5
+        cpu.registers.p = (status & 0xEF) | 0x20;
 
         if new_i_flag != old_i_flag {
             cpu.pending_i_flag = Some(new_i_flag);
         }
 
-        let pcl = cpu.pop_stack()?;
-        let pch = cpu.pop_stack()?;
-
-        let addr = (pch as u16) << 8 | pcl as u16;
-
-
-        cpu.registers.set_pc(addr);
+        // Set PC to return address
+        let return_addr = (pch as u16) << 8 | pcl as u16;
+        cpu.registers.set_pc(return_addr);
 
         Ok(0)
     }
 
     fn rts_return_from_subroutine(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        let pcl = cpu.pop_stack()?;
-        let pch = cpu.pop_stack()?;
+        // RTS cycle sequence:
+        // Cycle 1: Fetch opcode (already done)
+        // Cycle 2: Dummy read of next byte (done by fetch_operand for Implicit mode)
+        // Cycle 3: Dummy read from stack location (SP)
+        // Cycle 4: Increment SP, read PCL from stack
+        // Cycle 5: Increment SP, read PCH from stack
+        // Cycle 6: Dummy read from new PC (to increment returned address)
 
-        let mut addr = (pch as u16) << 8 | pcl as u16;
-        cpu.registers.set_pc(addr);
+        // Cycle 3: Dummy read from current stack location
+        let stack_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let _ = cpu.bus.borrow().read_byte(stack_addr)?;
 
-        addr = cpu.registers.safe_pc_add(1)?;
-        cpu.registers.set_pc(addr);
+        // Cycle 4: Increment SP and read PCL
+        cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
+        let pcl_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let pcl = cpu.bus.borrow().read_byte(pcl_addr)?;
+
+        // Cycle 5: Increment SP and read PCH
+        cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
+        let pch_addr = STACK_BASE_ADDRESS + cpu.registers.sp as u16;
+        let pch = cpu.bus.borrow().read_byte(pch_addr)?;
+
+        // Construct return address (points to last byte of JSR instruction)
+        let return_addr = (pch as u16) << 8 | pcl as u16;
+
+        // Cycle 6: Dummy read from return address (while incrementing PC)
+        let _ = cpu.bus.borrow().read_byte(return_addr)?;
+
+        // Set PC to return address + 1 (address after JSR instruction)
+        cpu.registers.set_pc(return_addr.wrapping_add(1));
 
         Ok(0)
     }
 
     fn sbc_subtract_memory_from_accumulator_with_borrow(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
         let value = cpu.get_operand_byte_value(operand)?;
         let carry = cpu.registers.get_status(StatusFlag::Carry) as u8;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
@@ -1586,6 +1896,8 @@ impl Instruction {
     }
 
     fn sta_store_accumulator_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let addr = cpu.get_operand_word_value(operand)?;
 
         cpu.bus.borrow_mut().write_byte(addr, cpu.registers.a)?;
@@ -1594,6 +1906,8 @@ impl Instruction {
     }
 
     fn stx_store_index_x_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let addr = cpu.get_operand_word_value(operand)?;
 
         cpu.bus.borrow_mut().write_byte(addr, cpu.registers.x)?;
@@ -1602,6 +1916,8 @@ impl Instruction {
     }
 
     fn sty_store_index_y_in_memory(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let addr = cpu.get_operand_word_value(operand)?;
 
         cpu.bus.borrow_mut().write_byte(addr, cpu.registers.y)?;
@@ -1684,8 +2000,10 @@ impl Instruction {
     }
 
     fn ane_or_x_plus_and_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // ANE/XAA: A = (A | magic) & X & operand
+        // Magic constant is CPU-specific. Using 0xEE based on common behavior
         let value = cpu.get_operand_byte_value(operand)?;
-        let result = 0xFF & cpu.registers.x & value;
+        let result = (cpu.registers.a | 0xEE) & cpu.registers.x & value;
 
         cpu.registers.a = result;
 
@@ -1716,8 +2034,17 @@ impl Instruction {
     }
 
     fn dcp_dec_oper_plus_cmp_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.dec_decrement_memory_by_one(cpu, operand)?;
-        self.cmp_compare_memory_with_accumulator(cpu, operand)?;
+        // DCP = DEC + CMP (without extra read for CMP)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let result = value.wrapping_sub(1);
+        cpu.rmw_overwrite(operand, value, result)?;
+
+        // CMP with the decremented result (no additional bus read)
+        let diff = cpu.registers.a.wrapping_sub(result);
+        cpu.registers.set_status(StatusFlag::Zero, diff == 0);
+        cpu.registers.set_status(StatusFlag::Negative, diff & 0x80 != 0);
+        cpu.registers.set_status(StatusFlag::Carry, cpu.registers.a >= result);
         Ok(0)
     }
 
@@ -1726,52 +2053,125 @@ impl Instruction {
     }
 
     fn isc_inc_oper_plus_sbc_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.inc_increment_memory_by_one(cpu, operand)?;
-        self.sbc_subtract_memory_from_accumulator_with_borrow(cpu, operand)?;
+        // ISC = INC + SBC (without extra read for SBC)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let result = value.wrapping_add(1);
+        cpu.rmw_overwrite(operand, value, result)?;
+
+        // SBC with the incremented result (no additional bus read)
+        cpu.sbc_operation(result);
         Ok(0)
     }
 
     fn jam_freeze_the_cpu(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        Err(CpuError::Halted(cpu.registers.pc))
-    }
+        // JAM/KIL/HLT freezes the CPU but does specific bus activity:
+        // Cycle 1: Fetch opcode (already done)
+        // Cycle 2: Fetch operand (dummy read, done by Implicit mode)
+        // Cycles 3-11: Read from interrupt vector area in specific pattern
+        //   3: Read $FFFF
+        //   4: Read $FFFE
+        //   5: Read $FFFE
+        //   6-11: Read $FFFF (6 times)
 
-    fn las_lda_tsx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.lda_load_accumulator_with_memory(cpu, operand)?;
-        self.tsx_transfer_stack_pointer_to_index_x(cpu, operand)?;
+        // Read $FFFF
+        let _ = cpu.bus.borrow().read_byte(0xFFFF)?;
+        // Read $FFFE
+        let _ = cpu.bus.borrow().read_byte(0xFFFE)?;
+        // Read $FFFE again
+        let _ = cpu.bus.borrow().read_byte(0xFFFE)?;
+        // Read $FFFF 6 more times
+        for _ in 0..6 {
+            let _ = cpu.bus.borrow().read_byte(0xFFFF)?;
+        }
 
+        // PC is already advanced by instruction.bytes (1) by step_instruction
         Ok(0)
     }
 
+    fn las_lda_tsx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // LAS (0xBB): A = X = S = (memory & SP)
+        // Uses absolute,Y addressing
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+
+        // AND memory with stack pointer, store in A, X, and S
+        let result = value & cpu.registers.sp;
+        cpu.registers.a = result;
+        cpu.registers.x = result;
+        cpu.registers.sp = result;
+
+        // Set flags based on result
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
+
+        Ok(cpu.get_cycles_by_page_crossing_for_load(operand))
+    }
+
     fn lax_lda_oper_plus_ldx_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // LAX = LDA + LDX (but only one memory read)
+        cpu.indexed_read_page_crossed_dummy(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
         let cycles = cpu.get_cycles_by_page_crossing_for_load(operand);
 
-        self.lda_load_accumulator_with_memory(cpu, operand)?;
-        self.ldx_load_index_x_with_memory(cpu, operand)?;
+        // Load both A and X with the same value
+        cpu.registers.a = value;
+        cpu.registers.x = value;
+
+        cpu.registers.set_status(StatusFlag::Zero, value == 0);
+        cpu.registers.set_status(StatusFlag::Negative, value & 0x80 != 0);
 
         Ok(cycles)
     }
 
     fn lxa_store_and_oper_in_a_and_x(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.lax_lda_oper_plus_ldx_oper(cpu, operand)?;
+        // LXA/LAX imm/ATX: A = X = (A | magic) & operand
+        // Uses same magic constant as ANE (0xEE)
+        let value = cpu.get_operand_byte_value(operand)?;
+        let result = (cpu.registers.a | 0xEE) & value;
+
+        cpu.registers.a = result;
+        cpu.registers.x = result;
+
+        cpu.registers.set_status(StatusFlag::Zero, result == 0);
+        cpu.registers.set_status(StatusFlag::Negative, result & 0x80 != 0);
 
         Ok(0)
     }
 
     fn rla_rol_oper_plus_and_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.rol_rotate_one_bit_left(cpu, operand)?;
-        self.and_and_memory_with_accumulator(cpu, operand)?;
+        // RLA = ROL + AND (without extra read for AND)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x01 } else { 0 };
+        let result = (value << 1) | carry_in;
+        cpu.registers.set_status(StatusFlag::Carry, value & 0x80 != 0);
+        cpu.rmw_overwrite(operand, value, result)?;
 
+        // AND with the rotated result (no additional bus read)
+        cpu.registers.a = cpu.registers.a & result;
+        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
         Ok(0)
     }
 
     fn rra_ror_oper_plus_adc_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.ror_rotate_one_bit_right(cpu, operand)?;
-        self.adc_add_memory_to_accumulator_with_carry(cpu, operand)?;
+        // RRA = ROR + ADC (without extra read for ADC)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let carry_in = if cpu.registers.get_status(StatusFlag::Carry) { 0x80 } else { 0 };
+        let result = (value >> 1) | carry_in;
+        cpu.registers.set_status(StatusFlag::Carry, value & 0x01 != 0);
+        cpu.rmw_overwrite(operand, value, result)?;
 
+        // ADC with the rotated result (no additional bus read)
+        cpu.adc_operation(result);
         Ok(0)
     }
 
     fn sax_axs_aax(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
         let addr = cpu.get_operand_word_value(operand)?;
         let result = cpu.registers.a & cpu.registers.x;
 
@@ -1806,54 +2206,109 @@ impl Instruction {
      *  - https://hitmen.c02.at/files/docs/c64/NoMoreSecrets-NMOS6510UnintendedOpcodes-20162412.pdf
      ***/
     fn sha_stores_a_and_x_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
 
-        let (addr, page_crossed) = match (self.addressing_mode, operand) {
-            (_, Operand::AddressAndEffectiveAddress(_, effective_addr, page_crossed)) => (effective_addr, *page_crossed),
-            (_, Operand::Address(addr)) => (addr, false),
+        // SHA stores A & X & (H+1) where H is high byte of BASE address (not effective)
+        let (base_addr, effective_addr, page_crossed) = match operand {
+            Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+            Operand::Address(addr) => (*addr, *addr, false),
             _ => { unreachable!() }
         };
-        let hi = (*addr >> 8) as u8;
 
-        if page_crossed == true {
-            let hi_unstable = hi & cpu.registers.x;
-            let target = (*addr & 0x00FF) | ((hi_unstable as u16) << 8);
-            let value = cpu.registers.a & (cpu.registers.x | 0xF5) & hi;
+        // H is the high byte of the base address
+        let h = (base_addr >> 8) as u8;
+        let value = cpu.registers.a & cpu.registers.x & h.wrapping_add(1);
+
+        if page_crossed {
+            // When page crossed, address gets corrupted: low byte from effective, high byte from value
+            let target = (effective_addr & 0x00FF) | ((value as u16) << 8);
             cpu.bus.borrow_mut().write_byte(target, value)?;
         } else {
-            let value = cpu.registers.a & cpu.registers.x & hi.wrapping_add(1);
-            cpu.bus.borrow_mut().write_byte(*addr, value)?;
+            cpu.bus.borrow_mut().write_byte(effective_addr, value)?;
         };
 
         Ok(0)
     }
 
     fn shx_stores_x_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        let addr = cpu.get_operand_word_value(operand)?;
-        let strange_h1 = ((addr >> 8) as u8).wrapping_add(1);
-        let result = cpu.registers.x & strange_h1;
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
 
-        cpu.bus.borrow_mut().write_byte(addr, result)?;
+        // SHX stores X & (H+1) where H is high byte of BASE address (not effective)
+        let (base_addr, effective_addr, page_crossed) = match operand {
+            Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+            Operand::Address(addr) => (*addr, *addr, false),
+            _ => { unreachable!() }
+        };
+
+        // H is the high byte of the base address
+        let h = (base_addr >> 8) as u8;
+        let value = cpu.registers.x & h.wrapping_add(1);
+
+        if page_crossed {
+            // When page crossed, address gets corrupted: low byte from effective, high byte from value
+            let target = (effective_addr & 0x00FF) | ((value as u16) << 8);
+            cpu.bus.borrow_mut().write_byte(target, value)?;
+        } else {
+            cpu.bus.borrow_mut().write_byte(effective_addr, value)?;
+        };
+
         Ok(0)
     }
 
     fn shy_stores_y_and_at_addr(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        let addr = cpu.get_operand_word_value(operand)?;
-        let strange_h1 = ((addr >> 8) as u8).wrapping_add(1);
-        let result = cpu.registers.y & strange_h1;
+        // Dummy read for absolute indexed modes (6502 always reads before writing on indexed stores)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
 
-        cpu.bus.borrow_mut().write_byte(addr, result)?;
+        // SHY stores Y & (H+1) where H is high byte of BASE address (not effective)
+        let (base_addr, effective_addr, page_crossed) = match operand {
+            Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+            Operand::Address(addr) => (*addr, *addr, false),
+            _ => { unreachable!() }
+        };
+
+        // H is the high byte of the base address
+        let h = (base_addr >> 8) as u8;
+        let value = cpu.registers.y & h.wrapping_add(1);
+
+        if page_crossed {
+            // When page crossed, address gets corrupted: low byte from effective, high byte from value
+            let target = (effective_addr & 0x00FF) | ((value as u16) << 8);
+            cpu.bus.borrow_mut().write_byte(target, value)?;
+        } else {
+            cpu.bus.borrow_mut().write_byte(effective_addr, value)?;
+        };
+
         Ok(0)
     }
 
     fn slo_asl_oper_plus_ora_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.asl_shift_left_one_bit(cpu, operand)?;
-        self.ora_or_memory_with_accumulator(cpu, operand)?;
+        // SLO = ASL + ORA (without extra read for ORA)
+        // Indexed modes need dummy read
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let shifted = cpu.shift_left_and_update_carry_flags(value);
+        cpu.rmw_overwrite(operand, value, shifted)?;
+
+        // ORA with the shifted result (no additional bus read)
+        cpu.registers.a = cpu.registers.a | shifted;
+        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
         Ok(0)
     }
 
     fn sre_lsr_oper_plus_eor_oper(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        self.lsr_shift_one_bit_right(cpu, operand)?;
-        self.eor_exclusive_or_memory_with_accumulator(cpu, operand)?;
+        // SRE = LSR + EOR (without extra read for EOR)
+        cpu.indexed_write_dummy_read(self.addressing_mode, operand)?;
+        let value = cpu.get_operand_byte_value(operand)?;
+        let shifted = cpu.shift_right_and_update_carry_flags(value);
+        cpu.rmw_overwrite(operand, value, shifted)?;
+
+        // EOR with the shifted result (no additional bus read)
+        cpu.registers.a = cpu.registers.a ^ shifted;
+        cpu.registers.set_status(StatusFlag::Zero, cpu.registers.a == 0);
+        cpu.registers.set_status(StatusFlag::Negative, cpu.registers.a & 0x80 != 0);
         Ok(0)
     }
 

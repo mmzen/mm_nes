@@ -2443,6 +2443,8 @@ dependencies = [
  "log",
  "mockall",
  "once_cell",
+ "serde",
+ "serde_json",
  "simplelog",
  "tempfile",
 ]

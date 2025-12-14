@@ -1,7 +1,7 @@
 image: rust:latest
 
 options:
-  max-time: 6
+  max-time: 15
 
 pipelines:
   default:
@@ -15,6 +15,7 @@ pipelines:
           - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev
           - cargo build --verbose
           - cargo test --verbose
+          - cargo test test_all_opcodes -- --ignored --nocapture
     - step:
         name: Mirror to GitHub
         script:
