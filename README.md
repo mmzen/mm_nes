@@ -6,7 +6,7 @@ It’s not trying to beat the fastest or most accurate emulators; the goal is to
 > ⚠️ Experimental • Unstable API • For personal use
 
 
-![mm_nes screenshot](docs/mmnes_screenshot7.png)
+![mm_nes screenshot](docs/mmnes_screenshot8.png)
 
 ## Disclaimer
 
@@ -51,6 +51,7 @@ By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, s
 ---
 
 ## NES Accuracy
+### AccuracyCoin
 
 We track emulator correctness with **AccuracyCoin**, a very cool single-ROM test suite for NES  (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).  
 _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
@@ -58,6 +59,12 @@ _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 **Current score:** `74 / 131`
 
 ![AccuracyCoin results on mm_nes](docs/accuracy_coin_result.png)
+
+### SingleStepTests
+
+But also with the SingleStepTests test suite.
+The emulator currently passes all tests:   
+```TOTAL: 2560000 passed, 0 failed```
 
 ## Completeness
 

@@ -945,6 +945,20 @@ impl Ppu2c02 {
         Ok(pattern_data)
     }
 
+    /// Fetch only a single line of pattern data - used for MMC2/MMC4 compatibility
+    /// where reading all 8 lines at once would trigger latch incorrectly
+    fn fetch_single_line_pattern_data_from_bus(&self, tile_index: u8, pattern_table_addr: u16, line: u8, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
+        let base_addr = pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16);
+        let mut pattern_data0 = self.bus.read_byte(base_addr + line as u16)?;
+        let mut pattern_data1 = self.bus.read_byte(base_addr + line as u16 + (PATTERN_DATA_SIZE as u16 / 2))?;
+
+        if flip_horizontal {
+            self.flip_horizontal(&mut pattern_data0, &mut pattern_data1);
+        }
+
+        Ok(self.merge_bit_planes(&mut pattern_data0, &mut pattern_data1))
+    }
+
     fn fetch_line_pattern_data(&self, tile: &Tile, line: u8, offset_x: u8, size: usize) -> Vec<u8> {
         let a = (line * 8) as usize + offset_x as usize;
         let b = a + size;
@@ -1339,10 +1353,18 @@ impl Ppu2c02 {
             (sprite.tile_index, pattern_table_addr, tile_offset)
         };
 
-        let pattern_data = self.fetch_pattern_data(tile_index, fixed_pattern_table_addr, flip_horizontal)?;
-        let tile = Tile::new(tile_index, colors, vec_to_array::<64>(pattern_data));
+        // Fetch only the single line needed - critical for MMC2/MMC4 latch accuracy
+        // Reading all 8 lines would trigger the latch on line 0's high byte ($xFD8/$xFE8)
+        // even when rendering a different line
+        let line_data = self.fetch_single_line_pattern_data_from_bus(tile_index, fixed_pattern_table_addr, tile_offset, flip_horizontal)?;
 
-        Ok((tile, tile_offset))
+        // Create tile with only the needed line at position 0
+        let mut pattern_data = [0u8; MERGED_PATTERN_DATA_SIZE];
+        pattern_data[0..8].copy_from_slice(&line_data);
+        let tile = Tile::new(tile_index, colors, pattern_data);
+
+        // Return tile_offset as 0 since the line data is at the beginning of pattern_data
+        Ok((tile, 0))
     }
 
     fn do_sprite_evaluation(&mut self, scanline: u16) -> Result<(), PpuError> {
@@ -1394,30 +1416,56 @@ impl Ppu2c02 {
      * https://www.reddit.com/r/EmuDev/comments/x1ol0k/nes_emulator_working_perfectly_except_one/
      */
     fn render_sprites(&mut self, scanline: u16) -> Result<(), PpuError> {
-        let is_sprite_8x16  = self.get_flag(Control(SpriteSize));
-        //let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
+        // Pre-fetched sprite data for MMC2/MMC4 latch compatibility
+        // Pattern data must be fetched in ascending OAM order (0 to N-1) to trigger
+        // latches in the correct order, matching real NES hardware behavior
+        struct SpriteFetchData {
+            tile: Tile,
+            tile_offset: u8,
+            sprite_x: u8,
+            width: usize,
+            sprite0: bool,
+            priority: SpritePriority,
+        }
 
-        //let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
+        let is_sprite_8x16  = self.get_flag(Control(SpriteSize));
+        let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
+
         //trace!("rendering {} sprites for scanline: {}", self.oam.sprite_count, scanline);
 
         self.sprites_pixels_line.clear();
 
-        for i in (0..self.oam.sprite_count).rev() {
+        // Pass 1: Fetch pattern data in ascending order (0 to N-1)
+        // This ensures MMC2/MMC4 latch triggers happen in the correct order
+        let mut fetched_sprites: Vec<SpriteFetchData> = Vec::with_capacity(self.oam.sprite_count);
+
+        for i in 0..self.oam.sprite_count {
             let sprite = &self.oam.secondary[i];
-            let sprite_pattern_table_addr = self.get_sprites_pattern_table_addr();
 
             let pixel_pos_y = (scanline).wrapping_sub(sprite.y as u16 + 1) as u8;
             let width = (SPRITE_WIDTH as u16).min((PIXEL_X_MAX as u16).saturating_sub(sprite.x as u16) + 1) as usize;
 
             let (tile, tile_offset) = self.get_tile_by_sprite_definition(sprite, is_sprite_8x16, pixel_pos_y, sprite_pattern_table_addr)?;
 
-            let sprite0_hit_detect = self.detect_sprite_0_hit(sprite.sprite0);
-            let priority = self.get_sprite_priority(sprite);
+            fetched_sprites.push(SpriteFetchData {
+                tile,
+                tile_offset,
+                sprite_x: sprite.x,
+                width,
+                sprite0: sprite.sprite0,
+                priority: self.get_sprite_priority(sprite),
+            });
+        }
 
-            let line_pattern_data = self.fetch_line_pattern_data(&tile, tile_offset, 0, width);
-            let palette = tile.colors;
+        // Pass 2: Render pixels in descending order (N-1 to 0) for correct priority
+        // Lower OAM index = higher priority, so render low priority sprites first
+        for fetch_data in fetched_sprites.iter().rev() {
+            let sprite0_hit_detect = self.detect_sprite_0_hit(fetch_data.sprite0);
 
-            self.set_pixel(sprite.x, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, priority, sprite0_hit_detect);
+            let line_pattern_data = self.fetch_line_pattern_data(&fetch_data.tile, fetch_data.tile_offset, 0, fetch_data.width);
+            let palette = fetch_data.tile.colors;
+
+            self.set_pixel(fetch_data.sprite_x, scanline as u8, &line_pattern_data, palette, PixelMode::Sprite, fetch_data.priority, sprite0_hit_detect);
         }
 
         Ok(())

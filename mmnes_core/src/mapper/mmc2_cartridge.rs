@@ -111,12 +111,23 @@ impl Mmc2ChrRom {
 
     #[inline]
     fn update_latch_on_read(&self, addr: u16) {
+        let old_latch0 = self.latch0.get();
+        let old_latch1 = self.latch1.get();
+
         match addr {
-            0x0FD8 => if self.latch0.get() != Latch::FD { self.latch0.set(Latch::FD) },
-            0x0FE8 => if self.latch0.get() != Latch::FE { self.latch0.set(Latch::FE) },
-            0x1FD8..=0x1FDF => if self.latch1.get() != Latch::FD { self.latch1.set(Latch::FD) },
-            0x1FE8..=0x1FEF => if self.latch1.get() != Latch::FE { self.latch1.set(Latch::FE) },
+            0x0FD8 => self.latch0.set(Latch::FD),
+            0x0FE8 => self.latch0.set(Latch::FE),
+            0x1FD8..=0x1FDF => self.latch1.set(Latch::FD),
+            0x1FE8..=0x1FEF => self.latch1.set(Latch::FE),
             _ => {}
+        }
+
+        // Debug: log latch changes
+        if self.latch0.get() != old_latch0 {
+            log::trace!("MMC2: latch0 changed from {:?} to {:?} on read of ${:04X}", old_latch0, self.latch0.get(), addr);
+        }
+        if self.latch1.get() != old_latch1 {
+            log::trace!("MMC2: latch1 changed from {:?} to {:?} on read of ${:04X}", old_latch1, self.latch1.get(), addr);
         }
     }
 }
