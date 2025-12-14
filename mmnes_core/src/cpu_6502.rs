@@ -2,7 +2,7 @@ use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{CPU, CpuError, Interruptible};
@@ -327,6 +327,9 @@ pub struct Cpu6502 {
     bus: Rc<RefCell<dyn Bus>>,
     instructions_executed: u64,
     interrupt: InterruptMask,
+    nmi_line_low: bool,
+    pending_nmi: bool,
+    pending_i_flag: Option<bool>,
     cycles: u32,
 }
 
@@ -352,17 +355,20 @@ impl Interruptible for Cpu6502 {
     }
 
     fn signal_nmi(&mut self) -> Result<(), CpuError> {
-        self.interrupt.set(PPU_NMI);
+        if !self.nmi_line_low {
+            self.nmi_line_low = true;
+            self.pending_nmi = true;
+        }
         Ok(())
     }
 
     fn clear_nmi(&mut self) -> Result<(), CpuError> {
-        self.interrupt.unset(PPU_NMI);
+        self.nmi_line_low = false;
         Ok(())
     }
 
     fn is_asserted_nmi(&self) -> Result<bool, CpuError> {
-        Ok(self.interrupt.has_nmi())
+        Ok(self.pending_nmi)
     }
 }
 
@@ -381,6 +387,9 @@ impl CPU for Cpu6502 {
         self.cycles = 0;
 
         self.interrupt = InterruptMask::default();
+        self.nmi_line_low = false;
+        self.pending_nmi = false;
+        self.pending_i_flag = None;
         self.set_pc_indirect(RESET_VECTOR)?;
 
         Ok(())
@@ -440,6 +449,10 @@ impl CPU for Cpu6502 {
         }
 
         self.instructions_executed += 1;
+
+        if let Some(new_i_flag) = self.pending_i_flag.take() {
+            self.registers.set_status(StatusFlag::InterruptDisable, new_i_flag);
+        }
 
         let interrupt_cycles = self.interrupt()?;
         self.cycles += cycles + interrupt_cycles;
@@ -527,6 +540,9 @@ impl Cpu6502 {
             bus,
             instructions_executed: 0,
             interrupt: InterruptMask::default(),
+            nmi_line_low: false,
+            pending_nmi: false,
+            pending_i_flag: None,
             cycles: 0,
         }
     }
@@ -534,8 +550,8 @@ impl Cpu6502 {
     const INTERRUPT_HANDLER_NUM_CYCLES: u32 = 7;
 
     fn interrupt(&mut self) -> Result<u32, CpuError> {
-        let cycle = if self.is_asserted_nmi()? {
-            self.clear_nmi()?;
+        let cycle = if self.pending_nmi {
+            self.pending_nmi = false;
             self.nmi()?;
             Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES
         } else if self.is_asserted_irq()? && !self.registers.get_status(StatusFlag::InterruptDisable) {
@@ -861,47 +877,43 @@ impl Cpu6502 {
         (instruction.execute)(instruction, self, operand)
     }
 
-    fn interrupt_preamble(&mut self, brk: bool) -> Result<(), CpuError> {
-        self.registers.p &= !StatusFlag::BreakCommand.bits();
+    /// Executes the common interrupt sequence: push PC and status, set I flag.
+    /// Returns the vector address to jump to (handles NMI hijacking for IRQ/BRK).
+    /// - `return_pc`: The PC value to push onto stack (current PC for NMI/IRQ, PC+2 for BRK)
+    /// - `brk`: True for BRK instruction (sets B flag in pushed status)
+    /// - `default_vector`: The default interrupt vector (NMI_VECTOR, IRQ_VECTOR, or BRK_VECTOR)
+    fn interrupt_preamble(&mut self, return_pc: u16, brk: bool, default_vector: u16) -> Result<u16, CpuError> {
+        self.push_stack((return_pc >> 8) as u8)?;
+        self.push_stack((return_pc & 0xFF) as u8)?;
 
-        self.push_stack((self.registers.pc >> 8) as u8)?;
-        self.push_stack((self.registers.pc & 0xFF) as u8)?;
-
-        let status = if brk == true {
+        let status = if brk {
             self.registers.p | StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits()
         } else {
             (self.registers.p & !StatusFlag::BreakCommand.bits()) | StatusFlag::Unused.bits()
         };
 
         self.push_stack(status)?;
-
         self.registers.set_status(StatusFlag::InterruptDisable, true);
-        Ok(())
+
+        // NMI can hijack IRQ/BRK if it arrives during the interrupt sequence
+        let vector = if default_vector != NMI_VECTOR && self.pending_nmi {
+            self.pending_nmi = false;
+            NMI_VECTOR
+        } else {
+            default_vector
+        };
+
+        Ok(self.bus.borrow().read_word(vector)?)
     }
 
     fn nmi(&mut self) -> Result<(), CpuError> {
-        self.interrupt_preamble(false)?;
-        self.registers.pc = self.bus.borrow().read_word(NMI_VECTOR)?;
-        //debug!("CPU: NMI interrupt: program counter: 0x{:04X}", self.registers.pc);
-
+        self.pending_nmi = false;
+        self.registers.pc = self.interrupt_preamble(self.registers.pc, false, NMI_VECTOR)?;
         Ok(())
     }
 
     fn irq(&mut self) -> Result<(), CpuError> {
-        self.interrupt_preamble(false)?;
-
-        let addr = if self.is_asserted_nmi()? {
-            self.clear_nmi()?;
-            self.bus.borrow().read_word(NMI_VECTOR)?
-        } else {
-            self.bus.borrow().read_word(IRQ_VECTOR)?
-        };
-
-        self.registers.pc = addr;
-
-        //self.registers.pc = self.bus.borrow().read_word(IRQ_VECTOR)?;
-        //debug!("CPU: IRQ interrupt: program counter: 0x{:04X}", self.registers.pc);
-
+        self.registers.pc = self.interrupt_preamble(self.registers.pc, false, IRQ_VECTOR)?;
         Ok(())
     }
 
@@ -913,6 +925,117 @@ impl Cpu6502 {
     #[cfg(test)]
     pub fn clear_internal_interrupt_value(&mut self) {
         self.interrupt.0 = 0;
+    }
+
+    #[cfg(test)]
+    pub fn get_a(&self) -> u8 {
+        self.registers.a
+    }
+
+    #[cfg(test)]
+    pub fn set_a(&mut self, value: u8) {
+        self.registers.a = value;
+    }
+
+    #[cfg(test)]
+    pub fn get_x(&self) -> u8 {
+        self.registers.x
+    }
+
+    #[cfg(test)]
+    pub fn set_x(&mut self, value: u8) {
+        self.registers.x = value;
+    }
+
+    #[cfg(test)]
+    pub fn get_y(&self) -> u8 {
+        self.registers.y
+    }
+
+    #[cfg(test)]
+    pub fn set_y(&mut self, value: u8) {
+        self.registers.y = value;
+    }
+
+    #[cfg(test)]
+    pub fn get_sp(&self) -> u8 {
+        self.registers.sp
+    }
+
+    #[cfg(test)]
+    pub fn set_sp(&mut self, value: u8) {
+        self.registers.sp = value;
+    }
+
+    #[cfg(test)]
+    pub fn get_pc(&self) -> u16 {
+        self.registers.pc
+    }
+
+    #[cfg(test)]
+    pub fn set_pc_for_test(&mut self, value: u16) {
+        self.registers.pc = value;
+    }
+
+    #[cfg(test)]
+    pub fn get_status(&self) -> u8 {
+        self.registers.p
+    }
+
+    #[cfg(test)]
+    pub fn set_status_for_test(&mut self, value: u8) {
+        self.registers.p = value;
+    }
+
+    #[cfg(test)]
+    pub fn get_carry(&self) -> bool {
+        self.registers.get_status(StatusFlag::Carry)
+    }
+
+    #[cfg(test)]
+    pub fn set_carry(&mut self, value: bool) {
+        self.registers.set_status(StatusFlag::Carry, value);
+    }
+
+    #[cfg(test)]
+    pub fn get_zero(&self) -> bool {
+        self.registers.get_status(StatusFlag::Zero)
+    }
+
+    #[cfg(test)]
+    pub fn get_interrupt_disable(&self) -> bool {
+        self.registers.get_status(StatusFlag::InterruptDisable)
+    }
+
+    #[cfg(test)]
+    pub fn set_interrupt_disable(&mut self, value: bool) {
+        self.registers.set_status(StatusFlag::InterruptDisable, value);
+    }
+
+    #[cfg(test)]
+    pub fn get_decimal(&self) -> bool {
+        self.registers.get_status(StatusFlag::DecimalMode)
+    }
+
+    #[cfg(test)]
+    pub fn get_overflow(&self) -> bool {
+        self.registers.get_status(StatusFlag::Overflow)
+    }
+
+    #[cfg(test)]
+    pub fn set_overflow(&mut self, value: bool) {
+        self.registers.set_status(StatusFlag::Overflow, value);
+    }
+
+    #[cfg(test)]
+    pub fn get_negative(&self) -> bool {
+        self.registers.get_status(StatusFlag::Negative)
+    }
+
+    #[cfg(test)]
+    pub fn clear_pending_nmi(&mut self) {
+        self.pending_nmi = false;
+        self.nmi_line_low = false;
     }
 }
 
@@ -1077,25 +1200,9 @@ impl Instruction {
     }
 
     fn brk_force_break(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        let next_pc = cpu.registers.safe_pc_add(2)?;
-
-        cpu.push_stack((next_pc >> 8) as u8)?;
-        cpu.push_stack((next_pc & 0xFF) as u8)?;
-
-        let status = cpu.registers.p | StatusFlag::BreakCommand.bits() | StatusFlag::Unused.bits();
-        cpu.push_stack(status)?;
-
-        cpu.registers.set_status(StatusFlag::InterruptDisable, true);
-
-        let addr = if cpu.is_asserted_nmi()? {
-            cpu.clear_nmi()?;
-            cpu.bus.borrow().read_word(NMI_VECTOR)?
-        } else {
-            cpu.bus.borrow().read_word(BRK_VECTOR)?
-        };
-
+        let return_pc = cpu.registers.safe_pc_add(2)?;
+        let addr = cpu.interrupt_preamble(return_pc, true, BRK_VECTOR)?;
         cpu.registers.set_pc(addr);
-
         Ok(0)
     }
 
@@ -1138,7 +1245,7 @@ impl Instruction {
     }
 
     fn cli_clear_interrupt_disable_bit(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        cpu.registers.set_status(StatusFlag::InterruptDisable, false);
+        cpu.pending_i_flag = Some(false);
         Ok(0)
     }
 
@@ -1363,21 +1470,17 @@ impl Instruction {
         Ok(0)
     }
 
-    /***
-     * MN-23 status flags is wrong:
-     *
-     *   https://www.masswerk.at/6502/6502_instruction_set.html#PLP
-     *
-     *   SR: N V - B D I Z C
-     *       0 0 - - 0 0 1 1
-     *
-     *     PHP  ->  0 0 1 1 0 0 1 1  =  $33
-     *     PLP  <-  0 0 - - 0 0 1 1  =  $03
-     ***/
     fn plp_pull_processor_status_from_stack(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
         let status = cpu.pop_stack()?;
 
-        cpu.registers.p = (cpu.registers.p & 0x30) | status & !0x30;
+        let new_i_flag = (status & StatusFlag::InterruptDisable.bits()) != 0;
+        let old_i_flag = cpu.registers.get_status(StatusFlag::InterruptDisable);
+
+        cpu.registers.p = (cpu.registers.p & 0x34) | (status & !0x34);
+
+        if new_i_flag != old_i_flag {
+            cpu.pending_i_flag = Some(new_i_flag);
+        }
 
         Ok(0)
     }
@@ -1413,12 +1516,21 @@ impl Instruction {
     fn rti_return_from_interrupt(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
         let status = cpu.pop_stack()?;
 
-        cpu.registers.p = (status & 0xCF) | 0x20;
+        let new_i_flag = (status & StatusFlag::InterruptDisable.bits()) != 0;
+        let old_i_flag = cpu.registers.get_status(StatusFlag::InterruptDisable);
+
+        cpu.registers.p = (status & 0xCB) | 0x20;
+
+        if new_i_flag != old_i_flag {
+            cpu.pending_i_flag = Some(new_i_flag);
+        }
 
         let pcl = cpu.pop_stack()?;
         let pch = cpu.pop_stack()?;
 
         let addr = (pch as u16) << 8 | pcl as u16;
+
+
         cpu.registers.set_pc(addr);
 
         Ok(0)
@@ -1469,7 +1581,7 @@ impl Instruction {
     }
 
     fn sei_set_interrupt_disable_status(&self, cpu: &mut Cpu6502, _: &Operand) -> Result<u32, CpuError> {
-        cpu.registers.set_status(StatusFlag::InterruptDisable, true);
+        cpu.pending_i_flag = Some(true);
         Ok(0)
     }
 

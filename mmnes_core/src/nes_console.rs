@@ -195,6 +195,7 @@ impl NesConsole {
         let snapshot = self.cpu.borrow().snapshot()?;
 
         let (out_frame ,out_samples) = self.catch_up_ppu_and_apu()?;
+
         self.cpu_counter.previous = self.cpu_counter.current;
 
         Ok((out_frame, out_samples, snapshot))

@@ -1,7 +1,7 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use log::info;
+use log::{info, trace};
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::config_spec::{ConfigSpec, Configurable};
@@ -343,6 +343,7 @@ pub struct Ppu2c02 {
     config: ConfigSpec,
     cycles_per_scanline_fp: u64,
     cycles_acc_fp: u64,
+    nmi_suppressed: Cell<bool>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -437,6 +438,7 @@ impl PPU for Ppu2c02 {
         self.background_pixels_line = PixelLines::default();
         self.sprites_pixels_line = PixelLines::default();
         self.renderer = RefCell::new(Renderer::new());
+        self.nmi_suppressed.set(false);
 
         self.set_flag(Status(VBlank), true);
 
@@ -606,16 +608,22 @@ impl Ppu2c02 {
     }
 
     fn write_control_register(&mut self, value: u8) {
-        //trace!("PPU: writing to control register: 0x{:02X}", value);
+        let old_nmi_enable = self.get_flag(Control(GenerateNmi));
 
         self.register.borrow_mut().control = value;
         self.t = (self.t & 0xF3FF) | (((value & 0x03) as u16) << 10);
 
+        let new_nmi_enable = (value & 0x80) != 0;
+        
         if let PpuState::VBlank(_) = self.state {
-            if value & 0x80 != 0 && self.get_flag(Status(VBlank)) && self.get_flag(Control(GenerateNmi)) == false {
-                //trace!("PPU: forcing NMI as status changed: 0x{:02X}", value);
-                let cpu = self.cpu.as_ptr();
-                let _ = unsafe { &mut *cpu }.signal_nmi();
+            if self.get_flag(Status(VBlank)) {
+                if !old_nmi_enable && new_nmi_enable {
+                    let cpu = self.cpu.as_ptr();
+                    let _ = unsafe { &mut *cpu }.signal_nmi();
+                } else if old_nmi_enable && !new_nmi_enable {
+                    let cpu = self.cpu.as_ptr();
+                    let _ = unsafe { &mut *cpu }.clear_nmi();
+                }
             }
         }
     }
@@ -631,6 +639,13 @@ impl Ppu2c02 {
 
     fn read_status_register(&self) -> u8 {
         let result = self.register.borrow().status;
+
+        if let PpuState::Rendering(scanline) = self.state {
+            if scanline == self.config.nmi_scanline && !self.get_flag(Status(VBlank)) {
+                self.nmi_suppressed.set(true);
+            }
+        }
+
         self.set_flag(Status(VBlank), false);
         self.latch.borrow_mut().reset();
 
@@ -800,6 +815,7 @@ impl Ppu2c02 {
             config,
             cycles_per_scanline_fp: 0,
             cycles_acc_fp: 0,
+            nmi_suppressed: Cell::new(false),
         };
 
         ppu.recompute_timing();
@@ -1469,6 +1485,9 @@ impl Ppu2c02 {
                 self.set_flag(Status(Sprite0Hit), false);
                 self.set_flag(Status(SpriteOverflow), false);
 
+                let _ = self.cpu.borrow_mut().clear_nmi();
+                self.nmi_suppressed.set(false);
+
                 self.register.borrow_mut().oam_addr = 0;
                 self.state = PpuState::Rendering(0);
 
@@ -1517,9 +1536,11 @@ impl Ppu2c02 {
                 self.set_flag(Status(VBlank), true);
                 self.state = PpuState::VBlank(scanline + 1);
 
-                if self.get_flag(Control(GenerateNmi)) {
+                if self.get_flag(Control(GenerateNmi)) && !self.nmi_suppressed.get() {
                     self.cpu.borrow_mut().signal_nmi()?;
                 }
+
+                self.nmi_suppressed.set(false);
             },
 
             // vblank

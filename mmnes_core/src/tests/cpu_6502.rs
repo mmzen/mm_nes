@@ -130,10 +130,9 @@ fn signal_nmi_works() -> Result<(), CpuError> {
     init();
     let mut cpu = create_cpu();
 
+    assert!(!cpu.is_asserted_nmi()?);
     cpu.signal_nmi()?;
-    let result = cpu.get_internal_interrupt_value();
-    assert_eq!(result, PPU_NMI);
-    cpu.clear_internal_interrupt_value();
+    assert!(cpu.is_asserted_nmi()?);
 
     Ok(())
 }
@@ -144,13 +143,13 @@ fn clear_nmi_works() -> Result<(), CpuError> {
     let mut cpu = create_cpu();
 
     cpu.signal_nmi()?;
-    let result = cpu.get_internal_interrupt_value();
-    assert_eq!(result, PPU_NMI);
+    assert!(cpu.is_asserted_nmi()?);
 
-    cpu.clear_irq(PPU_NMI)?;
-    let result = cpu.get_internal_interrupt_value();
-    assert_eq!(result, 0);
-
+    // Note: clear_nmi only clears the line state, not pending_nmi
+    // The NMI will still be serviced once signaled (edge-triggered)
+    cpu.clear_nmi()?;
+    // pending_nmi remains true until serviced
+    assert!(cpu.is_asserted_nmi()?);
 
     Ok(())
 }
@@ -220,8 +219,9 @@ fn clear_irq_does_not_clear_nmi() -> Result<(), CpuError> {
     cpu.signal_irq(APU_DMC_IRQ)?;
     cpu.clear_irq(APU_DMC_IRQ)?;
 
-    let result = cpu.get_internal_interrupt_value();
-    assert_eq!(result, PPU_NMI);
+    // NMI is stored separately from IRQ, clearing IRQ should not affect NMI
+    assert!(cpu.is_asserted_nmi()?);
+    assert!(!cpu.is_asserted_irq()?);
 
     Ok(())
 }

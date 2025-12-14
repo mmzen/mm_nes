@@ -481,6 +481,7 @@ struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
     shift_register: u8,
     bits_remaining: u8,
     silenced: bool,
+    irq_pending: bool,
     cpu: Rc<RefCell<U>>,
     bus: Rc<RefCell<V>>
 }
@@ -501,6 +502,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
         self.shift_register = 0;
         self.bits_remaining = 0;
         self.silenced = false;
+        self.irq_pending = false;
     }
 
     fn is_muted(&self) -> bool {
@@ -543,6 +545,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             shift_register: 0,
             bits_remaining: 0,
             silenced: false,
+            irq_pending: false,
             cpu,
             bus
         }
@@ -566,6 +569,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     fn reload_sample_window(&mut self) {
         self.current_address = Some(self.sample_address);
         self.bytes_remaining = self.sample_length;
+        self.irq_pending = false;
     }
 
     fn cond_dma_prefetch(&mut self) -> Result<(), ApuError> {
@@ -593,7 +597,8 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
                             self.reload_sample_window()
                         },
                         Reload::None => {
-                            if self.irq_enable {
+                            if self.irq_enable && !self.irq_pending {
+                                self.irq_pending = true;
                                 self.interrupt()?;
                             }
                         }
@@ -647,6 +652,7 @@ struct FrameCounter<U: CPU + ?Sized> {
     inhibit_irq: Cell<bool>,
     apu_cycle: u32,
     next_step: usize,
+    frame_interrupt_flag: Cell<bool>,
     cpu: Rc<RefCell<U>>
 }
 
@@ -667,6 +673,7 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
             inhibit_irq: Cell::new(false),
             apu_cycle: 0,
             next_step: 0,
+            frame_interrupt_flag: Cell::new(false),
             cpu
         }
     }
@@ -676,6 +683,7 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
         self.inhibit_irq = Cell::new(false);
         self.apu_cycle = 0;
         self.next_step = 0;
+        self.frame_interrupt_flag.set(false);
     }
 }
 
@@ -1026,6 +1034,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         status |= (frame_irq as u8) << 6;
         status |= (dmc_irq as u8) << 7;
 
+        self.frame_counter.frame_interrupt_flag.set(false);
         self.frame_counter.clear_interrupt().map_err(|e|
             MemoryError::IllegalState(e.to_string()))?;
 
@@ -1091,6 +1100,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         self.frame_counter.inhibit_irq.set(inhibit_irq);
 
         if inhibit_irq {
+            self.frame_counter.frame_interrupt_flag.set(false);
             self.frame_counter.clear_interrupt().map_err(|e|
                 MemoryError::IllegalState(e.to_string()))?
         }
@@ -1298,7 +1308,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
                }
 
                if do_interrupt && self.frame_counter.inhibit_irq.get() == false {
-                   self.frame_counter.interrupt()?;
+                   self.frame_counter.frame_interrupt_flag.set(true);
                }
 
                self.frame_counter.next_step += 1;
@@ -1310,6 +1320,10 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
            } else {
                break;
            }
+        }
+        
+        if self.frame_counter.frame_interrupt_flag.get() && self.frame_counter.inhibit_irq.get() == false {
+            self.frame_counter.interrupt()?;
         }
 
         Ok(())
