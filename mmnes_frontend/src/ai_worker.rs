@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::fmt::{Display, Formatter};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;

@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::fmt::Debug;
 
 pub trait SoundPlayback : Debug {

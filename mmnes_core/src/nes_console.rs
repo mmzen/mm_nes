@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;

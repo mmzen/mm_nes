@@ -1,3 +1,4 @@
+// Authorship: Human 80% | Claude 20%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};

@@ -1,3 +1,4 @@
+// Authorship: Human 0% | Claude 100%
 //! SingleStepTests integration for cycle-accurate 6502 CPU validation
 //!
 //! This module integrates the SingleStepTests/65x02 test suite to validate

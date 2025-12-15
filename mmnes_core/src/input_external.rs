@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use crate::input::Input;
 use crate::key_event::{KeyEvents};
 

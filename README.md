@@ -1,60 +1,70 @@
-# mmnes - a NES emulator with LLM capabilities
+# mmnes - A Human-to-AI Software Engineering Experiment
 
-_mmnes_ is a learning-friendly NES emulator. 
-It’s not trying to beat the fastest or most accurate emulators; the goal is to **integrate LLM** to help playing and developing for the NES.
+**mmnes** is a NES emulator that started as a human-written project and is now being developed by Claude (Anthropic's LLM). This repository serves as a real-world experiment in AI-assisted software engineering.
 
 > ⚠️ Experimental • Unstable API • For personal use
 
-
 ![mm_nes screenshot](docs/mmnes_screenshot8.png)
 
-## Disclaimer
+## The Experiment
 
-This project is a personal work-in-progress is **still under active development**.   
+This project explores how software engineering is evolving—how humans shift from hands-on development to **intent definition**, **problem framing**, and **quality supervision**.
 
-**Notes**: 
-- no releases are provided.
-- SDL2 is needed
+### The Setup
 
+- **Human role**: Supervisor, architect, quality gatekeeper. Defines requirements, sets guidelines, reviews output, ensures the code remains maintainable, safe, compliant, and industry-standard.
+- **Claude role**: Primary developer. Implements features, fixes bugs, writes tests, maintains documentation—all under human supervision.
 
-## Why an LLM for a NES emulator ?
+### Why This Matters
 
-By wiring the emulator’s runtime state (CPU/PPU/APU, memory, input, symbols, screenshots) into an LLM, we can:
-- **Guide players in real time** (hints, tips, strategy nudges, “what should I try next?”).
-- **Assist players** in real time by supporting moves that would lead to a game loss (ie: anticipating a failed jump)
-- **Help developers debug** by explaining what the code is doing and why things break.
+We're testing a new paradigm:
+- Can an LLM produce production-quality code when given clear intent and constraints?
+- How does the human-AI collaboration evolve over time?
+- What guardrails and processes are needed to maintain code quality?
+
+Every source file tracks authorship (`Human X% | Claude Y%`) to provide transparency on contributions.
 
 ---
 
-## LLM-powered features (ideas & roadmap)
+## Contributions Timeline
 
-### For players
-- **Contextual hints on demand**  
-  Press a hotkey to trigger LLM help
-  The emulator screenshots the screen, and the LLM replies with a hint.
-- **Coach**  
-  Sample the last few seconds of inputs + game state; the model suggests safer routes, boss patterns, or timing (eg: “wait for the 3-cycles pattern, then jump after the second fireball”).
-- **Natural language cheats**  
-  “Give me 30 lives,” “Slow down the game 10%,” “Make enemies deal half damage.” The LLM maps requests to emulator features.
-- **Auto-achievements summary**  
-  After a session, generate a shareable recap: deaths, boss times, secrets found, highlight GIFs.
+### Human Achievements (Pre-December 2025)
+The human built the emulator from scratch:
+- ✅ 6502 CPU with all official and unofficial opcodes (initial implementation)
+- ✅ PPU 2C02 implementation (background, sprites, VBL/NMI timing)
+- ✅ APU RP2A03 (pulses, triangle, noise, DMC)
+- ✅ Mappers: NROM, UxROM, MMC1, MMC2
+- ✅ iNES ROM loader
+- ✅ GUI with eframe/egui
+- ✅ CPU debugger/disassembler
+- ✅ Sound playback via SDL2
+- ✅ AccuracyCoin: 74 / 131
+- ✅ Initial LLM integration (OpenAI, hint overlay)
 
+### Claude Achievements (December 2025 → Present)
+Claude is now the primary contributor:
+- ✅ Implemented SingleStepTests test framework (`mmnes_core/src/tests/singlestep/`)
+- ✅ Fixed CPU to pass 100% of SingleStepTests (2,560,000 / 2,560,000) — was ~30% before
+- 🔄 *More to come...*
 
-### For developers
-- **Explain the next N instructions**  
-  A narrator for 6502: disassemble upcoming opcodes with labels/symbols and get a plain-English summary: control flow, zero-page usage, side effects.
-- **Memory analyzer**  
-  “Which variables change when the player jumps?” The emulator tags diffs per frame; the LLM suggests candidate addresses and how to set watchpoints.
-- **Tiles / sprites debugging by description**  
-  “Why is the status bar flickering?” The model inspects OAM/PPU state and explains scanline timing hazards.
+---
+
+## Disclaimer
+
+This project is a personal work-in-progress **still under active development**.
+
+**Notes**:
+- No releases are provided
+- SDL2 is required (`libsdl2-dev` on Linux)
 
 ---
 
 ## NES Accuracy
+
 ### AccuracyCoin
 
-We track emulator correctness with **AccuracyCoin**, a very cool single-ROM test suite for NES  (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).  
-_[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
+We track emulator correctness with **AccuracyCoin**, a single-ROM test suite for NES (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).
+_[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_
 
 **Current score:** `74 / 131`
 
@@ -62,9 +72,12 @@ _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_.
 
 ### SingleStepTests
 
-But also with the SingleStepTests test suite.
-The emulator currently passes all tests:   
-```TOTAL: 2560000 passed, 0 failed```
+The emulator passes all SingleStepTests:
+```
+TOTAL: 2560000 passed, 0 failed
+```
+
+---
 
 ## Completeness
 
@@ -78,11 +91,10 @@ The emulator currently passes all tests:
 - [x] Sprites (8 per scanline rule)
 - [x] Sprite 0 hit
 - [x] VBL/NMI timing
-- [ ] Cycle-accurate (permitting mid-scanline updates)
+- [ ] Cycle-accurate (mid-scanline updates)
 - [ ] Color emphasis
-- [ ] Sprite left column enable
-- [ ] background left column enable
-- [ ] greyscale
+- [ ] Sprite/background left column enable
+- [ ] Greyscale
 
 ### APU
 - [x] Pulses, Triangle, Noise
@@ -93,18 +105,17 @@ The emulator currently passes all tests:
 - [x] NROM
 - [x] UxROM
 - [x] MMC1
-- [ ] MMC2
+- [x] MMC2
 - [ ] MMC3
 
 ### I/O
 - [x] Controller 1
 - [ ] Controller 2
-- [ ] Others ...
 
-### Others
+### Other Features
 - [ ] Save states
 - [ ] Rewind
-- [ ] PRG ram persistency
+- [ ] PRG RAM persistency
 - [x] Regionalization (NTSC, PAL, Dendy)
 
 ### Debugging
@@ -114,10 +125,19 @@ The emulator currently passes all tests:
 - [ ] PPU visualizer
 - [ ] APU visualizer
 
-### LLM Integration
-- [x] Snapshot and hint overlay
-- [ ] Explain next N instructions
-- [ ] Natural-language cheats
-- [ ] Session recap
+---
 
+## Building
 
+```bash
+# Build all crates
+cargo build --verbose
+
+# Run tests
+cargo test --verbose
+
+# Run the frontend
+cargo run -p mmnes_frontend
+```
+
+**Dependency**: SDL2 must be installed on the system.

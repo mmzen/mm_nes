@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 
 pub trait Palette {
     fn rgb(color: u8) -> (u8, u8, u8);

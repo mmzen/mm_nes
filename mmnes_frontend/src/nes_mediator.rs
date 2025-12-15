@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::path::PathBuf;
 use log::warn;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};

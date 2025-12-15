@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::collections::VecDeque;
 
 pub const NES_CONTROLLER_KEY_A: usize = 0x00;

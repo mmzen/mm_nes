@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};

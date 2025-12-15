@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use crate::nes_samples::NesSamples;
 
 #[test]

@@ -1,3 +1,4 @@
+// Authorship: Human 0% | Claude 100%
 //! Test runner for SingleStepTests validation
 //!
 //! Executes test cases against the CPU and validates both final state

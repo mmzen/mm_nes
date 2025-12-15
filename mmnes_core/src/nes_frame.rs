@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FrameState {

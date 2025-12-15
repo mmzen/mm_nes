@@ -1,3 +1,4 @@
+// Authorship: Human 0% | Claude 100%
 //! Test functions for SingleStepTests opcode validation
 //!
 //! These tests load JSON test files and validate CPU behavior

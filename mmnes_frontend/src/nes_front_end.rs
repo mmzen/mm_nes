@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::hint::spin_loop;
 use std::ops::ControlFlow;
 use std::ops::ControlFlow::{Break, Continue};

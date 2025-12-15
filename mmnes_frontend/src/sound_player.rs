@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::fmt::{Display, Formatter};
 use log::info;
 use sdl2::audio::{AudioQueue, AudioSpecDesired};

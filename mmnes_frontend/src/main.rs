@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::{spawn, JoinHandle};

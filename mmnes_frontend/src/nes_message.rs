@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::path::PathBuf;
 use mmnes_core::key_event::KeyEvents;
 use mmnes_core::nes_console::NesConsoleError;

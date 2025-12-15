@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::sync::Once;
 use log::LevelFilter;
 use simplelog::{Config, TestLogger};

@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use crate::bus::MockBusStub;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;

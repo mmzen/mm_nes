@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::cell::RefCell;
 use std::rc::Rc;
 use eframe::egui::Context;

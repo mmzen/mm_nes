@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 pub mod mmc1_cartridge;
 pub mod nrom_cartridge;
 pub mod unrom_cartridge;

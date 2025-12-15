@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;

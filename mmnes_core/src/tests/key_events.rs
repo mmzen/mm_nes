@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use crate::key_event::{KeyEvent, KeyEvents, NES_CONTROLLER_KEY_A, NES_CONTROLLER_KEY_B, NES_CONTROLLER_KEY_START};
 
 #[test]

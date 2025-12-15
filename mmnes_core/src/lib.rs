@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 pub mod cpu;
 pub mod cpu_6502;
 pub mod memory;

@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use eframe::egui::{Color32, ColorImage};
 use font8x8::UnicodeFonts;
 

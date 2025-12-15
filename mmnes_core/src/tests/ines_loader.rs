@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::io::Write;
 use tempfile::NamedTempFile;
 use crate::ines_loader::{ConsoleType, INESVersion, INesLoader, Region, VsHardwareType, VsPpuType};

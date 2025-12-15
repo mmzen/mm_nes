@@ -1,3 +1,4 @@
+// Authorship: Human 0% | Claude 100%
 //! TracingBus - A bus implementation that records all bus activity for testing
 //!
 //! This bus provides a simple 64KB memory space and records every read/write

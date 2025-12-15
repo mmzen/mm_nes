@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 {{
 add_instruction!(map, 0x69, ADC, Immediate, 2, 2, adc_add_memory_to_accumulator_with_carry);
 add_instruction!(map, 0x65, ADC, ZeroPage, 2, 3, adc_add_memory_to_accumulator_with_carry);

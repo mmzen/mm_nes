@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use crate::sound_playback::SoundPlayback;
 
 const BUFFER_SIZE: usize = 1024;

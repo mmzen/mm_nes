@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::ops::Mul;
 use eframe::egui::{vec2, Color32, Direction, Layout, Response, RichText, Sense, Stroke, TextureHandle, Ui, Vec2, Widget};
 use eframe::epaint::StrokeKind;

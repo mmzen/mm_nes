@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 

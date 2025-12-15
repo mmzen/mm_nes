@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use mmnes_core::nes_console::NesConsoleError;
 use crate::llm_client::{LLMClient, LLMClientError, Prompt};
 use crate::openai_llm::OpenAILLM;

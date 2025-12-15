@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::time::Duration;
 use base64::Engine;
 use serde_json::{json, Value};

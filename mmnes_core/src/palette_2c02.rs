@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use crate::palette::Palette;
 
 const TRANSPARENT: u8 = 0;

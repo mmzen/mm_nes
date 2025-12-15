@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use chrono::{DateTime, Utc};
 
 #[allow(dead_code)]

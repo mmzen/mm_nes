@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::time::Duration;
 use log::warn;
 use crate::ines_loader::Region;

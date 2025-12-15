@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Display, Formatter};

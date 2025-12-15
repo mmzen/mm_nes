@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use eframe::egui::{Color32, ColorImage, RichText};
 use image::codecs::jpeg::JpegEncoder;
 use image::{ExtendedColorType, ImageError};

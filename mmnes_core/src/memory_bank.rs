@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};

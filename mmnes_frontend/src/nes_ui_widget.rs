@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use eframe::egui::Context;
 use mmnes_core::nes_console::NesConsoleError;
 use crate::nes_front_ui::{NesButton, NesButtonId};

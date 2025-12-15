@@ -1,3 +1,4 @@
+// Authorship: Human 96% | Claude 4%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;

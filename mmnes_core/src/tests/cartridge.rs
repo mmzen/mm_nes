@@ -1,3 +1,4 @@
+// Authorship: Human 100% | Claude 0%
 use std::io::{BufReader, Seek, SeekFrom, Write};
 use tempfile::NamedTempFile;
 use crate::bus_device::BusDevice;
