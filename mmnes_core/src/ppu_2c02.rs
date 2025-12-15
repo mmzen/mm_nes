@@ -1,14 +1,14 @@
-// Authorship: Human 96% | Claude 4%
+// Authorship: Human 85% | Claude 15%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use log::{info, trace};
+use log::info;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::config_spec::{ConfigSpec, Configurable};
 use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
-use crate::nes_frame::{FrameState, NesFrame};
+use crate::nes_frame::NesFrame;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_ciram::{CiramMemory, PpuNameTableMirroring};
 use crate::memory_palette::MemoryPalette;
@@ -63,6 +63,12 @@ const MERGED_PATTERN_DATA_SIZE: usize = 64;
 const PPU_DOTS_PER_SCANLINE: u32 = 341;
 const FIXED_POINT_SHIFT: u32 = 16;
 const FIXED_POINT_ONE: u64 = 1u64 << FIXED_POINT_SHIFT;
+
+// Dot-level timing constants
+const DOTS_PER_SCANLINE: u16 = 341;
+#[allow(dead_code)]
+const VISIBLE_DOTS: u16 = 256;  // Will be used for sprite 0 hit detection in Phase 3
+const VBLANK_SET_DOT: u16 = 1;  // VBlank flag set at dot 1 of NMI scanline
 
 #[derive(Debug)]
 enum PpuFlag {
@@ -345,6 +351,15 @@ pub struct Ppu2c02 {
     cycles_per_scanline_fp: u64,
     cycles_acc_fp: u64,
     nmi_suppressed: Cell<bool>,
+    // Dot-level timing state
+    current_dot: u16,           // 0-340: current dot position within scanline
+    current_scanline: u16,      // 0-261 (NTSC): current scanline
+    scanline_rendered: bool,    // true if current scanline's pixels have been rendered
+    // Sprite 0 hit tracking for dot-accurate detection
+    sprite0_hit_pending: bool,  // true if sprite 0 hit detected during rendering
+    sprite0_hit_x: u16,         // X position (dot) where sprite 0 hit should be triggered
+    // Partial scanline rendering support
+    last_rendered_dot: u16,     // Last dot that was rendered (0-255 for visible, 256+ for hblank)
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -416,6 +431,15 @@ impl Configurable for Ppu2c02 {
         self.config = config;
         self.recompute_timing();
         self.state = PpuState::VBlank(self.pre_render_scanline());
+        // Sync dot-level timing with state
+        self.current_scanline = self.pre_render_scanline();
+        self.current_dot = 0;
+        self.scanline_rendered = false;
+        // Reset sprite 0 hit tracking
+        self.sprite0_hit_pending = false;
+        self.sprite0_hit_x = 0;
+        // Reset partial scanline rendering
+        self.last_rendered_dot = 0;
     }
 }
 
@@ -441,6 +465,16 @@ impl PPU for Ppu2c02 {
         self.renderer = RefCell::new(Renderer::new());
         self.nmi_suppressed.set(false);
 
+        // Reset dot-level timing to pre-render scanline
+        self.current_dot = 0;
+        self.current_scanline = self.pre_render_scanline();
+        self.scanline_rendered = false;
+        // Reset sprite 0 hit tracking
+        self.sprite0_hit_pending = false;
+        self.sprite0_hit_x = 0;
+        // Reset partial scanline rendering
+        self.last_rendered_dot = 0;
+
         self.set_flag(Status(VBlank), true);
 
         self.recompute_timing();
@@ -452,30 +486,19 @@ impl PPU for Ppu2c02 {
         unreachable!()
     }
 
-    /***
-     * returns number of cycles consumed and a frame
-     */
+    /// Run the PPU for the given number of CPU cycles (credits).
+    /// Converts CPU cycles to PPU dots and advances the PPU accordingly.
+    /// Returns the new cycle count and an optional completed frame.
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesFrame>), PpuError> {
-        let mut cycles = start_cycle;
-        let cycles_threshold = start_cycle + credits;
+        // Convert CPU cycles to PPU dots
+        // NTSC: 3 PPU dots per CPU cycle, PAL: ~3.2 dots per CPU cycle
+        let dots_per_cpu_cycle = self.config.ppu_clock_hz / self.config.cpu_clock_hz;
+        let ppu_dots = ((credits as f64) * dots_per_cpu_cycle).round() as u32;
 
-        //debug!("PPU: running PPU - cycle: {}, credits: {}, threshold: {}", start_cycle, credits, cycles_threshold);
+        // Advance PPU by the calculated dots
+        let frame = self.advance_dots(ppu_dots)?;
 
-        loop {
-            cycles = cycles + self.render()? as u32;
-
-            if cycles >= cycles_threshold {
-                break;
-            }
-        }
-
-        let frame = if self.renderer.borrow().frame().state() == FrameState::Completed {
-            Some(self.frame())
-        } else {
-            None
-        };
-
-        Ok((cycles, frame))
+        Ok((start_cycle + credits, frame))
     }
 
     fn frame(&self) -> NesFrame {
@@ -800,6 +823,7 @@ impl Ppu2c02 {
 
         Ppu2c02::create_mirrored_name_tables_and_connect_to_bus(&mut bus, mirroring)?;
 
+        let pre_render = config.scanlines_per_frame - 1;
         let mut ppu = Ppu2c02 {
             register: RefCell::new(Register::new()),
             bus,
@@ -817,6 +841,15 @@ impl Ppu2c02 {
             cycles_per_scanline_fp: 0,
             cycles_acc_fp: 0,
             nmi_suppressed: Cell::new(false),
+            // Initialize dot-level timing at start of pre-render scanline
+            current_dot: 0,
+            current_scanline: pre_render,
+            scanline_rendered: false,
+            // Sprite 0 hit tracking
+            sprite0_hit_pending: false,
+            sprite0_hit_x: 0,
+            // Partial scanline rendering
+            last_rendered_dot: 0,
         };
 
         ppu.recompute_timing();
@@ -876,6 +909,30 @@ impl Ppu2c02 {
     #[cfg(test)]
     pub fn ext_get_flag(&mut self, flag: PpuFlag) {
         self.get_flag(flag);
+    }
+
+    /// Test helper: get current dot position (0-340)
+    #[cfg(test)]
+    pub fn get_current_dot(&self) -> u16 {
+        self.current_dot
+    }
+
+    /// Test helper: get current scanline (0-261 for NTSC)
+    #[cfg(test)]
+    pub fn get_current_scanline(&self) -> u16 {
+        self.current_scanline
+    }
+
+    /// Test helper: check if VBlank flag is set
+    #[cfg(test)]
+    pub fn is_vblank_set(&self) -> bool {
+        self.get_flag(Status(VBlank))
+    }
+
+    /// Test helper: check if Sprite 0 Hit flag is set
+    #[cfg(test)]
+    pub fn is_sprite0_hit_set(&self) -> bool {
+        self.get_flag(Status(Sprite0Hit))
     }
 
 
@@ -1018,11 +1075,21 @@ impl Ppu2c02 {
         Ok(colors)
     }
 
-    fn detect_sprite_0_hit_and_set_status_flag(&self, pixel_pos_x: u8) {
+    /// Detect sprite 0 hit and store the position for dot-accurate triggering.
+    /// The actual flag is set in advance_dots() when we reach the hit position.
+    /// Sprite 0 hit can only occur on dots 2-254 (not at dots 0-1 or 255).
+    fn detect_sprite_0_hit_and_store_position(&mut self, pixel_pos_x: u8) {
+        // Sprite 0 hit can't occur at x=255
         if pixel_pos_x == PIXEL_X_MAX {
             return;
         }
 
+        // Already have a pending hit, don't overwrite with later position
+        if self.sprite0_hit_pending {
+            return;
+        }
+
+        // Check left column masking
         if pixel_pos_x < 8 {
             let bg_left_enabled = self.get_flag(Mask(MaskFlag::ShowLeftmostBackground));
             let sprite_left_enabled = self.get_flag(Mask(MaskFlag::ShowLeftmostSprites));
@@ -1035,8 +1102,11 @@ impl Ppu2c02 {
         let background_transparency = self.background_pixels_line.is_transparent(pixel_pos_x);
         let sprite_transparency = self.sprites_pixels_line.is_transparent(pixel_pos_x);
 
-        if sprite_transparency == false && background_transparency == false {
-            self.set_flag(Status(Sprite0Hit), true);
+        if !sprite_transparency && !background_transparency {
+            // Store the hit position - add 2 because sprite 0 hit can't occur at dots 0-1
+            // The hit occurs at dot = pixel_x + 2 (accounting for PPU render pipeline)
+            self.sprite0_hit_pending = true;
+            self.sprite0_hit_x = (pixel_pos_x as u16).saturating_add(2).min(255);
         }
     }
 
@@ -1069,7 +1139,7 @@ impl Ppu2c02 {
                     }
 
                     if sprite0_hit_detect {
-                        self.detect_sprite_0_hit_and_set_status_flag(pixel_pos_x_plus_pixel);
+                        self.detect_sprite_0_hit_and_store_position(pixel_pos_x_plus_pixel);
                     }
                 },
             }
@@ -1491,6 +1561,9 @@ impl Ppu2c02 {
         self.cycles_acc_fp = 0;
     }
 
+    /// Deprecated: Used by old scanline-based rendering.
+    /// Kept for reference and potential debugging.
+    #[allow(dead_code)]
     fn grant_cpu_cycles_for_scanline(&mut self) -> u16 {
         self.cycles_acc_fp = self.cycles_acc_fp.wrapping_add(self.cycles_per_scanline_fp);
         let whole = (self.cycles_acc_fp >> FIXED_POINT_SHIFT) as u16;
@@ -1509,6 +1582,130 @@ impl Ppu2c02 {
         self.config.visible_scanlines - 1
     }
 
+    /// Advance PPU by the specified number of dots.
+    /// This method handles scanline transitions, VBlank/NMI timing,
+    /// and triggers rendering at the appropriate times.
+    /// Returns an optional frame when a frame is completed.
+    fn advance_dots(&mut self, dots: u32) -> Result<Option<NesFrame>, PpuError> {
+        let mut frame_ready = false;
+
+        for _ in 0..dots {
+            // Advance to next dot
+            self.current_dot += 1;
+
+            // Handle end of scanline
+            if self.current_dot >= DOTS_PER_SCANLINE {
+                self.current_dot = 0;
+                self.scanline_rendered = false;
+                // Clear sprite 0 hit pending for new scanline
+                self.sprite0_hit_pending = false;
+                // Reset partial rendering tracker for new scanline
+                self.last_rendered_dot = 0;
+
+                // Move to next scanline
+                self.current_scanline += 1;
+                if self.current_scanline >= self.config.scanlines_per_frame {
+                    self.current_scanline = 0;
+                }
+            }
+
+            // Check for sprite 0 hit at the correct dot (only on visible scanlines)
+            if self.sprite0_hit_pending
+                && self.current_scanline <= self.last_visible_scanline()
+                && self.current_dot == self.sprite0_hit_x
+                && !self.get_flag(Status(Sprite0Hit))
+            {
+                self.set_flag(Status(Sprite0Hit), true);
+            }
+
+            // Process events at specific dots
+            match (self.current_scanline, self.current_dot) {
+                // Pre-render scanline, dot 1: Clear flags
+                (scanline, VBLANK_SET_DOT) if scanline == self.pre_render_scanline() => {
+                    self.set_flag(Status(VBlank), false);
+                    self.set_flag(Status(Sprite0Hit), false);
+                    self.set_flag(Status(SpriteOverflow), false);
+                    self.sprite0_hit_pending = false;
+                    let _ = self.cpu.borrow_mut().clear_nmi();
+                    self.nmi_suppressed.set(false);
+                    self.register.borrow_mut().oam_addr = 0;
+
+                    // Do sprite evaluation for scanline 0 if rendering enabled
+                    if self.get_flag(Mask(ShowBackground)) || self.get_flag(Mask(ShowSprites)) {
+                        self.put_horizontal_t_into_v();
+                        self.put_vertical_t_into_v();
+                        self.do_sprite_evaluation(0)?;
+                    }
+
+                    self.state = PpuState::Rendering(0);
+                }
+
+                // NMI scanline (241 for NTSC), dot 1: Set VBlank, trigger NMI
+                (scanline, VBLANK_SET_DOT) if scanline == self.config.nmi_scanline => {
+                    self.renderer.borrow_mut().update();
+                    self.renderer.borrow_mut().reset();
+                    self.set_flag(Status(VBlank), true);
+                    frame_ready = true;
+
+                    if self.get_flag(Control(GenerateNmi)) && !self.nmi_suppressed.get() {
+                        self.cpu.borrow_mut().signal_nmi()?;
+                    }
+                    self.nmi_suppressed.set(false);
+
+                    self.state = PpuState::VBlank(scanline + 1);
+                }
+
+                // Visible scanlines (0-239): Render at start of scanline if not yet rendered
+                (scanline, dot) if scanline <= self.last_visible_scanline() && !self.scanline_rendered && dot >= 1 => {
+                    let show_background = self.get_flag(Mask(ShowBackground));
+                    let show_sprites = self.get_flag(Mask(ShowSprites));
+
+                    if show_background {
+                        self.render_background(scanline)?;
+                    }
+
+                    if show_sprites {
+                        self.render_sprites(scanline)?;
+                    }
+
+                    if show_background || show_sprites {
+                        self.do_sprite_evaluation(scanline + 1)?;
+                        self.put_horizontal_t_into_v();
+                    } else {
+                        self.oam.clear_secondary();
+                    }
+
+                    self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
+                    self.register.borrow_mut().oam_addr = 0;
+                    self.scanline_rendered = true;
+                    self.last_rendered_dot = VISIBLE_DOTS;  // Rendered all visible pixels
+                    self.state = PpuState::Rendering(scanline + 1);
+                }
+
+                // Post-render scanline (240): Just update state
+                (scanline, 1) if scanline == self.config.visible_scanlines && scanline < self.config.nmi_scanline => {
+                    self.state = PpuState::Rendering(self.config.nmi_scanline);
+                }
+
+                // VBlank scanlines: Just advance state
+                (scanline, 1) if scanline > self.config.nmi_scanline && scanline < self.pre_render_scanline() => {
+                    self.state = PpuState::VBlank(scanline + 1);
+                }
+
+                _ => {}
+            }
+        }
+
+        if frame_ready {
+            Ok(Some(self.frame()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Deprecated: Used by old scanline-based rendering.
+    /// Kept for reference and potential debugging.
+    #[allow(dead_code)]
     fn render_scanline(&mut self) -> Result<(), PpuError> {
         //trace!("PPU: scanline starting: {}", self.state);
 
@@ -1604,8 +1801,10 @@ impl Ppu2c02 {
         Ok(())
     }
 
+    /// Deprecated: Used by old scanline-based rendering.
+    /// Kept for reference and potential debugging.
+    #[allow(dead_code)]
     fn render(&mut self) -> Result<u16, PpuError> {
-
         self.render_scanline()?;
         Ok(self.grant_cpu_cycles_for_scanline())
     }

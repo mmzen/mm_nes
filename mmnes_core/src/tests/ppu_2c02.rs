@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 85% | Claude 15%
 use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
@@ -9,6 +9,7 @@ use crate::cpu::MockCpuStub;
 use crate::ines_loader::Region;
 use crate::memory::{Memory, MemoryError, MemoryType};
 use crate::memory_ciram::PpuNameTableMirroring;
+use crate::ppu::PPU;
 use crate::ppu_2c02::Ppu2c02;
 use crate::tests::init;
 
@@ -26,6 +27,34 @@ const CONTROL_REGISTER_INCR_32: u8 = 0x04;
 fn create_cpu() -> MockCpuStub {
     let cpu = MockCpuStub::new();
     cpu
+}
+
+/// Create a CPU mock with expectations for NMI signaling (needed for PPU timing tests)
+fn create_cpu_with_nmi_expectations() -> MockCpuStub {
+    let mut cpu = MockCpuStub::new();
+    cpu.expect_clear_nmi().returning(|| Ok(()));
+    cpu.expect_signal_nmi().returning(|| Ok(()));
+    cpu
+}
+
+fn create_ppu_for_timing_tests() -> Ppu2c02 {
+    let mut chr_rom = MockBusDeviceStub::new();
+    let cpu = create_cpu_with_nmi_expectations();
+
+    chr_rom.expect_size().returning(|| CHR_MEMORY_SIZE);
+    chr_rom.expect_get_virtual_address_range().returning(|| CHR_MEMORY_RANGE);
+    chr_rom.expect_get_device_type().returning(|| BusDeviceType::WRAM(MemoryType::StandardMemory));
+    chr_rom.expect_get_name().returning(|| CHR_NAME.to_string());
+    chr_rom.expect_read_byte().returning(|_| Ok(0));
+
+    let config = ConfigSpec::from_region(Region::NTSC);
+
+    Ppu2c02::new(
+        Rc::new(RefCell::new(chr_rom)),
+        Rc::new(RefCell::new(PpuNameTableMirroring::Horizontal)),
+        Rc::new(RefCell::new(cpu)),
+        config,
+    ).unwrap()
 }
 
 #[allow(dead_code)]
@@ -320,4 +349,122 @@ fn v_wraps_to_0x0000_when_incrementing_from_0x3fff() {
     let v = ppu.get_v_value();
     println!("V: 0x{:04X}", v);
     assert_eq!(ppu.get_v_value(), 0x0000);
+}
+
+// ============================================================================
+// Dot-Accurate Timing Tests (Phase 6 - Cycle-Accurate Refactoring Validation)
+// ============================================================================
+
+/// Test that PPU starts at pre-render scanline (261 for NTSC)
+/// This is correct NES behavior - the PPU starts in a known state
+#[test]
+fn test_ppu_initial_timing_state() {
+    init();
+
+    let ppu = create_ppu_for_timing_tests();
+
+    // PPU starts at pre-render scanline (261) at dot 0
+    assert_eq!(ppu.get_current_dot(), 0, "PPU should start at dot 0");
+    assert_eq!(ppu.get_current_scanline(), 261, "PPU should start at pre-render scanline 261");
+    assert!(!ppu.is_vblank_set(), "VBlank should not be set initially");
+}
+
+/// Test that PPU advances dots correctly
+/// 1 CPU cycle = 3 PPU dots
+#[test]
+fn test_ppu_dot_advancement() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // After init, we're at scanline 261 (pre-render), dot 0
+    let initial_dot = ppu.get_current_dot();
+
+    // Run for 1 CPU cycle (3 PPU dots)
+    let _ = ppu.run(0, 1).unwrap();
+    let after_1_cycle = ppu.get_current_dot();
+    assert_eq!(after_1_cycle, initial_dot + 3, "After 1 CPU cycle, should advance 3 dots");
+
+    // Run for 10 more CPU cycles (30 PPU dots)
+    let _ = ppu.run(1, 10).unwrap();
+    let after_11_cycles = ppu.get_current_dot();
+    assert_eq!(after_11_cycles, initial_dot + 33, "After 11 CPU cycles, should advance 33 dots");
+}
+
+/// Test that PPU wraps from dot 340 to dot 0 and increments scanline
+#[test]
+fn test_ppu_scanline_wrap() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // PPU starts at scanline 261, dot 0
+    // Run for 114 CPU cycles (342 PPU dots = 1 full scanline + 1 dot)
+    let _ = ppu.run(0, 114).unwrap();
+
+    // After 342 dots from scanline 261: should wrap to scanline 0 (new frame)
+    let scanline = ppu.get_current_scanline();
+    let dot = ppu.get_current_dot();
+    println!("After 114 cycles from pre-render: scanline={}, dot={}", scanline, dot);
+
+    // Should have wrapped to scanline 0 (visible scanlines start)
+    assert_eq!(scanline, 0, "Should have wrapped to scanline 0 (new frame)");
+    assert_eq!(dot, 1, "Should be at dot 1 after wrap");
+}
+
+/// Test that VBlank is set at scanline 241 (NTSC)
+#[test]
+fn test_vblank_timing_at_scanline_241() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // From pre-render scanline 261, we need to go through:
+    // - 1 scanline to finish pre-render (261 -> frame wrap)
+    // - 242 scanlines to reach VBlank dot 1 (0-240 visible + scanline 241 dot 1)
+    // Total: 243 scanlines * 341 dots / 3 dots per cycle
+    // Use ceiling division to ensure we pass the VBlank trigger point
+    let dots_to_vblank = 243u32 * 341;  // 243 scanlines to ensure we're past VBlank trigger
+    let cycles_to_vblank = (dots_to_vblank + 2) / 3;  // Ceiling division
+
+    let _ = ppu.run(0, cycles_to_vblank).unwrap();
+
+    let scanline = ppu.get_current_scanline();
+    println!("After {} CPU cycles: scanline={}, dot={}, vblank={}",
+             cycles_to_vblank, scanline, ppu.get_current_dot(), ppu.is_vblank_set());
+
+    // VBlank should be set once we've passed scanline 241, dot 1
+    assert!(scanline >= 241, "Should have reached scanline 241 or beyond");
+    assert!(ppu.is_vblank_set(), "VBlank should be set at scanline 241");
+}
+
+/// Test that VBlank is cleared on pre-render scanline (261 for NTSC)
+#[test]
+fn test_vblank_cleared_on_prerender_scanline() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // First, run to VBlank (scanline 241+)
+    let dots_to_vblank = 243u32 * 341;
+    let cycles_to_vblank = (dots_to_vblank + 2) / 3;
+    let _ = ppu.run(0, cycles_to_vblank).unwrap();
+    assert!(ppu.is_vblank_set(), "VBlank should be set");
+
+    // Now run through rest of frame to pre-render scanline (261)
+    // From ~scanline 243, need to reach scanline 261 + 1 dot to clear flags
+    // That's about 20 more scanlines
+    let dots_to_prerender = 21u32 * 341;
+    let cycles_to_prerender = (dots_to_prerender + 2) / 3;
+    let _ = ppu.run(cycles_to_vblank, cycles_to_prerender).unwrap();
+
+    println!("After pre-render: scanline={}, dot={}, vblank={}",
+             ppu.get_current_scanline(), ppu.get_current_dot(), ppu.is_vblank_set());
+
+    // VBlank should be cleared at pre-render scanline
+    assert!(!ppu.is_vblank_set(), "VBlank should be cleared on pre-render scanline");
 }

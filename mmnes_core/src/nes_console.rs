@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 80% | Claude 20%
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -48,8 +48,8 @@ const CYCLE_START_SEQUENCE: u32 = 7;
 struct CyclesCounter {
     current: u32,
     previous: u32,
-    debt: u32,
-    credits: u32,
+    debt: u32,      // Reserved for future DMC DMA cycle stealing
+    credits: u32,   // Threshold for catch-up synchronization
 }
 
 impl CyclesCounter {
@@ -111,17 +111,17 @@ impl NesConsole {
         &self.config
     }    
     
+    /// Compute the number of CPU cycles that correspond to one scanline (341 PPU dots).
+    /// Used as the threshold for PPU catch-up synchronization.
     fn compute_ppu_credits(&self, config: &ConfigSpec) -> u32 {
         let credits = (341.0 * (config.cpu_clock_hz / config.ppu_clock_hz)).floor() as u32;
         credits.max(1)
     }
 
-
-    /***
-     * Give as many credits to the APU than to the PPU
-     ***/
+    /// Compute the number of CPU cycles for APU catch-up synchronization.
+    /// Uses the same threshold as PPU (one scanline worth of cycles).
     fn compute_apu_credits(&self, config: &ConfigSpec) -> u32 {
-        self.compute_ppu_credits(&config)
+        self.compute_ppu_credits(config)
     }
 
     fn new(cpu: Rc<RefCell<dyn CPU>>,ppu: Rc<RefCell<dyn PPU>>, apu: Rc<RefCell<dyn APU>>, controller: Rc<RefCell<dyn Controller>>, entry_point: Option<u16>, config: ConfigSpec) -> NesConsole {
@@ -153,22 +153,28 @@ impl NesConsole {
         Ok(vec)
     }
 
+    /// Synchronize PPU and APU with the CPU.
+    /// This method runs PPU/APU for the exact number of cycles the CPU is ahead,
+    /// providing instruction-level synchronization for better accuracy.
     pub fn catch_up_ppu_and_apu(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>), NesConsoleError> {
         let mut out_frame: Option<NesFrame> = None;
         let mut out_samples: Option<NesSamples> = None;
 
-        while self.cpu_counter.ahead(&self.ppu_counter, self.ppu_counter.credits) {
-            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, self.ppu_counter.credits)?;
+        // Calculate how many CPU cycles the PPU needs to catch up
+        let ppu_delta = self.cpu_counter.current.saturating_sub(self.ppu_counter.current);
+        if ppu_delta > 0 {
+            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, ppu_delta)?;
             if let Some(frame) = ppu_frame {
                 out_frame = Some(frame);
             }
-
             self.ppu_counter.current = ppu_cycles;
             self.ppu_counter.previous = self.ppu_counter.current;
         }
 
-        while self.cpu_counter.ahead(&self.apu_counter, self.apu_counter.credits) {
-            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, self.apu_counter.credits)?;
+        // Calculate how many CPU cycles the APU needs to catch up
+        let apu_delta = self.cpu_counter.current.saturating_sub(self.apu_counter.current);
+        if apu_delta > 0 {
+            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, apu_delta)?;
             if let Some(sample) = apu_samples {
                 if let Some(acc) = &mut out_samples {
                     acc.append(sample);
@@ -176,10 +182,12 @@ impl NesConsole {
                     out_samples = Some(sample);
                 }
             }
-
             self.apu_counter.current = apu_cycles;
             self.apu_counter.previous = self.apu_counter.current;
         }
+
+        // Clear any DMC stall cycles (not applied - would cause audio desync)
+        let _ = self.apu.borrow_mut().get_dmc_stall_cycles();
 
         Ok((out_frame, out_samples))
     }

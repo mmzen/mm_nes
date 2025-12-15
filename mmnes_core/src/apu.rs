@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::config_spec::Configurable;
@@ -70,8 +70,13 @@ pub trait APU: Configurable {
     fn reset(&mut self) -> Result<(), ApuError>;
     fn panic(&self, error: &ApuError);
 
-    /// Run the APU for exactly the specified number of cycles, returning the new cycle count after execution and an optional NesSample buffer containing samples.  
-    /// ```start_cycle```: current cycle of execution,  
+    /// Run the APU for exactly the specified number of cycles, returning the new cycle count after execution and an optional NesSample buffer containing samples.
+    /// ```start_cycle```: current cycle of execution,
     /// ```credits```: the number of cycles available to execute instructions
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError>;
+
+    /// Returns the number of CPU cycles stolen by DMC DMA since last call.
+    /// The DMC channel needs to fetch sample bytes from memory, which steals CPU cycles.
+    /// This method returns accumulated stall cycles and clears the internal counter.
+    fn get_dmc_stall_cycles(&mut self) -> u32;
 }

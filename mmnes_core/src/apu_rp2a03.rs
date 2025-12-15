@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 90% | Claude 10%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -573,13 +573,15 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         self.irq_pending = false;
     }
 
-    fn cond_dma_prefetch(&mut self) -> Result<(), ApuError> {
-        if self.bytes_remaining > 0 && self.sample_buffer.is_none()  {
+    /// Conditionally performs DMA prefetch if sample buffer is empty and bytes remain.
+    /// Returns true if a DMA fetch occurred (which steals CPU cycles).
+    fn cond_dma_prefetch(&mut self) -> Result<bool, ApuError> {
+        if self.bytes_remaining > 0 && self.sample_buffer.is_none() {
             self.dma_read_and_update_sample_buffer_and_counter()?;
-            //self.silenced = false;
+            Ok(true) // DMA occurred
+        } else {
+            Ok(false) // No DMA needed
         }
-
-        Ok(())
     }
 
     fn refill_or_underflow(&mut self) -> Result<(), ApuError> {
@@ -701,6 +703,12 @@ pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> {
     frame_events_5: [u32; 5],
     sound_player: T,
     apu_cycles_acc: f64,
+    // DMC DMA cycle stealing - tracks cycles stolen from CPU during sample fetches
+    dmc_stall_cycles: u32,
+    // Tracks odd/even CPU cycle state for APU clocking (APU runs at half CPU speed)
+    // true = next CPU cycle is odd, false = next CPU cycle is even
+    // APU channels (except triangle/DMC) only tick on even CPU cycles
+    cpu_cycle_odd: bool,
 }
 
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03<T, U, V> {
@@ -833,7 +841,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             frame_events_4: [0; 4],
             frame_events_5: [0; 5],
             sound_player,
-            apu_cycles_acc: 0.0
+            apu_cycles_acc: 0.0,
+            dmc_stall_cycles: 0,
+            cpu_cycle_odd: false,
         };
 
         apu.recompute_timing();
@@ -1204,26 +1214,29 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
     }
 
     fn clock_dmc_timer(&mut self) -> Result<(), ApuError> {
-        let dmc = &mut self.dmc;
-
-        if dmc.enabled == false {
+        if self.dmc.enabled == false {
             return Ok(())
         }
 
-        // dma prefetch
-        dmc.cond_dma_prefetch()?;
+        // DMA prefetch - steals CPU cycles when it occurs
+        // DMC DMA takes 4 cycles on average (can be 1-4 depending on CPU state,
+        // but we use 4 as a typical value for accuracy)
+        let dma_occurred = self.dmc.cond_dma_prefetch()?;
+        if dma_occurred {
+            self.dmc_stall_cycles += 4;
+        }
 
-        if dmc.timer_counter == 0 {
-            dmc.refill_or_underflow()?;
+        if self.dmc.timer_counter == 0 {
+            self.dmc.refill_or_underflow()?;
 
-            if dmc.bits_remaining > 0 {
-                dmc.update_output_level();
-                dmc.bits_remaining -= 1;
+            if self.dmc.bits_remaining > 0 {
+                self.dmc.update_output_level();
+                self.dmc.bits_remaining -= 1;
             }
 
-            dmc.timer_counter = dmc.timer_period;
+            self.dmc.timer_counter = self.dmc.timer_period;
         } else {
-            dmc.timer_counter -= 1;
+            self.dmc.timer_counter -= 1;
         }
 
         Ok(())
@@ -1371,7 +1384,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         self.frame_counter.reset();
         self.apu_cycles_acc = 0f64;
         self.sound_player.clear();
-        
+        self.dmc_stall_cycles = 0;
+        self.cpu_cycle_odd = false;
+
         self.recompute_timing();
         Ok(())
     }
@@ -1393,7 +1408,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
      ***/
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError> {
 
-        for counter in 0..credits {
+        for _ in 0..credits {
 
             /***
              * DMC and triangle channels are clocked at the CPU clock rate
@@ -1402,9 +1417,11 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
             self.clock_triangle_timer();
 
             /***
-             * other channels are the frame counter are clocked at the APU clock rate
+             * Other channels and the frame counter are clocked at the APU clock rate
+             * (every 2 CPU cycles). We use persistent odd/even tracking to ensure
+             * correct timing even when run() is called with small cycle counts.
              */
-            if counter % 2 == 0 {
+            if !self.cpu_cycle_odd {
                 self.clock_pulse_timers();
                 self.clock_noise_timer();
                 self.clock_frame_sequencer(1)?;
@@ -1416,6 +1433,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
                     self.apu_cycles_acc -= self.config.cycles_per_sample;
                 }
             }
+
+            // Toggle odd/even state for next CPU cycle
+            self.cpu_cycle_odd = !self.cpu_cycle_odd;
         }
 
         let buffer = self.sound_player.samples();
@@ -1426,5 +1446,11 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         };
 
         Ok((start_cycle + credits, samples))
+    }
+
+    fn get_dmc_stall_cycles(&mut self) -> u32 {
+        let cycles = self.dmc_stall_cycles;
+        self.dmc_stall_cycles = 0;
+        cycles
     }
 }

@@ -103,6 +103,7 @@ file.
 
 Claude will maintain a PLAN.md file, that contains the development: what has been done, what is planned and that track the progress.
 This file is essential for the track record and to continue the sessions when interrupted, so Claude need to put the right content for maximum effectiveness.
+In addition, Claude must maintain the track record of the ratio human versus Claude globally in this file after each session logs (so they may be eventually plotted)
 
 # Important development guidelines and instructions
 

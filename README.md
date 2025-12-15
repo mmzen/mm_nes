@@ -24,12 +24,17 @@ We're testing a new paradigm:
 
 Every source file tracks authorship (`Human X% | Claude Y%`) to provide transparency on contributions.
 
+### Interesting Things
+
+The ```CLAUDE.md``` contains the instruction for Claude, including all requirements related to software engineering.   
+The ```PLAN.md``` is maintained by Claude, contains the track records of the changes and the current development plan.
+
 ---
 
 ## Contributions Timeline
 
 ### Human Achievements (Pre-December 2025)
-The human built the emulator from scratch:
+The human built the emulator from scratch (18 k LOC):
 - ✅ 6502 CPU with all official and unofficial opcodes (initial implementation)
 - ✅ PPU 2C02 implementation (background, sprites, VBL/NMI timing)
 - ✅ APU RP2A03 (pulses, triangle, noise, DMC)
@@ -45,7 +50,12 @@ The human built the emulator from scratch:
 Claude is now the primary contributor:
 - ✅ Implemented SingleStepTests test framework (`mmnes_core/src/tests/singlestep/`)
 - ✅ Fixed CPU to pass 100% of SingleStepTests (2,560,000 / 2,560,000) — was ~30% before
-- 🔄 *More to come...*
+- ✅ Cycle-accurate timing refactoring:
+  - PPU dot-level state tracking (exact position within frame)
+  - Fine-grained PPU/APU synchronization (per-instruction, not per-scanline)
+  - Dot-accurate VBlank and sprite 0 hit detection
+  - Fixed APU cycle tracking bug that caused audio desync
+- ✅ AccuracyCoin improved: 74 → 82 / 131 (+8 points)
 
 ---
 
@@ -66,7 +76,7 @@ This project is a personal work-in-progress **still under active development**.
 We track emulator correctness with **AccuracyCoin**, a single-ROM test suite for NES (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).
 _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_
 
-**Current score:** `74 / 131`
+**Current score:** `82 / 131`
 
 ![AccuracyCoin results on mm_nes](docs/accuracy_coin_result.png)
 
@@ -89,9 +99,10 @@ TOTAL: 2560000 passed, 0 failed
 ### PPU
 - [x] Background rendering
 - [x] Sprites (8 per scanline rule)
-- [x] Sprite 0 hit
-- [x] VBL/NMI timing
-- [ ] Cycle-accurate (mid-scanline updates)
+- [x] Sprite 0 hit (dot-accurate timing)
+- [x] VBL/NMI timing (dot-accurate)
+- [x] Dot-level state tracking
+- [ ] Mid-scanline scroll updates
 - [ ] Color emphasis
 - [ ] Sprite/background left column enable
 - [ ] Greyscale
@@ -99,6 +110,7 @@ TOTAL: 2560000 passed, 0 failed
 ### APU
 - [x] Pulses, Triangle, Noise
 - [x] DMC
+- [x] Per-instruction synchronization
 - [ ] Filters
 
 ### Mappers
