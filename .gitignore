@@ -6,8 +6,5 @@
 tarpaulin-report.json
 llvm-cov-report.json
 
-# Generated metrics data (keep .gitkeep)
-metrics/data/*.csv
-metrics/data/*.png
-metrics/data/*.md
+# Python cache
 metrics/__pycache__/
