@@ -1,3 +1,13 @@
 /target
 /log
 .claude
+
+# Coverage reports
+tarpaulin-report.json
+llvm-cov-report.json
+
+# Generated metrics data (keep .gitkeep)
+metrics/data/*.csv
+metrics/data/*.png
+metrics/data/*.md
+metrics/__pycache__/
