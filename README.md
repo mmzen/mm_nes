@@ -153,3 +153,11 @@ cargo run -p mmnes_frontend
 ```
 
 **Dependency**: SDL2 must be installed on the system.
+
+---
+
+## Code Quality Metrics
+
+We track code quality KPIs (complexity, coverage, authorship) at each commit. The dashboard below shows trends across the last 10 commits, including Claude's growing contribution to the codebase.
+
+![Code Quality Dashboard](metrics/data/dashboard.png)
