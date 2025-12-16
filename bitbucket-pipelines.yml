@@ -49,8 +49,20 @@ pipelines:
             - rustup component add llvm-tools-preview
             - cargo install rust-code-analysis-cli cargo-llvm-cov --locked
             - pip install -r metrics/requirements.txt
+            # Collect metrics (appends to existing CSV)
             - python3 metrics/collect_metrics.py --with-coverage
             - python3 metrics/plot_metrics.py
+            # Commit updated metrics back to repo
+            - git config user.email "ci@bitbucket.org"
+            - git config user.name "Bitbucket CI"
+            - git add metrics/data/
+            - |
+              if git diff --staged --quiet; then
+                echo "No metrics changes to commit"
+              else
+                git commit -m "Update metrics data [skip ci]"
+                git push origin main
+              fi
           artifacts:
             - metrics/data/*.csv
             - metrics/data/*.png
