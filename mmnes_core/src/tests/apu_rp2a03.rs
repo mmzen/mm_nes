@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 70% | Claude 30%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::apu::APU;
@@ -173,11 +173,11 @@ fn pulse1_control_register_sets_duty_cycle() {
     // Enable pulse 1
     apu.write_byte(0x15, 0x01).unwrap();
 
-    // Write duty cycle 50% (0b10xxxxxx = 0x80)
+    // Write duty cycle 50% (0b10xxxxxx = 0x80, duty cycle index = 2)
     apu.write_byte(0x00, 0x80).unwrap();
 
-    // The duty cycle is internal, we verify by running
-    // For now just verify no error
+    // Verify duty cycle was set to index 2 (50%)
+    assert_eq!(apu.test_get_pulse1_duty_cycle(), 2);
 }
 
 #[test]
@@ -192,6 +192,12 @@ fn pulse1_control_register_sets_envelope() {
     // Write constant volume flag and volume = 15
     // 0x3F = 0b00111111 (halt=1, const_vol=1, vol=15)
     apu.write_byte(0x00, 0x3F).unwrap();
+
+    // Verify envelope settings (const_volume, loop_flag, volume)
+    let (const_vol, loop_flag, volume) = apu.test_get_pulse1_envelope();
+    assert!(const_vol, "const_volume flag should be set");
+    assert!(loop_flag, "loop_flag should be set (same bit as halt)");
+    assert_eq!(volume, 15, "volume should be 15");
 }
 
 #[test]
@@ -203,8 +209,15 @@ fn pulse1_sweep_register_enables_sweep() {
     // Enable pulse 1
     apu.write_byte(0x15, 0x01).unwrap();
 
-    // Enable sweep: 0x87 = enabled, divider=0, negate=0, shift=7
+    // Enable sweep: 0x87 = enabled, divider=0 (+1=1), negate=0, shift=7
     apu.write_byte(0x01, 0x87).unwrap();
+
+    // Verify sweep settings (enabled, divider, shift, negate)
+    let (enabled, divider, shift, negate) = apu.test_get_pulse1_sweep();
+    assert!(enabled, "sweep should be enabled");
+    assert_eq!(divider, 1, "divider should be 1 (0+1)");
+    assert_eq!(shift, 7, "shift should be 7");
+    assert!(!negate, "negate should be false");
 }
 
 #[test]
@@ -221,6 +234,9 @@ fn pulse1_timer_registers_set_period() {
 
     // Write timer high byte + length counter
     apu.write_byte(0x03, 0x07).unwrap(); // Timer high = 7, length index = 0
+
+    // Verify timer period: high 3 bits (7) << 8 | low 8 bits (0xAB) = 0x7AB
+    assert_eq!(apu.test_get_pulse1_timer_period(), 0x07AB);
 }
 
 #[test]
@@ -233,14 +249,20 @@ fn pulse2_registers_work_independently() {
     apu.write_byte(0x15, 0x03).unwrap();
 
     // Configure pulse 1
-    apu.write_byte(0x00, 0x80).unwrap(); // Duty 50%
+    apu.write_byte(0x00, 0x80).unwrap(); // Duty 50% (index 2)
     apu.write_byte(0x02, 0x00).unwrap(); // Timer lo
     apu.write_byte(0x03, 0x08).unwrap(); // Timer hi + length
 
     // Configure pulse 2 differently
-    apu.write_byte(0x04, 0x40).unwrap(); // Duty 25%
+    apu.write_byte(0x04, 0x40).unwrap(); // Duty 25% (index 1)
     apu.write_byte(0x06, 0xFF).unwrap(); // Timer lo
     apu.write_byte(0x07, 0x0F).unwrap(); // Timer hi + length
+
+    // Verify pulse 1 and pulse 2 have independent settings
+    assert_eq!(apu.test_get_pulse1_duty_cycle(), 2, "pulse 1 duty should be 50%");
+    assert_eq!(apu.test_get_pulse2_duty_cycle(), 1, "pulse 2 duty should be 25%");
+    assert_eq!(apu.test_get_pulse1_timer_period(), 0x0000, "pulse 1 timer period");
+    assert_eq!(apu.test_get_pulse2_timer_period(), 0x07FF, "pulse 2 timer period");
 }
 
 // ============================================================================
@@ -256,8 +278,13 @@ fn triangle_linear_counter_register() {
     // Enable triangle
     apu.write_byte(0x15, 0x04).unwrap();
 
-    // Write linear counter: 0xFF = control flag set, reload = 127
+    // Write linear counter: 0xFF = control flag set (bit 7), period = 127 (bits 0-6)
     apu.write_byte(0x08, 0xFF).unwrap();
+
+    // Verify linear counter settings (control_flag, period)
+    let (control, period) = apu.test_get_triangle_linear_counter();
+    assert!(control, "control flag should be set");
+    assert_eq!(period, 127, "period should be 127");
 }
 
 #[test]
@@ -272,8 +299,11 @@ fn triangle_timer_registers() {
     // Write timer low
     apu.write_byte(0x0A, 0x55).unwrap();
 
-    // Write timer high + length counter
+    // Write timer high + length counter (timer high = 0, length index = 1)
     apu.write_byte(0x0B, 0x08).unwrap();
+
+    // Verify timer period: high 3 bits (0) << 8 | low 8 bits (0x55) = 0x55
+    assert_eq!(apu.test_get_triangle_timer_period(), 0x0055);
 }
 
 // ============================================================================
@@ -290,7 +320,14 @@ fn noise_control_register() {
     apu.write_byte(0x15, 0x08).unwrap();
 
     // Write control: halt=1, const_vol=1, volume=10
+    // 0x3A = 0b00111010 (halt=1, const_vol=1, vol=10)
     apu.write_byte(0x0C, 0x3A).unwrap();
+
+    // Verify envelope settings (const_volume, loop_flag, volume)
+    let (const_vol, loop_flag, volume) = apu.test_get_noise_envelope();
+    assert!(const_vol, "const_volume flag should be set");
+    assert!(loop_flag, "loop_flag should be set");
+    assert_eq!(volume, 10, "volume should be 10");
 }
 
 #[test]
@@ -303,7 +340,13 @@ fn noise_mode_and_period_register() {
     apu.write_byte(0x15, 0x08).unwrap();
 
     // Write mode and period: mode=1 (short), period index=5
+    // 0x85 = 0b10000101 (mode=1, period_index=5)
     apu.write_byte(0x0E, 0x85).unwrap();
+
+    // Verify noise mode (true = mode 1/short)
+    assert!(apu.test_get_noise_mode(), "noise mode should be 1 (short)");
+    // Timer period is looked up from table, just verify it was set (non-zero)
+    assert!(apu.test_get_noise_timer_period() > 0, "timer period should be set from table");
 }
 
 #[test]
@@ -315,8 +358,12 @@ fn noise_length_counter_load() {
     // Enable noise
     apu.write_byte(0x15, 0x08).unwrap();
 
-    // Write length counter load
-    apu.write_byte(0x0F, 0x08).unwrap(); // Length counter index = 1
+    // Write length counter load (index = 1 from bits 3-7)
+    // 0x08 = 0b00001000, so index = 1, which maps to 254 in lookup table
+    apu.write_byte(0x0F, 0x08).unwrap();
+
+    // Verify length counter was loaded
+    assert_eq!(apu.test_get_noise_length_counter(), 254, "length counter should be loaded with value 254");
 }
 
 // ============================================================================
@@ -335,8 +382,20 @@ fn dmc_flags_and_rate_register() {
     // Write flags and rate: IRQ disable, no loop, rate index 0
     apu.write_byte(0x10, 0x00).unwrap();
 
+    // Verify initial state
+    let (irq_enabled, loop_enabled) = apu.test_get_dmc_flags();
+    assert!(!irq_enabled, "IRQ should be disabled");
+    assert!(!loop_enabled, "loop should be disabled");
+
     // Write flags and rate: IRQ enable, loop, rate index 15
+    // 0xCF = 0b11001111 (irq=1, loop=1, rate=15)
     apu.write_byte(0x10, 0xCF).unwrap();
+
+    // Verify updated state
+    let (irq_enabled, loop_enabled) = apu.test_get_dmc_flags();
+    assert!(irq_enabled, "IRQ should be enabled");
+    assert!(loop_enabled, "loop should be enabled");
+    assert!(apu.test_get_dmc_timer_period() > 0, "timer period should be set from table");
 }
 
 #[test]
@@ -349,7 +408,10 @@ fn dmc_output_register() {
     apu.write_byte(0x15, 0x10).unwrap();
 
     // Write direct output load (7-bit value)
-    apu.write_byte(0x11, 0x40).unwrap(); // Mid-level output
+    apu.write_byte(0x11, 0x40).unwrap(); // Mid-level output (64)
+
+    // Verify output level was set (masked to 7 bits)
+    assert_eq!(apu.test_get_dmc_output(), 0x40, "output level should be 0x40");
 }
 
 #[test]
@@ -361,9 +423,12 @@ fn dmc_sample_address_register() {
     // Enable DMC
     apu.write_byte(0x15, 0x10).unwrap();
 
-    // Write sample address: address = $C000 + (value * 64)
+    // Write sample address: address = $C000 | (value << 6)
     apu.write_byte(0x12, 0x00).unwrap(); // Address = $C000
-    apu.write_byte(0x12, 0xFF).unwrap(); // Address = $FFC0
+    assert_eq!(apu.test_get_dmc_sample_address(), 0xC000, "address should be $C000");
+
+    apu.write_byte(0x12, 0xFF).unwrap(); // Address = $C000 | (0xFF << 6) = $FFC0
+    assert_eq!(apu.test_get_dmc_sample_address(), 0xFFC0, "address should be $FFC0");
 }
 
 #[test]
@@ -375,9 +440,12 @@ fn dmc_sample_length_register() {
     // Enable DMC
     apu.write_byte(0x15, 0x10).unwrap();
 
-    // Write sample length: length = (value * 16) + 1
+    // Write sample length: length = (value << 4) | 1
     apu.write_byte(0x13, 0x00).unwrap(); // Length = 1
-    apu.write_byte(0x13, 0xFF).unwrap(); // Length = 4081
+    assert_eq!(apu.test_get_dmc_sample_length(), 1, "length should be 1");
+
+    apu.write_byte(0x13, 0xFF).unwrap(); // Length = (0xFF << 4) | 1 = 0xFF1
+    assert_eq!(apu.test_get_dmc_sample_length(), 0xFF1, "length should be 0xFF1 (4081)");
 }
 
 // ============================================================================
@@ -391,7 +459,12 @@ fn frame_counter_mode_4_step() {
     apu.initialize().unwrap();
 
     // Write frame counter: 4-step mode, IRQ enabled
+    // 0x00 = mode 0 (4-step), IRQ enabled
     apu.write_byte(0x17, 0x00).unwrap();
+
+    // Verify 4-step mode (false = 4-step)
+    assert!(!apu.test_get_frame_counter_mode(), "should be 4-step mode");
+    assert!(!apu.test_get_frame_counter_irq_inhibit(), "IRQ should not be inhibited");
 }
 
 #[test]
@@ -401,7 +474,12 @@ fn frame_counter_mode_5_step() {
     apu.initialize().unwrap();
 
     // Write frame counter: 5-step mode, IRQ disabled
+    // 0xC0 = 0b11000000 (mode=1/5-step, irq_inhibit=1)
     apu.write_byte(0x17, 0xC0).unwrap();
+
+    // Verify 5-step mode (true = 5-step)
+    assert!(apu.test_get_frame_counter_mode(), "should be 5-step mode");
+    assert!(apu.test_get_frame_counter_irq_inhibit(), "IRQ should be inhibited");
 }
 
 #[test]
@@ -411,7 +489,12 @@ fn frame_counter_irq_inhibit() {
     apu.initialize().unwrap();
 
     // Write frame counter: 4-step mode, IRQ disabled
+    // 0x40 = 0b01000000 (mode=0/4-step, irq_inhibit=1)
     apu.write_byte(0x17, 0x40).unwrap();
+
+    // Verify 4-step mode with IRQ inhibited
+    assert!(!apu.test_get_frame_counter_mode(), "should be 4-step mode");
+    assert!(apu.test_get_frame_counter_irq_inhibit(), "IRQ should be inhibited");
 }
 
 // ============================================================================

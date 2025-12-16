@@ -1,4 +1,4 @@
-// Authorship: Human 90% | Claude 10%
+// Authorship: Human 85% | Claude 15%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -335,7 +335,7 @@ impl Pulse {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum ShiftMode {
     Zero,
     One
@@ -625,7 +625,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum FrameCounterMode {
     FourStep,
     FiveStep
@@ -1452,5 +1452,150 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         let cycles = self.dmc_stall_cycles;
         self.dmc_stall_cycles = 0;
         cycles
+    }
+}
+
+// ============================================================================
+// Test inspection methods - only compiled in test builds
+// ============================================================================
+
+#[cfg(test)]
+impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
+    /// Get pulse 1 duty cycle (0-3)
+    pub fn test_get_pulse1_duty_cycle(&self) -> usize {
+        self.pulse1.duty_cycle
+    }
+
+    /// Get pulse 2 duty cycle (0-3)
+    pub fn test_get_pulse2_duty_cycle(&self) -> usize {
+        self.pulse2.duty_cycle
+    }
+
+    /// Get pulse 1 envelope settings (const_volume, loop_flag, volume)
+    pub fn test_get_pulse1_envelope(&self) -> (bool, bool, u8) {
+        (
+            self.pulse1.envelope.const_volume,
+            self.pulse1.envelope.loop_flag,
+            self.pulse1.envelope.volume
+        )
+    }
+
+    /// Get pulse 2 envelope settings (const_volume, loop_flag, volume)
+    pub fn test_get_pulse2_envelope(&self) -> (bool, bool, u8) {
+        (
+            self.pulse2.envelope.const_volume,
+            self.pulse2.envelope.loop_flag,
+            self.pulse2.envelope.volume
+        )
+    }
+
+    /// Get pulse 1 sweep settings (enabled, divider, shift, negate)
+    pub fn test_get_pulse1_sweep(&self) -> (bool, u8, u8, bool) {
+        (
+            self.pulse1.sweep.enabled,
+            self.pulse1.sweep.initial_divider,
+            self.pulse1.sweep.shift,
+            self.pulse1.sweep.negate
+        )
+    }
+
+    /// Get pulse 1 timer period
+    pub fn test_get_pulse1_timer_period(&self) -> u16 {
+        self.pulse1.timer_period
+    }
+
+    /// Get pulse 2 timer period
+    pub fn test_get_pulse2_timer_period(&self) -> u16 {
+        self.pulse2.timer_period
+    }
+
+    /// Get pulse 1 length counter
+    pub fn test_get_pulse1_length_counter(&self) -> u8 {
+        self.pulse1.length_counter.counter
+    }
+
+    /// Get pulse 2 length counter
+    pub fn test_get_pulse2_length_counter(&self) -> u8 {
+        self.pulse2.length_counter.counter
+    }
+
+    /// Get triangle linear counter settings (control_flag, period)
+    pub fn test_get_triangle_linear_counter(&self) -> (bool, u8) {
+        (
+            self.triangle.linear_counter.control,
+            self.triangle.linear_counter.period
+        )
+    }
+
+    /// Get triangle timer period
+    pub fn test_get_triangle_timer_period(&self) -> u16 {
+        self.triangle.timer_period
+    }
+
+    /// Get triangle length counter
+    pub fn test_get_triangle_length_counter(&self) -> u8 {
+        self.triangle.length_counter.counter
+    }
+
+    /// Get noise envelope settings (const_volume, loop_flag, volume)
+    pub fn test_get_noise_envelope(&self) -> (bool, bool, u8) {
+        (
+            self.noise.envelope.const_volume,
+            self.noise.envelope.loop_flag,
+            self.noise.envelope.volume
+        )
+    }
+
+    /// Get noise shift mode (false = mode 0, true = mode 1)
+    pub fn test_get_noise_mode(&self) -> bool {
+        self.noise.shift_mode == ShiftMode::One
+    }
+
+    /// Get noise timer period
+    pub fn test_get_noise_timer_period(&self) -> u16 {
+        self.noise.timer_period
+    }
+
+    /// Get noise length counter
+    pub fn test_get_noise_length_counter(&self) -> u8 {
+        self.noise.length_counter.counter
+    }
+
+    /// Get DMC flags (irq_enabled, loop_enabled)
+    pub fn test_get_dmc_flags(&self) -> (bool, bool) {
+        (
+            self.dmc.irq_enable,
+            self.dmc.reload == Reload::Loop
+        )
+    }
+
+    /// Get DMC timer period
+    pub fn test_get_dmc_timer_period(&self) -> u16 {
+        self.dmc.timer_period
+    }
+
+    /// Get DMC output level
+    pub fn test_get_dmc_output(&self) -> u8 {
+        self.dmc.output_level
+    }
+
+    /// Get DMC sample address
+    pub fn test_get_dmc_sample_address(&self) -> u16 {
+        self.dmc.sample_address
+    }
+
+    /// Get DMC sample length
+    pub fn test_get_dmc_sample_length(&self) -> u16 {
+        self.dmc.sample_length
+    }
+
+    /// Get frame counter mode (false = 4-step, true = 5-step)
+    pub fn test_get_frame_counter_mode(&self) -> bool {
+        self.frame_counter.mode == FrameCounterMode::FiveStep
+    }
+
+    /// Get frame counter IRQ inhibit flag
+    pub fn test_get_frame_counter_irq_inhibit(&self) -> bool {
+        self.frame_counter.inhibit_irq.get()
     }
 }

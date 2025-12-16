@@ -1,4 +1,4 @@
-// Authorship: Human 85% | Claude 15%
+// Authorship: Human 80% | Claude 20%
 use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
@@ -123,15 +123,20 @@ fn test_initialize_ppu() {
 }
 
 #[test]
-fn read_write_byte_works() {
+fn write_to_control_register_works() {
     init();
 
     let mut ppu = create_ppu();
-    let address = 0x00;
+    let address = 0x00; // PPU Control register ($2000)
     let value = 0xAB;
 
+    // Write to control register
     ppu.write_byte(address, value).unwrap();
-    assert_eq!(ppu.read_byte(address).unwrap(), value);
+
+    // Note: PPU Control ($2000) is write-only on real hardware.
+    // Reading it returns open bus, not the written value.
+    // We use the internal inspection method to verify the write worked.
+    assert_eq!(ppu.get_register_value("controller"), value);
 }
 
 #[test]
@@ -324,15 +329,21 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
     ppu.write_byte(status, status_value).unwrap();
     ppu.write_byte(addr, addr_value).unwrap();
 
+    // First read of status returns the value with VBlank bit set
     let result0 = ppu.read_byte(status).unwrap();
+    // Second read should have VBlank cleared (bit 7 = 0)
     let result1 = ppu.read_byte(status).unwrap();
 
     assert_eq!(result0, status_value);
-    assert_eq!(result1, status_value & 0x7F );
+    assert_eq!(result1, status_value & 0x7F);
 
-    ppu.write_byte(addr, addr_value).unwrap();
-    let result2 = ppu.read_byte(addr).unwrap();
-    assert_eq!(result2, 0x00);
+    // Reading status resets the address latch (write toggle)
+    // To verify latch was reset: write two bytes to PPUADDR again
+    // and verify the address was set correctly via V register
+    ppu.write_byte(addr, 0x21).unwrap();  // High byte
+    ppu.write_byte(addr, 0x00).unwrap();  // Low byte
+    // V should be 0x2100 (masked to 14 bits)
+    assert_eq!(ppu.get_v_value(), 0x2100);
 }
 
 #[test]
