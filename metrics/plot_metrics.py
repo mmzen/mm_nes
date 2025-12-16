@@ -239,8 +239,8 @@ def plot_combined_dashboard(df: pd.DataFrame, output_path: Path):
         ("functions_count", "Function Count", axes[0, 1]),
         ("avg_cyclomatic", "Avg Cyclomatic", axes[0, 2]),
         ("avg_cognitive", "Avg Cognitive", axes[1, 0]),
-        ("avg_halstead_diff", "Avg Halstead Diff", axes[1, 1]),
-        ("coverage_percent", "Coverage %", axes[1, 2]),
+        ("coverage_percent", "Coverage %", axes[1, 1]),
+        ("claude_percent", "Claude Authorship %", axes[1, 2]),
     ]
 
     for metric_col, title, ax in plots:
@@ -295,22 +295,24 @@ def generate_latest_summary(df: pd.DataFrame, output_path: Path):
         f.write(f"**Latest commit:** `{commit}` on `{branch}`\n\n")
 
         f.write("## Per-Crate Metrics\n\n")
-        f.write("| Crate | LOC | Functions | Avg Cyclo | Max Cyclo | Avg Cog | Max Cog | Coverage |\n")
-        f.write("|-------|-----|-----------|-----------|-----------|---------|---------|----------|\n")
+        f.write("| Crate | LOC | Functions | Avg Cyclo | Coverage | Human % | Claude % |\n")
+        f.write("|-------|-----|-----------|-----------|----------|---------|----------|\n")
 
         for _, row in latest.iterrows():
             coverage_str = f"{row['coverage_percent']:.1f}%" if row['total_lines'] > 0 else "N/A"
+            human_pct = row.get('human_percent', 100.0)
+            claude_pct = row.get('claude_percent', 0.0)
             f.write(
                 f"| {row['crate_name']} | {row['loc_code']} | {row['functions_count']} | "
-                f"{row['avg_cyclomatic']:.1f} | {row['max_cyclomatic']:.0f} | "
-                f"{row['avg_cognitive']:.1f} | {row['max_cognitive']:.0f} | {coverage_str} |\n"
+                f"{row['avg_cyclomatic']:.1f} | {coverage_str} | "
+                f"{human_pct:.1f}% | {claude_pct:.1f}% |\n"
             )
 
         f.write("\n## Definitions\n\n")
         f.write("- **LOC**: Lines of code (excluding comments and blanks)\n")
         f.write("- **Cyclomatic**: Number of independent paths through the code\n")
-        f.write("- **Cognitive**: Measure of how difficult code is to understand\n")
         f.write("- **Coverage**: Percentage of code lines covered by tests\n")
+        f.write("- **Human/Claude %**: Authorship attribution based on file headers\n")
 
     print(f"  Saved: {output_path}")
 

@@ -67,6 +67,19 @@ class CrateMetrics:
     coverage_percent: float = 0.0
     covered_lines: int = 0
     total_lines: int = 0
+    # Authorship tracking (LOC-weighted)
+    human_loc: int = 0      # LOC attributed to human
+    claude_loc: int = 0     # LOC attributed to Claude
+
+    @property
+    def human_percent(self) -> float:
+        total = self.human_loc + self.claude_loc
+        return (self.human_loc / total * 100) if total > 0 else 100.0
+
+    @property
+    def claude_percent(self) -> float:
+        total = self.human_loc + self.claude_loc
+        return (self.claude_loc / total * 100) if total > 0 else 0.0
 
     @property
     def avg_cyclomatic(self) -> float:
@@ -116,13 +129,80 @@ def file_belongs_to_crate(file_path: str, crate_name: str) -> bool:
         normalized.endswith(f"/{crate_name}")       # Edge case: path ends with crate
     )
 
+
+import re
+
+def parse_authorship(file_path: Path) -> tuple:
+    """Parse authorship header from a source file.
+
+    Looks for pattern: // Authorship: Human X% | Claude Y%
+    Also supports: # Authorship: Human X% | Claude Y% (for Python files)
+
+    Returns (human_percent, claude_percent) or (100, 0) if no header found.
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Read first 10 lines to find authorship header
+            for _ in range(10):
+                line = f.readline()
+                if not line:
+                    break
+
+                # Match pattern: Authorship: Human X% | Claude Y%
+                match = re.search(
+                    r'Authorship:\s*Human\s+(\d+(?:\.\d+)?)\s*%\s*\|\s*Claude\s+(\d+(?:\.\d+)?)\s*%',
+                    line,
+                    re.IGNORECASE
+                )
+                if match:
+                    human = float(match.group(1))
+                    claude = float(match.group(2))
+                    return (human, claude)
+    except (IOError, OSError):
+        pass
+
+    # Default: assume 100% human if no header found
+    return (100.0, 0.0)
+
+
+def collect_authorship(workspace: Path, crate_name: str) -> tuple:
+    """Collect authorship stats for all source files in a crate.
+
+    Returns (total_human_loc, total_claude_loc) weighted by LOC.
+    """
+    crate_src = workspace / crate_name / "src"
+    if not crate_src.exists():
+        return (0, 0)
+
+    total_human_loc = 0
+    total_claude_loc = 0
+
+    for rs_file in crate_src.rglob("*.rs"):
+        # Count lines in file
+        try:
+            with open(rs_file, 'r', encoding='utf-8', errors='ignore') as f:
+                loc = sum(1 for line in f if line.strip())
+        except (IOError, OSError):
+            continue
+
+        # Get authorship percentages
+        human_pct, claude_pct = parse_authorship(rs_file)
+
+        # Weight by LOC
+        total_human_loc += int(loc * human_pct / 100)
+        total_claude_loc += int(loc * claude_pct / 100)
+
+    return (total_human_loc, total_claude_loc)
+
+
 # CSV column definitions
 CSV_FIELDNAMES = [
     "timestamp", "commit_date", "commit_hash", "commit_short", "branch", "crate_name",
     "loc_total", "loc_code", "loc_comments", "loc_blanks",
     "functions_count", "avg_cyclomatic", "max_cyclomatic",
     "avg_cognitive", "max_cognitive", "avg_halstead_diff", "max_halstead_diff",
-    "coverage_percent", "covered_lines", "total_lines"
+    "coverage_percent", "covered_lines", "total_lines",
+    "human_percent", "claude_percent"
 ]
 
 
@@ -510,6 +590,11 @@ def collect_all_metrics(workspace_root: Path, with_coverage: bool = False) -> Li
                 (cov["covered"] / cov["total"] * 100) if cov["total"] > 0 else 0.0
             )
 
+        # Collect authorship data
+        human_loc, claude_loc = collect_authorship(workspace_root, crate_name)
+        metrics.human_loc = human_loc
+        metrics.claude_loc = claude_loc
+
         all_metrics.append(metrics)
 
     return all_metrics
@@ -556,6 +641,8 @@ def write_csv(metrics_list: List[CrateMetrics], git_info: Dict[str, str]):
                     "coverage_percent": round(m.coverage_percent, 2),
                     "covered_lines": m.covered_lines,
                     "total_lines": m.total_lines,
+                    "human_percent": round(m.human_percent, 1),
+                    "claude_percent": round(m.claude_percent, 1),
                 })
         finally:
             unlock_file(f)
@@ -580,6 +667,7 @@ def print_summary(metrics_list: List[CrateMetrics]):
             print(f"  Coverage: {m.coverage_percent:.1f}% ({m.covered_lines}/{m.total_lines} lines)")
         else:
             print(f"  Coverage: N/A (not collected)")
+        print(f"  Authorship: Human {m.human_percent:.1f}% | Claude {m.claude_percent:.1f}%")
 
     print("\n" + "=" * 70)
 
