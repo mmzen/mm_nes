@@ -1,7 +1,7 @@
 image: rust:latest
 
 options:
-  max-time: 15
+  max-time: 30
 
 pipelines:
   default:
@@ -24,6 +24,45 @@ pipelines:
           - git remote add github "${GITHUB_URL}" || git remote set-url github "${GITHUB_URL}"
           - git push --prune github +refs/heads/*:refs/heads/*
           - git push --prune github +refs/tags/*:refs/tags/*
+
+  branches:
+    main:
+      - step:
+          caches:
+            - cargo-home
+            - cargo-target
+          name: Build and Test
+          script:
+            - rustup update
+            - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev
+            - cargo build --verbose
+            - cargo test --verbose
+            - cargo test test_all_opcodes -- --ignored --nocapture
+      - step:
+          name: Collect Metrics with Coverage
+          caches:
+            - cargo-home
+            - cargo-target
+            - pip
+          script:
+            - apt-get update && apt-get install -y --no-install-recommends libsdl2-dev python3 python3-pip
+            - rustup component add llvm-tools-preview
+            - cargo install rust-code-analysis-cli cargo-llvm-cov --locked
+            - pip install -r metrics/requirements.txt
+            - python3 metrics/collect_metrics.py --with-coverage
+            - python3 metrics/plot_metrics.py
+          artifacts:
+            - metrics/data/*.csv
+            - metrics/data/*.png
+            - metrics/data/*.md
+      - step:
+          name: Mirror to GitHub
+          script:
+            - git fetch --prune --unshallow --tags || true
+            - export GITHUB_URL="https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git"
+            - git remote add github "${GITHUB_URL}" || git remote set-url github "${GITHUB_URL}"
+            - git push --prune github +refs/heads/*:refs/heads/*
+            - git push --prune github +refs/tags/*:refs/tags/*
 definitions:
   caches:
     cargo-home: $HOME/.cargo
