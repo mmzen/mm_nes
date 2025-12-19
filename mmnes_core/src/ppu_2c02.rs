@@ -1,4 +1,4 @@
-// Authorship: Human 80% | Claude 20%
+// Authorship: Human 72% | Claude 28%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -69,6 +69,12 @@ const DOTS_PER_SCANLINE: u16 = 341;
 #[allow(dead_code)]
 const VISIBLE_DOTS: u16 = 256;  // Will be used for sprite 0 hit detection in Phase 3
 const VBLANK_SET_DOT: u16 = 1;  // VBlank flag set at dot 1 of NMI scanline
+
+// PPU open bus decay constant
+// Each bit on the PPU data bus decays independently after ~600ms
+// NTSC PPU: 5.369 MHz = ~5.37M dots/sec, so 600ms ≈ 3.22M dots
+// Using a slightly lower value to ensure decay happens "before 1 second"
+const OPEN_BUS_DECAY_DOTS: u64 = 3_000_000;
 
 #[derive(Debug)]
 enum PpuFlag {
@@ -353,6 +359,10 @@ pub struct Ppu2c02 {
     nmi_suppressed: Cell<bool>,
     // PPU open bus - tracks last value on the internal data bus
     open_bus: Cell<u8>,
+    // Track total PPU dots for open bus decay calculation
+    total_dots: Cell<u64>,
+    // Track when each bit was last refreshed (for decay calculation)
+    open_bus_refresh_dots: [Cell<u64>; 8],
     // Dot-level timing state
     current_dot: u16,           // 0-340: current dot position within scanline
     current_scanline: u16,      // 0-261 (NTSC): current scanline
@@ -442,8 +452,12 @@ impl Configurable for Ppu2c02 {
         self.sprite0_hit_x = 0;
         // Reset partial scanline rendering
         self.last_rendered_dot = 0;
-        // Reset open bus
+        // Reset open bus and decay tracking
         self.open_bus.set(0);
+        self.total_dots.set(0);
+        for bit in 0..8 {
+            self.open_bus_refresh_dots[bit].set(0);
+        }
     }
 }
 
@@ -478,8 +492,12 @@ impl PPU for Ppu2c02 {
         self.sprite0_hit_x = 0;
         // Reset partial scanline rendering
         self.last_rendered_dot = 0;
-        // Reset open bus
+        // Reset open bus and decay tracking
         self.open_bus.set(0);
+        self.total_dots.set(0);
+        for bit in 0..8 {
+            self.open_bus_refresh_dots[bit].set(0);
+        }
 
         self.set_flag(Status(VBlank), true);
 
@@ -535,8 +553,19 @@ impl Memory for Ppu2c02 {
             _ => unreachable!(),
         };
 
-        // Update open bus with returned value
-        self.open_bus.set(value);
+        // Refresh open bus bits based on which register was read
+        // Each register that returns valid data refreshes all 8 bits
+        // Reading $2002 refreshes bits 7-5 with status, bits 4-0 are NOT refreshed (they read decayed open bus)
+        match addr {
+            0x02 => {
+                // $2002: Only bits 7,6,5 are driven by PPU status
+                self.refresh_open_bus_bits(0xE0, value);
+            }
+            _ => {
+                // All other registers refresh all 8 bits
+                self.refresh_open_bus_bits(0xFF, value);
+            }
+        }
 
         Ok(value)
     }
@@ -567,8 +596,8 @@ impl Memory for Ppu2c02 {
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
         //trace!("PPU: registers access: writing byte (0x{:02X}) at 0x{:04X}", value, addr);
 
-        // Update open bus on every write to PPU registers
-        self.open_bus.set(value);
+        // Update open bus on every write to PPU registers - refresh all 8 bits
+        self.refresh_open_bus_bits(0xFF, value);
 
         match addr {
             0x00 => self.write_control_register(value),
@@ -640,8 +669,8 @@ impl Ppu2c02 {
     }
 
     fn read_control_register(&self) -> u8 {
-        // $2000 is write-only, returns open bus
-        self.open_bus.get()
+        // $2000 is write-only, returns decayed open bus
+        self.get_decayed_open_bus()
     }
 
     fn write_control_register(&mut self, value: u8) {
@@ -666,8 +695,8 @@ impl Ppu2c02 {
     }
 
     fn read_mask_register(&self) -> u8 {
-        // $2001 is write-only, returns open bus
-        self.open_bus.get()
+        // $2001 is write-only, returns decayed open bus
+        self.get_decayed_open_bus()
     }
 
     fn write_mask_register(&mut self, value: u8) {
@@ -677,7 +706,7 @@ impl Ppu2c02 {
 
     fn read_status_register(&self) -> u8 {
         let status = self.register.borrow().status;
-        let open_bus = self.open_bus.get();
+        let decayed_open_bus = self.get_decayed_open_bus();
 
         if let PpuState::Rendering(scanline) = self.state {
             if scanline == self.config.nmi_scanline && !self.get_flag(Status(VBlank)) {
@@ -688,8 +717,8 @@ impl Ppu2c02 {
         self.set_flag(Status(VBlank), false);
         self.latch.borrow_mut().reset();
 
-        // $2002: bits 7,6,5 are status, bits 4-0 are open bus
-        (status & 0xE0) | (open_bus & 0x1F)
+        // $2002: bits 7,6,5 are status, bits 4-0 are decayed open bus
+        (status & 0xE0) | (decayed_open_bus & 0x1F)
     }
 
     fn write_status_register(&mut self, value: u8) {
@@ -698,8 +727,8 @@ impl Ppu2c02 {
     }
 
     fn read_oam_address_register(&self) -> u8 {
-        // $2003 is write-only, returns open bus
-        self.open_bus.get()
+        // $2003 is write-only, returns decayed open bus
+        self.get_decayed_open_bus()
     }
 
     fn write_oam_address_register(&mut self, value: u8) {
@@ -747,8 +776,8 @@ impl Ppu2c02 {
     }
 
     fn read_scroll_register(&self) -> u8 {
-        // $2005 is write-only, returns open bus
-        self.open_bus.get()
+        // $2005 is write-only, returns decayed open bus
+        self.get_decayed_open_bus()
     }
 
     fn write_scroll_register(&mut self, value: u8) {
@@ -769,7 +798,47 @@ impl Ppu2c02 {
 
     fn read_addr_register(&self) -> u8 {
         // $2006 is write-only, returns open bus
-        self.open_bus.get()
+        self.get_decayed_open_bus()
+    }
+
+    /// Refresh specific bits of the open bus (set their refresh time to now)
+    fn refresh_open_bus_bits(&self, mask: u8, value: u8) {
+        let current_dots = self.total_dots.get();
+        let current_bus = self.open_bus.get();
+
+        // Update the open bus value for the specified bits
+        let new_bus = (current_bus & !mask) | (value & mask);
+        self.open_bus.set(new_bus);
+
+        // Refresh the timestamp for each bit that was set
+        for bit in 0..8 {
+            let bit_mask = 1u8 << bit;
+            if (mask & bit_mask) != 0 {
+                self.open_bus_refresh_dots[bit].set(current_dots);
+            }
+        }
+    }
+
+    /// Get the open bus value with decay applied
+    fn get_decayed_open_bus(&self) -> u8 {
+        let current_dots = self.total_dots.get();
+        let current_bus = self.open_bus.get();
+        let mut decayed_bus = 0u8;
+
+        for bit in 0..8 {
+            let bit_mask = 1u8 << bit;
+            let refresh_time = self.open_bus_refresh_dots[bit].get();
+
+            // Check if this bit has decayed
+            let elapsed = current_dots.saturating_sub(refresh_time);
+            if elapsed < OPEN_BUS_DECAY_DOTS {
+                // Bit has not decayed, keep its value
+                decayed_bus |= current_bus & bit_mask;
+            }
+            // If elapsed >= OPEN_BUS_DECAY_DOTS, bit has decayed to 0
+        }
+
+        decayed_bus
     }
 
     fn write_addr_register(&mut self, value: u8) {
@@ -796,7 +865,17 @@ impl Ppu2c02 {
         *self.v.borrow_mut() = self.v_wrapping_add(incr);
 
         let data = if video_addr >= PALETTE_ADDRESS_SPACE.0 {
-            self.bus.read_byte(video_addr)?
+            // When reading from palette RAM ($3F00-$3FFF), the palette value is returned
+            // directly (no buffering delay), BUT the read buffer is still updated with
+            // the underlying nametable data at the mirrored address ($2F00-$2FFF).
+            let nametable_addr = video_addr - 0x1000;
+            self.register.borrow_mut().data = self.bus.read_byte(nametable_addr)?;
+
+            // Palette RAM only stores 6-bit values (color indices 0-63).
+            // The upper 2 bits of the read come from the PPU's decayed open bus.
+            let palette_value = self.bus.read_byte(video_addr)? & 0x3F;
+            let open_bus_upper = self.get_decayed_open_bus() & 0xC0;
+            palette_value | open_bus_upper
         } else {
             let previous_read = self.register.borrow().data;
             self.register.borrow_mut().data = self.bus.read_byte(video_addr)?;
@@ -856,6 +935,11 @@ impl Ppu2c02 {
             cycles_acc_fp: 0,
             nmi_suppressed: Cell::new(false),
             open_bus: Cell::new(0),
+            total_dots: Cell::new(0),
+            open_bus_refresh_dots: [
+                Cell::new(0), Cell::new(0), Cell::new(0), Cell::new(0),
+                Cell::new(0), Cell::new(0), Cell::new(0), Cell::new(0),
+            ],
             // Initialize dot-level timing at start of pre-render scanline
             current_dot: 0,
             current_scanline: pre_render,
@@ -1490,7 +1574,10 @@ impl Ppu2c02 {
     }
 
     fn detect_sprite_0_hit(&self, is_sprite_0: bool) -> bool {
-        if self.get_flag(Mask(ShowBackground)) == true && self.get_flag(Status(Sprite0Hit)) == false && is_sprite_0 {
+        // Check if this is sprite 0 and if hit hasn't already occurred.
+        // The actual mask flag check (ShowBackground && ShowSprites) is done
+        // when setting the flag at the hit dot, allowing mid-scanline mask changes.
+        if self.get_flag(Status(Sprite0Hit)) == false && is_sprite_0 {
             true
         } else {
             false
@@ -1605,8 +1692,9 @@ impl Ppu2c02 {
         let mut frame_ready = false;
 
         for _ in 0..dots {
-            // Advance to next dot
+            // Advance to next dot and track total for open bus decay
             self.current_dot += 1;
+            self.total_dots.set(self.total_dots.get().wrapping_add(1));
 
             // Handle end of scanline
             if self.current_dot >= DOTS_PER_SCANLINE {
@@ -1625,10 +1713,14 @@ impl Ppu2c02 {
             }
 
             // Check for sprite 0 hit at the correct dot (only on visible scanlines)
+            // Sprite 0 hit requires BOTH ShowBackground AND ShowSprites to be enabled
+            // at the moment the hit occurs (allows for mid-scanline mask changes)
             if self.sprite0_hit_pending
                 && self.current_scanline <= self.last_visible_scanline()
                 && self.current_dot == self.sprite0_hit_x
                 && !self.get_flag(Status(Sprite0Hit))
+                && self.get_flag(Mask(ShowBackground))
+                && self.get_flag(Mask(ShowSprites))
             {
                 self.set_flag(Status(Sprite0Hit), true);
             }
@@ -1675,7 +1767,10 @@ impl Ppu2c02 {
                     let show_background = self.get_flag(Mask(ShowBackground));
                     let show_sprites = self.get_flag(Mask(ShowSprites));
 
-                    if show_background {
+                    // Background tile fetches occur when either background OR sprites are enabled.
+                    // This clocks the background shift registers even when only sprites are shown.
+                    // The actual display of background pixels is controlled separately in write_pixels_lines_to_frame().
+                    if show_background || show_sprites {
                         self.render_background(scanline)?;
                     }
 
@@ -1764,7 +1859,8 @@ impl Ppu2c02 {
                 let show_background = self.get_flag(Mask(ShowBackground));
                 let show_sprites = self.get_flag(Mask(ShowSprites));
 
-                if show_background {
+                // Background tile fetches occur when either background OR sprites are enabled
+                if show_background || show_sprites {
                     self.render_background(scanline)?;
                 }
 

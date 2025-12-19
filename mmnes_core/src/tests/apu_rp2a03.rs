@@ -1,5 +1,5 @@
-// Authorship: Human 70% | Claude 30%
-use std::cell::RefCell;
+// Authorship: Human 65% | Claude 35%
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use crate::apu::APU;
 use crate::apu_rp2a03::ApuRp2A03;
@@ -56,7 +56,8 @@ fn create_apu() -> ApuRp2A03<MockSoundPlayback, MockCpuStub, MockBusStub> {
     let bus = create_mock_bus();
     let config = ConfigSpec::default();
     let sound_player = MockSoundPlayback::default();
-    ApuRp2A03::new(sound_player, cpu, bus, config)
+    let data_bus = Rc::new(Cell::new(0u8));
+    ApuRp2A03::new(sound_player, cpu, bus, config, data_bus)
 }
 
 // ============================================================================

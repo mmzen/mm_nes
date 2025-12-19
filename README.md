@@ -55,7 +55,13 @@ Claude is now the primary contributor:
   - Fine-grained PPU/APU synchronization (per-instruction, not per-scanline)
   - Dot-accurate VBlank and sprite 0 hit detection
   - Fixed APU cycle tracking bug that caused audio desync
-- ✅ AccuracyCoin improved: 74 → 82 / 131 (+8 points)
+- ✅ Hardware accuracy fixes:
+  - PPU open bus with decay (~600ms per-bit decay)
+  - CPU/Bus and APU open bus behavior
+  - PPU read buffer quirks (palette reads update buffer with nametable data)
+  - Palette RAM 6-bit reads (upper 2 bits from open bus)
+  - ROM write protection
+- ✅ AccuracyCoin improved: 74 → 84 / 131 (+10 points)
 
 ---
 
@@ -76,7 +82,7 @@ This project is a personal work-in-progress **still under active development**.
 We track emulator correctness with **AccuracyCoin**, a single-ROM test suite for NES (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).
 _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_
 
-**Current score:** `82 / 131`
+**Current score:** `84 / 131`
 
 ![AccuracyCoin results on mm_nes](docs/accuracy_coin_result.png)
 

@@ -1,5 +1,5 @@
 // Authorship: Human 80% | Claude 20%
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -466,21 +466,20 @@ impl NesConsoleBuilder {
         result
     }
 
-    fn build_bus(&self) -> Result<Rc<RefCell<dyn Bus>>, NesConsoleError> {
+    fn build_bus(&self) -> Result<(Rc<RefCell<dyn Bus>>, Rc<Cell<u8>>), NesConsoleError> {
         debug!("creating bus: {:?}", self.bus_type.clone().unwrap());
 
-        let result: Result<Rc<RefCell<dyn Bus>>, NesConsoleError> = match self.bus_type {
+        match self.bus_type {
             Some(BusType::NESBus) => {
                 let bus = NESBus::new();
-                Ok(Rc::new(RefCell::new(bus)))
+                let data_bus = bus.get_data_bus();
+                Ok((Rc::new(RefCell::new(bus)), data_bus))
             },
 
             None => {
                 Err(NesConsoleError::BuilderError("bus type not specified".to_string()))
             }
-        };
-
-        result
+        }
     }
 
     fn build_wram_device(&self, memory_type: &MemoryType) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
@@ -548,13 +547,13 @@ impl NesConsoleBuilder {
         Ok(controller)
     }
 
-    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
+    fn build_apu_device(&mut self, apu_type: &ApuType, bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec, data_bus: Rc<Cell<u8>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError> {
         debug!("creating apu {:?}", apu_type);
 
         let result = match apu_type {
             ApuType::RP2A03 => {
                 let sound_player = SoundPlaybackPassive::new();
-                ApuRp2A03::new(sound_player, cpu, bus, config)
+                ApuRp2A03::new(sound_player, cpu, bus, config, data_bus)
             },
         };
 
@@ -581,7 +580,7 @@ impl NesConsoleBuilder {
     }
 
     fn build_device_and_connect_to_bus(&mut self, device_type: &BusDeviceType,
-                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>) -> Result<(), NesConsoleError> {
+                                       bus: Rc<RefCell<dyn Bus>>, cpu: Rc<RefCell<dyn CPU>>, data_bus: Rc<Cell<u8>>) -> Result<(), NesConsoleError> {
         debug!("creating device: {:?}", device_type);
 
         match device_type {
@@ -633,7 +632,7 @@ impl NesConsoleBuilder {
             }
 
             BusDeviceType::APU(apu_type) => {
-                let apu= self.build_apu_device(apu_type,bus.clone(), cpu, self.config.clone())?;
+                let apu = self.build_apu_device(apu_type, bus.clone(), cpu, self.config.clone(), data_bus)?;
                 bus.borrow_mut().add_device(apu)?;
             }
 
@@ -657,7 +656,7 @@ impl NesConsoleBuilder {
     }
 
     fn build_nes(mut self) -> Result<NesConsole, NesConsoleError> {
-        let bus = self.build_bus()?;
+        let (bus, data_bus) = self.build_bus()?;
         let cpu = self.build_cpu(bus.clone())?;
 
         self.bus = Some(bus.clone());
@@ -666,7 +665,7 @@ impl NesConsoleBuilder {
         let device_types = self.device_types.clone();
 
         for device_type in device_types {
-            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone())?;
+            self.build_device_and_connect_to_bus(&device_type, bus.clone(), cpu.clone(), data_bus.clone())?;
         }
 
         let cpu = self.cpu.take()

@@ -552,35 +552,19 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         }
     }
 
-    fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<(), ApuError> {
+    fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
         match self.current_address {
             Some(addr) => {
                 self.sample_buffer = Some(self.bus.borrow().read_byte(addr)?);
                 self.bytes_remaining -= 1;
                 self.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
-
-                // When bytes_remaining becomes 0, the sample is finished
-                // Either restart (loop) or trigger IRQ
-                if self.bytes_remaining == 0 {
-                    match self.reload {
-                        Reload::Loop => {
-                            self.reload_sample_window()
-                        },
-                        Reload::None => {
-                            if self.irq_enable && !self.irq_pending {
-                                self.irq_pending = true;
-                                self.interrupt()?;
-                            }
-                        }
-                    }
-                }
             },
             None => {
-                return Err(ApuError::MemoryError(MemoryError::IllegalState("dmc dma current address is not set".to_string())))
+                return Err(MemoryError::IllegalState("dmc dma current address is not set".to_string()))
             }
         }
 
-        Ok(())
+        Ok(0)
     }
 
     fn reload_sample_window(&mut self) {
@@ -600,7 +584,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         }
     }
 
-    fn refill_or_underflow(&mut self) {
+    fn refill_or_underflow(&mut self) -> Result<(), ApuError> {
         if self.bits_remaining == 0 {
             if let Some(sample_buffer) = self.sample_buffer.take() {
                 self.shift_register = sample_buffer;
@@ -608,12 +592,24 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
 
                 self.silenced = false;
             } else {
-                // No sample buffer available - silence the output
-                // Note: Loop restart and IRQ are now handled in dma_read_and_update_sample_buffer_and_counter()
-                // when bytes_remaining becomes 0
                 self.silenced = true;
+
+                if self.bytes_remaining == 0 && self.enabled == true {
+                    match self.reload {
+                        Reload::Loop => {
+                            self.reload_sample_window()
+                        },
+                        Reload::None => {
+                            if self.irq_enable && !self.irq_pending {
+                                self.irq_pending = true;
+                                self.interrupt()?;
+                            }
+                        }
+                    }
+                }
             }
         }
+        Ok(())
     }
 
     fn update_output_level(&mut self) {
@@ -713,6 +709,8 @@ pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> {
     // true = next CPU cycle is odd, false = next CPU cycle is even
     // APU channels (except triangle/DMC) only tick on even CPU cycles
     cpu_cycle_odd: bool,
+    // Shared data bus for open bus behavior on write-only registers
+    data_bus: Rc<Cell<u8>>,
 }
 
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03<T, U, V> {
@@ -739,12 +737,11 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, 
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         let value = match addr {
-            0x00 | 0x01 | 0x02 | 0x03 |
-            0x04 | 0x05 | 0x06 | 0x07 => self.read_pulse(addr)?,
+            // $4015 is the only readable APU register
             0x15 => self.read_channels_status()?,
-            _ => {
-                0
-            },
+            // All other APU registers ($4000-$4013, $4017) are write-only
+            // Reading them returns open bus (the current data bus value)
+            _ => self.read_open_bus(),
         };
 
         Ok(value)
@@ -833,7 +830,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         ];
     }
 
-    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>, config: ConfigSpec) -> ApuRp2A03<T, U, V> {
+    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>, config: ConfigSpec, data_bus: Rc<Cell<u8>>) -> ApuRp2A03<T, U, V> {
         let mut apu = ApuRp2A03 {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
@@ -848,14 +845,16 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             apu_cycles_acc: 0.0,
             dmc_stall_cycles: 0,
             cpu_cycle_odd: false,
+            data_bus,
         };
 
         apu.recompute_timing();
         apu
     }
 
-    fn read_pulse(&self, _: u16) -> Result<u8, MemoryError> {
-        Ok(0)
+    /// Returns open bus value for write-only registers
+    fn read_open_bus(&self) -> u8 {
+        self.data_bus.get()
     }
 
     fn get_pulse_channel_by_type(&mut self, channel_type: &ChannelType) -> &mut Pulse {
@@ -1231,7 +1230,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
 
         if self.dmc.timer_counter == 0 {
-            self.dmc.refill_or_underflow();
+            self.dmc.refill_or_underflow()?;
 
             if self.dmc.bits_remaining > 0 {
                 self.dmc.update_output_level();

@@ -110,6 +110,11 @@ impl NESBus {
         }
     }
 
+    /// Get a reference to the shared data bus for open bus behavior
+    pub fn get_data_bus(&self) -> Rc<Cell<u8>> {
+        self.data_bus.clone()
+    }
+
     #[allow(dead_code)]
     fn is_addr_in_boundary(&self, addr: u16) -> bool {
         addr < BUS_ADDRESSABLE_SIZE as u16
