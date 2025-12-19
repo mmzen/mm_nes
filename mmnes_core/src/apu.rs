@@ -1,4 +1,4 @@
-// Authorship: Human 95% | Claude 5%
+// Authorship: Human 70% | Claude 30%
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use crate::config_spec::Configurable;
@@ -75,8 +75,20 @@ pub trait APU: Configurable {
     /// ```credits```: the number of cycles available to execute instructions
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesSamples>), ApuError>;
 
+    /// Execute a single APU cycle (for cycle-accurate mode).
+    /// This advances all APU channels by one CPU cycle.
+    /// Returns an optional sample if one was generated this cycle.
+    fn step_cycle(&mut self) -> Result<Option<f32>, ApuError>;
+
     /// Returns the number of CPU cycles stolen by DMC DMA since last call.
     /// The DMC channel needs to fetch sample bytes from memory, which steals CPU cycles.
     /// This method returns accumulated stall cycles and clears the internal counter.
     fn get_dmc_stall_cycles(&mut self) -> u32;
+
+    /// Check if DMC DMA is needed (sample buffer empty and bytes remaining).
+    /// Returns the address to fetch from if DMA is needed, None otherwise.
+    fn needs_dmc_dma(&self) -> Option<u16>;
+
+    /// Provide the DMC with a fetched sample byte (called after DMC DMA completes).
+    fn provide_dmc_sample(&mut self, value: u8) -> Result<(), ApuError>;
 }

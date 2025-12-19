@@ -1,4 +1,4 @@
-// Authorship: Human 72% | Claude 28%
+// Authorship: Human 70% | Claude 30%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -520,13 +520,25 @@ impl PPU for Ppu2c02 {
         let ppu_dots = ((credits as f64) * dots_per_cpu_cycle).round() as u32;
 
         // Advance PPU by the calculated dots
-        let frame = self.advance_dots(ppu_dots)?;
+        let frame = self.advance_dots_internal(ppu_dots)?;
 
         Ok((start_cycle + credits, frame))
     }
 
     fn frame(&self) -> NesFrame {
         self.renderer.borrow().frame().clone()
+    }
+
+    fn advance_dots(&mut self, dots: u32) -> Result<Option<NesFrame>, PpuError> {
+        self.advance_dots_internal(dots)
+    }
+
+    fn get_dot(&self) -> u16 {
+        self.current_dot
+    }
+
+    fn get_scanline(&self) -> u16 {
+        self.current_scanline
     }
 }
 
@@ -1684,11 +1696,11 @@ impl Ppu2c02 {
         self.config.visible_scanlines - 1
     }
 
-    /// Advance PPU by the specified number of dots.
+    /// Advance PPU by the specified number of dots (internal implementation).
     /// This method handles scanline transitions, VBlank/NMI timing,
     /// and triggers rendering at the appropriate times.
     /// Returns an optional frame when a frame is completed.
-    fn advance_dots(&mut self, dots: u32) -> Result<Option<NesFrame>, PpuError> {
+    fn advance_dots_internal(&mut self, dots: u32) -> Result<Option<NesFrame>, PpuError> {
         let mut frame_ready = false;
 
         for _ in 0..dots {

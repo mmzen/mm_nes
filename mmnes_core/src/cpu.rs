@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 85% | Claude 15%
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
@@ -12,6 +12,22 @@ pub enum CpuType {
     NES6502
 }
 
+/// Result of executing a single CPU cycle.
+/// Provides information about what happened during the cycle for synchronization purposes.
+#[derive(Debug, Clone, Default)]
+pub struct CpuCycleResult {
+    /// True if an instruction just completed this cycle.
+    pub instruction_complete: bool,
+    /// True if a memory read occurred this cycle.
+    pub memory_read: bool,
+    /// True if a memory write occurred this cycle.
+    pub memory_write: bool,
+    /// The address accessed this cycle (if any).
+    pub address: Option<u16>,
+    /// True if the CPU is halted (waiting for DMA).
+    pub halted: bool,
+}
+
 pub trait CPU: Interruptible + Debug {
     fn reset(&mut self) -> Result<(), CpuError>;
     fn initialize(&mut self) -> Result<(), CpuError>;
@@ -23,6 +39,22 @@ pub trait CPU: Interruptible + Debug {
 
     /// Execute 1 single instruction and return the number of cycles used.
     fn step_instruction(&mut self) -> Result<u32, CpuError>;
+
+    /// Execute 1 single CPU cycle. Returns information about what happened during this cycle.
+    /// This enables cycle-accurate emulation where PPU/APU can be advanced between CPU cycles.
+    fn step_cycle(&mut self) -> Result<CpuCycleResult, CpuError>;
+
+    /// Check if the CPU is currently mid-instruction (has pending cycles to complete).
+    fn is_mid_instruction(&self) -> bool;
+
+    /// Check if the CPU is currently halted (e.g., waiting for DMA to complete).
+    fn is_halted(&self) -> bool;
+
+    /// Halt the CPU for the specified number of cycles (used by DMA).
+    fn halt_cycles(&mut self, cycles: u32);
+
+    /// Get the current total cycle count.
+    fn get_cycles(&self) -> u32;
 
     /// Run the CPU for at least the specified number of cycles, returning the new cycle count after execution.  
     /// ```start_cycle```: current cycle of execution,  
@@ -108,6 +140,11 @@ mock! {
         fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
         fn snapshot(&self) -> Result<Box<dyn CpuSnapshot>, CpuError>;
         fn step_instruction(&mut self) -> Result<u32, CpuError>;
+        fn step_cycle(&mut self) -> Result<CpuCycleResult, CpuError>;
+        fn is_mid_instruction(&self) -> bool;
+        fn is_halted(&self) -> bool;
+        fn halt_cycles(&mut self, cycles: u32);
+        fn get_cycles(&self) -> u32;
         fn run_until_breakpoint(&mut self, start_cycle: u32, credits: u32, breakpoints: Box<dyn Breakpoints>) -> Result<(u32, bool), CpuError>;
     }
 

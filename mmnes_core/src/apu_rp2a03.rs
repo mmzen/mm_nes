@@ -1,4 +1,4 @@
-// Authorship: Human 80% | Claude 20%
+// Authorship: Human 75% | Claude 25%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -1455,6 +1455,57 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         let cycles = self.dmc_stall_cycles;
         self.dmc_stall_cycles = 0;
         cycles
+    }
+
+    fn step_cycle(&mut self) -> Result<Option<f32>, ApuError> {
+        // DMC and triangle channels are clocked at the CPU clock rate
+        self.clock_dmc_timer()?;
+        self.clock_triangle_timer();
+
+        // Other channels and frame counter are clocked at half CPU rate (every 2 CPU cycles)
+        if !self.cpu_cycle_odd {
+            self.clock_pulse_timers();
+            self.clock_noise_timer();
+            self.clock_frame_sequencer(1)?;
+
+            // Track APU cycles for sample generation
+            self.apu_cycles_acc += 1.0;
+
+            // Generate sample if enough cycles have accumulated
+            if self.apu_cycles_acc >= self.config.cycles_per_sample {
+                self.clock_mixer();
+                self.apu_cycles_acc -= self.config.cycles_per_sample;
+            }
+        }
+
+        // Toggle odd/even state for next CPU cycle
+        self.cpu_cycle_odd = !self.cpu_cycle_odd;
+
+        // For cycle-accurate mode, we don't return individual samples
+        // Samples are accumulated in the sound player buffer
+        Ok(None)
+    }
+
+    fn needs_dmc_dma(&self) -> Option<u16> {
+        // Check if DMC needs a sample fetch
+        if self.dmc.enabled && self.dmc.bytes_remaining > 0 && self.dmc.sample_buffer.is_none() {
+            self.dmc.current_address
+        } else {
+            None
+        }
+    }
+
+    fn provide_dmc_sample(&mut self, value: u8) -> Result<(), ApuError> {
+        self.dmc.sample_buffer = Some(value);
+        // Decrement bytes remaining
+        if self.dmc.bytes_remaining > 0 {
+            self.dmc.bytes_remaining -= 1;
+        }
+        // Update address (wrap at $FFFF to $8000)
+        if let Some(addr) = self.dmc.current_address {
+            self.dmc.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
+        }
+        Ok(())
     }
 }
 

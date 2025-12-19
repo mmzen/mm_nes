@@ -2,9 +2,18 @@
 
 **mmnes** is a NES emulator that started as a human-written project and is now being developed by Claude (Anthropic's LLM). This repository serves as a real-world experiment in AI-assisted software engineering.
 
-> ⚠️ Experimental • Unstable API • For personal use
 
-![mm_nes screenshot](docs/mmnes_screenshot8.png)
+A human built the foundation through December 2025, achieving 74/131 on AccuracyCoin. Claude then took over as primary developer, improving accuracy to **90/131** (+16 points) while fixing the CPU to pass **100% of SingleStepTests** (2.56M tests).
+
+Key contributions include cycle-accurate PPU/APU timing, open bus emulation with decay, and a complete cycle-stepping infrastructure enabling true cycle-level synchronization.   
+
+Claude's contribution has grown to ~16% of the codebase.   
+
+The experiment aims to validate that LLMs can produce production-quality emulator code under human supervision.
+
+|<img height="50%" src="docs\mmnes_screenshot8.png" width="50%"/> | <img height="50%" src="docs\accuracy_coin_result2.png" width="50%"/> |
+|-----------------------------------------------------------------|----------------------------------------------------------------------|
+|<div align="center">_Punch-Out!_</div>| <div align="center">_AccuracyCoins_</div>|
 
 ## The Experiment
 
@@ -61,7 +70,8 @@ Claude is now the primary contributor:
   - PPU read buffer quirks (palette reads update buffer with nametable data)
   - Palette RAM 6-bit reads (upper 2 bits from open bus)
   - ROM write protection
-- ✅ AccuracyCoin improved: 74 → 84 / 131 (+10 points)
+- ✅ Cycle-stepping infrastructure (CPU, PPU, APU can step one cycle at a time)
+- ✅ AccuracyCoin improved: 74 → 90 / 131 (+16 points)
 
 ---
 
@@ -82,9 +92,9 @@ This project is a personal work-in-progress **still under active development**.
 We track emulator correctness with **AccuracyCoin**, a single-ROM test suite for NES (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).
 _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_
 
-**Current score:** `84 / 131`
+**Current score:** `90 / 131`
 
-![AccuracyCoin results on mm_nes](docs/accuracy_coin_result.png)
+![AccuracyCoin results on mm_nes](docs/accuracy_coin_result2.png)
 
 ### SingleStepTests
 

@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 pub mod cpu;
 pub mod cpu_6502;
 pub mod memory;
@@ -19,6 +19,7 @@ pub mod palette_2c02;
 pub mod dma_device;
 pub mod dma;
 pub mod ppu_dma;
+pub mod dma_controller;
 pub mod nes_frame;
 pub mod apu_rp2a03;
 pub mod renderer;

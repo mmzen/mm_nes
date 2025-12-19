@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 85% | Claude 15%
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -36,13 +36,27 @@ pub trait PPU: BusDevice + DmaDevice + Configurable {
     fn reset(&mut self) -> Result<(), PpuError>;
     fn panic(&self, error: &PpuError);
 
-    /// Run the PPU for 114 cycles (completing 1 scanline), returning the new cycle count after execution and a full frame if available (after having rendered 240 scanlines).
-    /// The current implementation ignore the credits input, and will always render a full scanline, updating
-    /// the current cycle count by 114.
+    /// Run the PPU for the specified number of CPU cycles.
+    /// Converts CPU cycles to PPU dots and advances the PPU accordingly.
+    /// Returns the new cycle count and an optional completed frame.
     /// ```start_cycle```: current cycle of execution,
-    /// ```credits```: the number of cycles available to execute instructions (ignored)
+    /// ```credits```: the number of CPU cycles to advance
     fn run(&mut self, start_cycle: u32, credits: u32) -> Result<(u32, Option<NesFrame>), PpuError>;
+
+    /// Advance PPU by the specified number of dots.
+    /// This method provides cycle-accurate control for the master scheduler.
+    /// NTSC: 3 dots per CPU cycle, PAL: ~3.2 dots per CPU cycle.
+    /// Returns an optional completed frame.
+    fn advance_dots(&mut self, dots: u32) -> Result<Option<NesFrame>, PpuError>;
+
+    /// Get the current frame buffer.
     fn frame(&self) -> NesFrame;
+
+    /// Get current dot position within scanline (0-340).
+    fn get_dot(&self) -> u16;
+
+    /// Get current scanline (0-261 for NTSC, 0-311 for PAL).
+    fn get_scanline(&self) -> u16;
 }
 
 #[derive(Debug, Clone)]

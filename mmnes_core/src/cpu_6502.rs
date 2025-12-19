@@ -1,4 +1,4 @@
-// Authorship: Human 80% | Claude 20%
+// Authorship: Human 65% | Claude 35%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
@@ -6,7 +6,7 @@ use std::rc::Rc;
 use log::{error, info, trace, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
-use crate::cpu::{CPU, CpuError, Interruptible};
+use crate::cpu::{CPU, CpuCycleResult, CpuError, Interruptible};
 use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
 use crate::memory::{MemoryError};
 
@@ -329,6 +329,38 @@ impl Cpu6502Snapshot {
     }
 }
 
+/// State of the CPU cycle-stepping state machine.
+/// Tracks where we are in the execution of the current instruction.
+#[derive(Debug, Clone)]
+enum CpuCycleState {
+    /// CPU is ready to fetch the next instruction opcode.
+    FetchOpcode,
+    /// CPU is executing an instruction. Contains cycles remaining (including current).
+    Executing {
+        /// The instruction being executed
+        instruction: &'static Instruction,
+        /// The operand for this instruction
+        operand: Operand,
+        /// Total cycles for this instruction
+        total_cycles: u32,
+        /// Current cycle within instruction (1-based, 1 = opcode fetch already done)
+        current_cycle: u32,
+        /// True if this is an interrupt sequence (NMI/IRQ), not a regular instruction
+        is_interrupt: bool,
+    },
+    /// CPU is halted, waiting for DMA to complete.
+    Halted {
+        /// Cycles remaining in halt state
+        cycles_remaining: u32,
+    },
+}
+
+impl Default for CpuCycleState {
+    fn default() -> Self {
+        CpuCycleState::FetchOpcode
+    }
+}
+
 #[derive(Debug)]
 pub struct Cpu6502 {
     registers: Registers,
@@ -339,6 +371,8 @@ pub struct Cpu6502 {
     pending_nmi: bool,
     pending_i_flag: Option<bool>,
     cycles: u32,
+    /// Cycle-stepping state machine state
+    cycle_state: CpuCycleState,
 }
 
 impl Interruptible for Cpu6502 {
@@ -398,6 +432,7 @@ impl CPU for Cpu6502 {
         self.nmi_line_low = false;
         self.pending_nmi = false;
         self.pending_i_flag = None;
+        self.cycle_state = CpuCycleState::FetchOpcode;
         self.set_pc_indirect(RESET_VECTOR)?;
 
         Ok(())
@@ -531,6 +566,132 @@ impl CPU for Cpu6502 {
         let snapshot = Cpu6502Snapshot::new(registers, self.bus.clone(), self.cycles)?;
         Ok(Box::new(snapshot))
     }
+
+    fn step_cycle(&mut self) -> Result<CpuCycleResult, CpuError> {
+        // Handle halted state (DMA)
+        if let CpuCycleState::Halted { cycles_remaining } = &mut self.cycle_state {
+            *cycles_remaining -= 1;
+            self.cycles += 1;
+
+            if *cycles_remaining == 0 {
+                self.cycle_state = CpuCycleState::FetchOpcode;
+            }
+
+            return Ok(CpuCycleResult {
+                halted: true,
+                ..Default::default()
+            });
+        }
+
+        match &self.cycle_state {
+            CpuCycleState::FetchOpcode => {
+                // First cycle: fetch opcode, decode, and prepare for execution
+                let byte = self.bus.borrow().read_byte(self.registers.pc)?;
+                let instruction = Cpu6502::decode_instruction(byte)?;
+                let operand = Cpu6502::fetch_operand(instruction, &self.registers, self.bus.clone())?;
+
+                // Calculate total cycles for this instruction
+                let additional_cycles = self.calculate_additional_cycles(instruction, &operand);
+                let total_cycles = instruction.cycles + additional_cycles;
+
+                // Move to executing state
+                self.cycle_state = CpuCycleState::Executing {
+                    instruction,
+                    operand,
+                    total_cycles,
+                    current_cycle: 1,
+                    is_interrupt: false,
+                };
+
+                self.cycles += 1;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(self.registers.pc),
+                    ..Default::default()
+                })
+            }
+
+            CpuCycleState::Executing { instruction, operand, total_cycles, current_cycle, is_interrupt } => {
+                let instruction = *instruction;
+                let operand = operand.clone();
+                let total_cycles = *total_cycles;
+                let current_cycle = *current_cycle;
+                let is_interrupt = *is_interrupt;
+
+                self.cycles += 1;
+
+                // Check if this is the last cycle
+                if current_cycle >= total_cycles {
+                    // Execute the instruction on the last cycle
+                    if !is_interrupt {
+                        let _ = self.execute_instruction(&instruction, &operand)?;
+
+                        // Update PC if not already modified by the instruction
+                        if !self.registers.is_pc_dirty {
+                            self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
+                        } else {
+                            self.registers.is_pc_dirty = false;
+                        }
+
+                        self.instructions_executed += 1;
+
+                        // Handle pending I flag changes
+                        if let Some(new_i_flag) = self.pending_i_flag.take() {
+                            self.registers.set_status(StatusFlag::InterruptDisable, new_i_flag);
+                        }
+                    }
+
+                    // Check for interrupts after instruction completion
+                    let interrupt_cycles = self.check_and_setup_interrupt()?;
+
+                    if interrupt_cycles == 0 {
+                        // No interrupt, ready for next instruction
+                        self.cycle_state = CpuCycleState::FetchOpcode;
+                    }
+
+                    return Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        ..Default::default()
+                    });
+                }
+
+                // Not the last cycle, just advance
+                self.cycle_state = CpuCycleState::Executing {
+                    instruction,
+                    operand,
+                    total_cycles,
+                    current_cycle: current_cycle + 1,
+                    is_interrupt,
+                };
+
+                Ok(CpuCycleResult::default())
+            }
+
+            CpuCycleState::Halted { .. } => {
+                // Already handled above
+                unreachable!()
+            }
+        }
+    }
+
+    fn is_mid_instruction(&self) -> bool {
+        matches!(self.cycle_state, CpuCycleState::Executing { .. })
+    }
+
+    fn is_halted(&self) -> bool {
+        matches!(self.cycle_state, CpuCycleState::Halted { .. })
+    }
+
+    fn halt_cycles(&mut self, cycles: u32) {
+        if cycles > 0 {
+            self.cycle_state = CpuCycleState::Halted { cycles_remaining: cycles };
+        }
+    }
+
+    fn get_cycles(&self) -> u32 {
+        self.cycles
+    }
 }
 
 impl Cpu6502 {
@@ -552,6 +713,7 @@ impl Cpu6502 {
             pending_nmi: false,
             pending_i_flag: None,
             cycles: 0,
+            cycle_state: CpuCycleState::FetchOpcode,
         }
     }
 
@@ -570,6 +732,48 @@ impl Cpu6502 {
         };
 
         Ok(cycle)
+    }
+
+    /// Calculate additional cycles for an instruction based on operand (page crossings, branches, etc.)
+    /// This is used by the cycle-stepping state machine to know total cycles upfront.
+    fn calculate_additional_cycles(&self, instruction: &Instruction, operand: &Operand) -> u32 {
+        match instruction.opcode {
+            // Branch instructions: +1 if taken, +2 if taken and page crossed
+            OpCode::BCC | OpCode::BCS | OpCode::BEQ | OpCode::BMI |
+            OpCode::BNE | OpCode::BPL | OpCode::BVC | OpCode::BVS => {
+                // For branches, we can't know if they're taken until execution
+                // But we need to estimate. Return 0 here; actual cycles are handled in step_instruction
+                0
+            }
+
+            // Load instructions with page crossing penalty
+            OpCode::LDA | OpCode::LDX | OpCode::LDY | OpCode::EOR | OpCode::AND |
+            OpCode::ORA | OpCode::ADC | OpCode::SBC | OpCode::CMP | OpCode::BIT |
+            OpCode::LAX | OpCode::NOP | OpCode::LAS => {
+                self.get_cycles_by_page_crossing_for_load(operand)
+            }
+
+            // All other instructions don't have additional cycles from operand
+            _ => 0,
+        }
+    }
+
+    /// Check for pending interrupts and setup the cycle state machine for interrupt handling.
+    /// Returns the number of cycles the interrupt will take (0 if no interrupt).
+    fn check_and_setup_interrupt(&mut self) -> Result<u32, CpuError> {
+        if self.pending_nmi {
+            self.pending_nmi = false;
+            self.nmi()?;
+            // Interrupt handling is now complete, cycles already counted
+            // Return the cycle count but don't setup executing state
+            // (the interrupt handler runs synchronously in nmi()/irq())
+            Ok(Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES)
+        } else if self.is_asserted_irq()? && !self.registers.get_status(StatusFlag::InterruptDisable) {
+            self.irq()?;
+            Ok(Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES)
+        } else {
+            Ok(0)
+        }
     }
 
     fn build_instruction_table() -> Vec<Instruction> {

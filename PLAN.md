@@ -12,6 +12,8 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 
 **Current focus**: AccuracyCoin test compliance - working through failing tests.
 
+**AccuracyCoin Score**: 90/131
+
 ---
 
 ## Completed Work
@@ -26,7 +28,7 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 - CPU debugger/disassembler
 - Sound playback via SDL2
 - Initial LLM integration (OpenAI, hint overlay)
-- AccuracyCoin score: 74/131
+- AccuracyCoin score: 74/131 (now 90/131 after Claude contributions)
 
 ### Claude Contributions (December 2025 → Present)
 
@@ -34,7 +36,7 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 |------|---------|---------|
 | SingleStepTests framework | CPU passes 100% (2,560,000/2,560,000) | `mmnes_core/src/tests/singlestep/` |
 | README.md update | Reflects human-to-AI experiment framing | - |
-| Cycle-accurate timing refactoring | AccuracyCoin 74→82/131, audio synced | [Full details](claude_directory/cycle_accurate_timing_refactoring.md) |
+| Cycle-accurate timing refactoring | AccuracyCoin 74→82→90/131, audio synced | [Full details](claude_directory/cycle_accurate_timing_refactoring.md) |
 | ROM IS NOT WRITABLE fix | AccuracyCoin test passes | [Full details](claude_directory/rom_is_not_writable.md) |
 | PPU Open Bus | AccuracyCoin DUMMY WRITE CYCLE passes | [Full details](claude_directory/ppu_open_bus.md) |
 | CPU/Bus Open Bus | AccuracyCoin OPEN BUS FAIL 1 passes | Data bus tracking in NESBus |
@@ -42,16 +44,17 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 | PPU Open Bus Decay | AccuracyCoin "PPU Register Open Bus" passes | [Full details](claude_directory/ppu_open_bus_decay.md) |
 | PPU Read Buffer | AccuracyCoin "PPU READ BUFFER" passes | Palette read now updates buffer with nametable data |
 | PPU Palette 6-bit | AccuracyCoin "PALETTE RAM QUIRKS" FAIL 5 passes | Palette reads return 6-bit value + open bus upper 2 bits |
+| Cycle-stepping infrastructure | All 5 phases complete, 237 tests pass | [Full details](claude_directory/cycle_stepping_infrastructure.md) |
 
 ---
 
 ## In Progress
 
-*No active tasks*
+*No tasks currently in progress.*
 
 ## Planned Work
 
-*No planned tasks*
+*Integrate DMA controller with master scheduler for proper DMC DMA cycle stealing mid-instruction.*
 
 ---
 
@@ -103,6 +106,37 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 ---
 
 ## Session Log
+
+### Session: December 19, 2025 (session 9)
+- Completed all 5 phases of cycle-accurate emulation refactoring
+- Phase 1: CPU cycle-stepping state machine
+  - Added `CpuCycleState` enum (FetchOpcode, Executing, Halted)
+  - Added `step_cycle()` to CPU trait and Cpu6502 implementation
+  - Added `CpuCycleResult` struct for cycle activity reporting
+  - Added `is_mid_instruction()`, `is_halted()`, `halt_cycles()`, `get_cycles()` methods
+  - Backward compatible - existing `step_instruction()` still works
+- Phase 2: DMA Controller
+  - Created `dma_controller.rs` module (~270 lines)
+  - `DmaController` manages OAM DMA and DMC DMA state
+  - `step_cycle()` executes one DMA cycle (read/write alternating for OAM)
+  - Proper 513-514 cycle timing for OAM DMA with odd/even alignment
+  - DMC DMA support (1-4 cycles)
+- Phase 3: Master Scheduler
+  - Added `step_master_cycle()` and `step_frame_cycle_accurate()` to NesConsole
+  - PpuDma signals DMA halt cycles via shared cells
+  - OAM DMA now properly halts CPU for 513-514 cycles
+  - Wired up shared cells through NesConsoleBuilder
+- Phase 4: PPU Integration Refinements
+  - Added `advance_dots()`, `get_dot()`, `get_scanline()` to PPU trait
+  - Master scheduler uses `advance_dots(3)` for precise control
+- Phase 5: APU Cycle-Stepping
+  - Added `step_cycle()` to APU trait - advances by one CPU cycle
+  - Added `needs_dmc_dma()` and `provide_dmc_sample()` for external DMA handling
+  - APU clocks DMC/triangle at CPU rate, pulses/noise at half rate
+- Added 11 new unit tests (5 CPU cycle-stepping + 6 DMA controller)
+- All 237 tests pass
+- Files created: `dma_controller.rs`
+- Files modified: `cpu.rs`, `cpu_6502.rs`, `tests/cpu_6502.rs`, `lib.rs`, `ppu_dma.rs`, `nes_console.rs`, `ppu.rs`, `ppu_2c02.rs`, `apu.rs`, `apu_rp2a03.rs`
 
 ### Session: December 19, 2025 (session 8)
 - Investigated "Arbitrary Sprite Zero" test - DEFERRED (see DEF-004)
@@ -187,6 +221,11 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 | Dec 19, 2025 | ~90% | ~10% | PPU read buffer fix |
 | Dec 19, 2025 | ~89% | ~11% | PPU palette 6-bit read |
 | Dec 19, 2025 | ~88% | ~12% | PPU rendering flag behavior |
+| Dec 19, 2025 | ~87% | ~13% | CPU cycle-stepping state machine (Phase 1) |
+| Dec 19, 2025 | ~86% | ~14% | DMA controller (Phase 2) |
+| Dec 19, 2025 | ~85% | ~15% | Master scheduler (Phase 3) |
+| Dec 19, 2025 | ~85% | ~15% | PPU integration refinements (Phase 4) |
+| Dec 19, 2025 | ~84% | ~16% | APU cycle-stepping (Phase 5) |
 
 ---
 
