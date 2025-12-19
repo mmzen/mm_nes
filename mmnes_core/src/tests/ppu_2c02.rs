@@ -856,3 +856,4 @@ fn test_palette_read_updates_buffer_with_nametable_data() {
     assert_eq!(buffered_value, nametable_value,
         "Read buffer should contain nametable data ($2F00) after palette read");
 }
+

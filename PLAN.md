@@ -49,8 +49,6 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 
 *No active tasks*
 
----
-
 ## Planned Work
 
 *No planned tasks*
@@ -81,6 +79,17 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 **Required**: Cycle-accurate emulation where DMC DMA can interrupt CPU mid-instruction.
 **Notes**: This is a fundamental architecture limitation of instruction-level emulation.
 
+### DEF-004: Arbitrary Sprite Zero
+**Description**: AccuracyCoin "ARBITRARY SPRITE ZERO" test fails.
+**Test behavior**: The test checks two conditions:
+1. FAIL 1: Only sprite at OAM index 0 should trigger sprite zero hit (when OAMADDR=0)
+2. FAIL 2: When OAMADDR is set mid-frame, the sprite at OAMADDR/4 should be treated as "sprite zero"
+**Attempted fixes**:
+1. Mark first in-range sprite as sprite0 → caused FAIL 1 regression
+2. Mark sprite at OAMADDR/4 as sprite0 → passes FAIL 1, still fails FAIL 2
+**Root cause hypothesis**: The test requires precise timing coordination between OAMADDR writes and sprite evaluation. Current implementation reads OAMADDR at sprite evaluation time, but the test may require OAMADDR to affect sprite zero determination at a specific PPU cycle (cycle 66) during evaluation.
+**Notes**: Deferred pending further investigation of PPU sprite evaluation timing.
+
 ### DEF-003: Rendering Flag Behavior FAIL 2
 **Description**: AccuracyCoin "RENDERING FLAG BEHAVIOR" test FAIL 2 - "Background shift registers should be initialized and clocked when only rendering sprites."
 **Test behavior**: Test enables only sprites ($10) during h-blank, expects background shift registers to be populated, then enables both flags mid-scanline before sprite 0 hit position.
@@ -94,6 +103,15 @@ The emulator is functional with good CPU accuracy and improved PPU timing. The h
 ---
 
 ## Session Log
+
+### Session: December 19, 2025 (session 8)
+- Investigated "Arbitrary Sprite Zero" test - DEFERRED (see DEF-004)
+- Attempted fixes:
+  1. Mark first in-range sprite as sprite0 → caused FAIL 1 regression
+  2. Mark sprite at OAMADDR/4 as sprite0 → passes FAIL 1, fails FAIL 2
+- Reverted changes, added DEF-004 defect entry
+- Root cause: requires cycle-accurate OAMADDR timing during sprite evaluation
+- All 226 tests pass (no new tests added)
 
 ### Session: December 19, 2025 (session 7)
 - Attempted fix for PPU Rendering Flag Behavior FAIL 2 (two changes made, retained):
