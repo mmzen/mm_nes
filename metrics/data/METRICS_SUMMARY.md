@@ -1,6 +1,6 @@
 # Code Quality Metrics Summary
 
-*Generated: 2025-12-19 20:44:20*
+*Generated: 2025-12-19 22:12:21*
 
 **Latest commit:** `96493ed` on `main`
 
@@ -9,7 +9,7 @@
 | Crate | LOC | Functions | Avg Cyclo | Coverage | Human % | Claude % |
 |-------|-----|-----------|-----------|----------|---------|----------|
 | mmnes_frontend | 4043 | 293 | 3.6 | 0.0% | 100.0% | 0.0% |
-| mmnes_core | 17313 | 1173 | 2.4 | 42.0% | 83.8% | 16.2% |
+| mmnes_core | 17781 | 1187 | 2.4 | 49.1% | 82.2% | 17.8% |
 | mmretrodb | 596 | 58 | 2.8 | 77.0% | 100.0% | 0.0% |
 
 ## Definitions
