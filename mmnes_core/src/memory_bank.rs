@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::memory::{Memory, MemoryError};
@@ -12,6 +12,7 @@ pub struct MemoryBank {
     memory: Vec<u8>,
     address_space: (u16, u16),
     device_type: BusDeviceType,
+    is_read_only: bool,
 }
 
 impl Memory for MemoryBank {
@@ -37,6 +38,10 @@ impl Memory for MemoryBank {
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
         //trace!("writing byte ({:02X}) at 0x{:04X}", value, addr);
+
+        if self.is_read_only {
+            return Ok(()); // Silently ignore writes to ROM
+        }
 
         if !self.addr_is_in_boundary(addr) {
             Err(MemoryError::OutOfRange(addr))
@@ -103,7 +108,12 @@ impl MemoryBank {
             memory: vec![0x00; size],
             address_space: address_range,
             device_type: BusDeviceType::WRAM(StandardMemory),
+            is_read_only: false,
         }
+    }
+
+    pub fn set_read_only(&mut self) {
+        self.is_read_only = true;
     }
 
     fn wrapping_add(&self, addr: u16, n: u16) -> u16 {

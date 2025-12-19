@@ -1,4 +1,4 @@
-// Authorship: Human 85% | Claude 15%
+// Authorship: Human 80% | Claude 20%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -351,6 +351,8 @@ pub struct Ppu2c02 {
     cycles_per_scanline_fp: u64,
     cycles_acc_fp: u64,
     nmi_suppressed: Cell<bool>,
+    // PPU open bus - tracks last value on the internal data bus
+    open_bus: Cell<u8>,
     // Dot-level timing state
     current_dot: u16,           // 0-340: current dot position within scanline
     current_scanline: u16,      // 0-261 (NTSC): current scanline
@@ -440,6 +442,8 @@ impl Configurable for Ppu2c02 {
         self.sprite0_hit_x = 0;
         // Reset partial scanline rendering
         self.last_rendered_dot = 0;
+        // Reset open bus
+        self.open_bus.set(0);
     }
 }
 
@@ -474,6 +478,8 @@ impl PPU for Ppu2c02 {
         self.sprite0_hit_x = 0;
         // Reset partial scanline rendering
         self.last_rendered_dot = 0;
+        // Reset open bus
+        self.open_bus.set(0);
 
         self.set_flag(Status(VBlank), true);
 
@@ -529,6 +535,9 @@ impl Memory for Ppu2c02 {
             _ => unreachable!(),
         };
 
+        // Update open bus with returned value
+        self.open_bus.set(value);
+
         Ok(value)
     }
 
@@ -557,6 +566,9 @@ impl Memory for Ppu2c02 {
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
         //trace!("PPU: registers access: writing byte (0x{:02X}) at 0x{:04X}", value, addr);
+
+        // Update open bus on every write to PPU registers
+        self.open_bus.set(value);
 
         match addr {
             0x00 => self.write_control_register(value),
@@ -628,7 +640,8 @@ impl Ppu2c02 {
     }
 
     fn read_control_register(&self) -> u8 {
-        self.register.borrow().control
+        // $2000 is write-only, returns open bus
+        self.open_bus.get()
     }
 
     fn write_control_register(&mut self, value: u8) {
@@ -653,7 +666,8 @@ impl Ppu2c02 {
     }
 
     fn read_mask_register(&self) -> u8 {
-        self.register.borrow().mask
+        // $2001 is write-only, returns open bus
+        self.open_bus.get()
     }
 
     fn write_mask_register(&mut self, value: u8) {
@@ -662,7 +676,8 @@ impl Ppu2c02 {
     }
 
     fn read_status_register(&self) -> u8 {
-        let result = self.register.borrow().status;
+        let status = self.register.borrow().status;
+        let open_bus = self.open_bus.get();
 
         if let PpuState::Rendering(scanline) = self.state {
             if scanline == self.config.nmi_scanline && !self.get_flag(Status(VBlank)) {
@@ -673,7 +688,8 @@ impl Ppu2c02 {
         self.set_flag(Status(VBlank), false);
         self.latch.borrow_mut().reset();
 
-        result
+        // $2002: bits 7,6,5 are status, bits 4-0 are open bus
+        (status & 0xE0) | (open_bus & 0x1F)
     }
 
     fn write_status_register(&mut self, value: u8) {
@@ -682,7 +698,8 @@ impl Ppu2c02 {
     }
 
     fn read_oam_address_register(&self) -> u8 {
-        self.register.borrow().oam_addr
+        // $2003 is write-only, returns open bus
+        self.open_bus.get()
     }
 
     fn write_oam_address_register(&mut self, value: u8) {
@@ -730,7 +747,8 @@ impl Ppu2c02 {
     }
 
     fn read_scroll_register(&self) -> u8 {
-        self.register.borrow().scroll
+        // $2005 is write-only, returns open bus
+        self.open_bus.get()
     }
 
     fn write_scroll_register(&mut self, value: u8) {
@@ -750,12 +768,8 @@ impl Ppu2c02 {
     }
 
     fn read_addr_register(&self) -> u8 {
-        let v = *self.v.borrow();
-
-        match self.latch.borrow().state {
-            LatchState::LOW => v as u8,
-            LatchState::HIGH => (v >> 8) as u8,
-        }
+        // $2006 is write-only, returns open bus
+        self.open_bus.get()
     }
 
     fn write_addr_register(&mut self, value: u8) {
@@ -841,6 +855,7 @@ impl Ppu2c02 {
             cycles_per_scanline_fp: 0,
             cycles_acc_fp: 0,
             nmi_suppressed: Cell::new(false),
+            open_bus: Cell::new(0),
             // Initialize dot-level timing at start of pre-render scanline
             current_dot: 0,
             current_scanline: pre_render,

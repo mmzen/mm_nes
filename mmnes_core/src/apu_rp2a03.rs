@@ -1,4 +1,4 @@
-// Authorship: Human 85% | Claude 15%
+// Authorship: Human 80% | Claude 20%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -552,19 +552,35 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         }
     }
 
-    fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
+    fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<(), ApuError> {
         match self.current_address {
             Some(addr) => {
                 self.sample_buffer = Some(self.bus.borrow().read_byte(addr)?);
                 self.bytes_remaining -= 1;
                 self.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
+
+                // When bytes_remaining becomes 0, the sample is finished
+                // Either restart (loop) or trigger IRQ
+                if self.bytes_remaining == 0 {
+                    match self.reload {
+                        Reload::Loop => {
+                            self.reload_sample_window()
+                        },
+                        Reload::None => {
+                            if self.irq_enable && !self.irq_pending {
+                                self.irq_pending = true;
+                                self.interrupt()?;
+                            }
+                        }
+                    }
+                }
             },
             None => {
-                return Err(MemoryError::IllegalState("dmc dma current address is not set".to_string()))
+                return Err(ApuError::MemoryError(MemoryError::IllegalState("dmc dma current address is not set".to_string())))
             }
         }
 
-        Ok(0)
+        Ok(())
     }
 
     fn reload_sample_window(&mut self) {
@@ -584,7 +600,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
         }
     }
 
-    fn refill_or_underflow(&mut self) -> Result<(), ApuError> {
+    fn refill_or_underflow(&mut self) {
         if self.bits_remaining == 0 {
             if let Some(sample_buffer) = self.sample_buffer.take() {
                 self.shift_register = sample_buffer;
@@ -592,24 +608,12 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
 
                 self.silenced = false;
             } else {
+                // No sample buffer available - silence the output
+                // Note: Loop restart and IRQ are now handled in dma_read_and_update_sample_buffer_and_counter()
+                // when bytes_remaining becomes 0
                 self.silenced = true;
-
-                if self.bytes_remaining == 0 && self.enabled == true {
-                    match self.reload {
-                        Reload::Loop => {
-                            self.reload_sample_window()
-                        },
-                        Reload::None => {
-                            if self.irq_enable && !self.irq_pending {
-                                self.irq_pending = true;
-                                self.interrupt()?;
-                            }
-                        }
-                    }
-                }
             }
         }
-        Ok(())
     }
 
     fn update_output_level(&mut self) {
@@ -1227,7 +1231,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
 
         if self.dmc.timer_counter == 0 {
-            self.dmc.refill_or_underflow()?;
+            self.dmc.refill_or_underflow();
 
             if self.dmc.bits_remaining > 0 {
                 self.dmc.update_output_level();

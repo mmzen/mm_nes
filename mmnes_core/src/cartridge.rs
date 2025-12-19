@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -140,6 +140,7 @@ pub fn create_split_rom_memory(data: &mut BufReader<File>, offset: u64, total_si
 
         let mut rom = MemoryBank::new(bank_size, address_range);
         write_rom_data(&mut rom, bank_size, data)?;
+        rom.set_read_only();
 
         memory_banks.push(rom);
     }

@@ -329,13 +329,22 @@ fn test_read_to_status_clears_vblank_and_reset_latch() {
     ppu.write_byte(status, status_value).unwrap();
     ppu.write_byte(addr, addr_value).unwrap();
 
-    // First read of status returns the value with VBlank bit set
+    // First read of status returns:
+    // - Bits 7,6,5 from status register (0xFF & 0xE0 = 0xE0)
+    // - Bits 4-0 from open bus (last write was 0xAB, so 0xAB & 0x1F = 0x0B)
+    // Result: 0xE0 | 0x0B = 0xEB
     let result0 = ppu.read_byte(status).unwrap();
-    // Second read should have VBlank cleared (bit 7 = 0)
+    // Second read should have VBlank cleared (bit 7 = 0), same open bus
+    // Open bus is now 0xEB (from previous read), so:
+    // - Status bits: 0x7F & 0xE0 = 0x60
+    // - Open bus bits: 0xEB & 0x1F = 0x0B
+    // Result: 0x60 | 0x0B = 0x6B
     let result1 = ppu.read_byte(status).unwrap();
 
-    assert_eq!(result0, status_value);
-    assert_eq!(result1, status_value & 0x7F);
+    let expected0 = (status_value & 0xE0) | (addr_value & 0x1F);  // 0xEB
+    let expected1 = ((status_value & 0x7F) & 0xE0) | (expected0 & 0x1F);  // 0x6B
+    assert_eq!(result0, expected0);
+    assert_eq!(result1, expected1);
 
     // Reading status resets the address latch (write toggle)
     // To verify latch was reset: write two bytes to PPUADDR again

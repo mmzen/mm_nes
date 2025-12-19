@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fs::File;
@@ -117,16 +117,18 @@ impl Memory for NromCartridge {
         self.read_byte(addr)
     }
 
-    fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
-        self.prg_rom.borrow_mut().write_byte(addr, value)
+    fn write_byte(&mut self, _addr: u16, _value: u8) -> Result<(), MemoryError> {
+        // NROM has no mapper control - writes to ROM space are silently ignored
+        Ok(())
     }
 
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
         self.prg_rom.borrow().read_word(addr)
     }
 
-    fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError> {
-        self.prg_rom.borrow_mut().write_word(addr, value)
+    fn write_word(&mut self, _addr: u16, _value: u16) -> Result<(), MemoryError> {
+        // NROM has no mapper control - writes to ROM space are silently ignored
+        Ok(())
     }
 
     fn dump(&self) {

@@ -105,6 +105,21 @@ Claude will maintain a PLAN.md file, that contains the development: what has bee
 This file is essential for the track record and to continue the sessions when interrupted, so Claude need to put the right content for maximum effectiveness.
 In addition, Claude must maintain the track record of the ratio human versus Claude globally in this file after each session logs (so they may be eventually plotted)
 
+### Plan Documentation Management
+
+To keep the PLAN file concise, enforce the following rule:-
+- When a task or work item reaches a completed state, remove its detailed implementation notes from the PLAN file. 
+- Summarize the completed work in the PLAN file using a short overview (goals, outcome, key decisions). 
+- Move the full detailed content into a new, dedicated file under claude_directory/, named after the task or work item.
+
+As a result, the PLAN file must contain only:
+- The current overall project status
+- High-level summaries of completed work
+- Tasks that are currently in progress (with details)
+
+The PLAN file should never contain detailed notes for completed tasks. 
+Any time a task transitions to completed, immediately apply this process.
+
 # Important development guidelines and instructions
 
 ## Industry-Standard Guidelines for LLM-Driven Software Development

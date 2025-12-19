@@ -1,5 +1,5 @@
-// Authorship: Human 100% | Claude 0%
-use std::cell::RefCell;
+// Authorship: Human 90% | Claude 10%
+use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::rc::Rc;
 use log::{debug, trace};
@@ -13,6 +13,7 @@ pub const BUS_ADDRESSABLE_SIZE: usize = 64 * 1024;
 pub struct NESBus {
     devices: Vec<Rc<RefCell<dyn BusDevice>>>,
     num_devices: usize,
+    data_bus: Rc<Cell<u8>>,  // Shared data bus value for open bus behavior
 }
 
 impl Memory for NESBus {
@@ -24,6 +25,7 @@ impl Memory for NESBus {
         let (memory, effective_addr) = self.lookup_address(addr)?;
         let value = memory.borrow().read_byte(effective_addr)?;
 
+        self.data_bus.set(value);  // Update data bus with read value
         Ok(value)
     }
 
@@ -35,6 +37,8 @@ impl Memory for NESBus {
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {
+        self.data_bus.set(value);  // Update data bus with written value
+
         let (memory, effective_addr) = self.lookup_address(addr)?;
         memory.borrow_mut().write_byte(effective_addr, value)?;
 
@@ -42,16 +46,17 @@ impl Memory for NESBus {
     }
 
     fn read_word(&self, addr: u16) -> Result<u16, MemoryError> {
-        let (memory, effective_addr) = self.lookup_address(addr)?;
-        let value = memory.borrow().read_word(effective_addr)?;
-
-        Ok(value)
+        // Read as two bytes to properly update data bus (high byte will be last on bus)
+        let low = self.read_byte(addr)?;
+        let high = self.read_byte(addr.wrapping_add(1))?;
+        Ok(u16::from_le_bytes([low, high]))
     }
 
     fn write_word(&mut self, addr: u16, value: u16) -> Result<(), MemoryError> {
-        let (memory, effective_addr) = self.lookup_address(addr)?;
-        memory.borrow_mut().write_word(effective_addr, value)?;
-
+        // Write as two bytes to properly update data bus
+        let bytes = value.to_le_bytes();
+        self.write_byte(addr, bytes[0])?;
+        self.write_byte(addr.wrapping_add(1), bytes[1])?;
         Ok(())
     }
 
@@ -95,11 +100,13 @@ impl Bus for NESBus {
 impl NESBus {
 
     pub fn new() -> Self {
-        let open_bus = Rc::new(RefCell::new(OpenBus::new()));
+        let data_bus = Rc::new(Cell::new(0u8));
+        let open_bus = Rc::new(RefCell::new(OpenBus::new(data_bus.clone())));
 
         NESBus {
             devices: vec![open_bus.clone(); 65536],
             num_devices: 0,
+            data_bus,
         }
     }
 
@@ -132,16 +139,21 @@ impl NESBus {
 
 const OPEN_BUS_DEVICE_NAME: &str = "Open Bus";
 
-#[derive(Debug)]
 struct OpenBus {
-    last_value: u8,
+    data_bus: Rc<Cell<u8>>,  // Shared reference to system data bus
+}
+
+impl std::fmt::Debug for OpenBus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenBus")
+            .field("data_bus", &self.data_bus.get())
+            .finish()
+    }
 }
 
 impl OpenBus {
-    fn new() -> Self {
-        OpenBus {
-            last_value: 0x00,
-        }
+    fn new(data_bus: Rc<Cell<u8>>) -> Self {
+        OpenBus { data_bus }
     }
 }
 
@@ -166,11 +178,11 @@ impl Memory for OpenBus {
     }
 
     fn read_byte(&self, _: u16) -> Result<u8, MemoryError> {
-        Ok(self.last_value)
+        Ok(self.data_bus.get())  // Return current data bus value
     }
 
     fn trace_read_byte(&self, _: u16) -> Result<u8, MemoryError> {
-        Ok(0x00)
+        Ok(self.data_bus.get())
     }
 
     fn write_byte(&mut self, _: u16, _: u8) -> Result<(), MemoryError> {

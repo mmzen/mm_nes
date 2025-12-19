@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 90% | Claude 10%
 use crate::bus::MockBusStub;
 use crate::memory::{Memory, MemoryError};
 use crate::memory_bank::MemoryBank;
@@ -81,6 +81,50 @@ fn read_and_write_word_correctly_at_specific_address() {
     let read_value = memory_bank.read_word(test_address).unwrap();
 
     assert_eq!(read_value, test_value);
+}
+
+#[test]
+fn test_read_only_memory_ignores_writes() {
+    init();
+
+    let mut memory_bank = create_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let test_address = 0x00FF;
+    let initial_value = 0x42;
+    let write_value = 0xAB;
+
+    // Write initial value while writable
+    memory_bank.write_byte(test_address, initial_value).unwrap();
+    assert_eq!(memory_bank.read_byte(test_address).unwrap(), initial_value);
+
+    // Set read-only and attempt to write
+    memory_bank.set_read_only();
+    let result = memory_bank.write_byte(test_address, write_value);
+
+    // Write should succeed (return Ok) but value should be unchanged
+    assert!(result.is_ok());
+    assert_eq!(memory_bank.read_byte(test_address).unwrap(), initial_value);
+}
+
+#[test]
+fn test_read_only_memory_ignores_word_writes() {
+    init();
+
+    let mut memory_bank = create_memory_bank(DEFAULT_MEMORY_SIZE, DEFAULT_MEMORY_RANGE);
+    let test_address = 0x00FF;
+    let initial_value: u16 = 0x1234;
+    let write_value: u16 = 0xABCD;
+
+    // Write initial value while writable
+    memory_bank.write_word(test_address, initial_value).unwrap();
+    assert_eq!(memory_bank.read_word(test_address).unwrap(), initial_value);
+
+    // Set read-only and attempt to write
+    memory_bank.set_read_only();
+    let result = memory_bank.write_word(test_address, write_value);
+
+    // Write should succeed (return Ok) but value should be unchanged
+    assert!(result.is_ok());
+    assert_eq!(memory_bank.read_word(test_address).unwrap(), initial_value);
 }
 
 

@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::memory::{Memory, MemoryType};
@@ -45,11 +45,19 @@ fn create_bus_device_with_expectations(memory_size: usize, memory_range: (u16, u
         },
 
         (RequestType::Read, RequestData::Word(value)) => {
-            device.expect_read_word().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
+            // NESBus::read_word calls read_byte twice (low byte first, then high byte)
+            let low = (value & 0xFF) as u8;
+            let high = ((value >> 8) & 0xFF) as u8;
+            device.expect_read_byte().times(1).with(eq(expected_addr)).returning(move |_| Ok(low));
+            device.expect_read_byte().times(1).with(eq(expected_addr + 1)).returning(move |_| Ok(high));
         },
 
         (RequestType::Write, RequestData::Word(value)) => {
-            device.expect_write_word().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
+            // NESBus::write_word calls write_byte twice (low byte first, then high byte)
+            let low = (value & 0xFF) as u8;
+            let high = ((value >> 8) & 0xFF) as u8;
+            device.expect_write_byte().times(1).with(eq(expected_addr), eq(low)).returning(|_, _| Ok(()));
+            device.expect_write_byte().times(1).with(eq(expected_addr + 1), eq(high)).returning(|_, _| Ok(()));
         },
 
         (RequestType::ReadWrite, RequestData::Byte(value)) => {
@@ -58,8 +66,13 @@ fn create_bus_device_with_expectations(memory_size: usize, memory_range: (u16, u
         },
 
         (RequestType::ReadWrite, RequestData::Word(value)) => {
-            device.expect_read_word().times(1).with(eq(expected_addr)).returning(move |_| Ok(value));
-            device.expect_write_word().times(1).with(eq(expected_addr), eq(value)).returning(|_, _| Ok(()));
+            // NESBus word operations call byte operations
+            let low = (value & 0xFF) as u8;
+            let high = ((value >> 8) & 0xFF) as u8;
+            device.expect_write_byte().times(1).with(eq(expected_addr), eq(low)).returning(|_, _| Ok(()));
+            device.expect_write_byte().times(1).with(eq(expected_addr + 1), eq(high)).returning(|_, _| Ok(()));
+            device.expect_read_byte().times(1).with(eq(expected_addr)).returning(move |_| Ok(low));
+            device.expect_read_byte().times(1).with(eq(expected_addr + 1)).returning(move |_| Ok(high));
         },
 
         (RequestType::Unmapped, _) => {
@@ -198,19 +211,21 @@ fn returns_size() {
 }
 
 #[test]
-fn returns_bus_error_on_unmapped_access() {
+fn open_bus_returns_last_data_bus_value() {
     init();
 
-    let expected_addr = 0x2000;
+    let unmapped_addr = 0x2000;
     let expected_value = 0xAB;
 
-    let mut nes_bus = create_nes_bus_with_bus_device(expected_addr, RequestType::Unmapped, RequestData::None);
+    let mut nes_bus = create_nes_bus_with_bus_device(unmapped_addr, RequestType::Unmapped, RequestData::None);
 
-    let result0 = nes_bus.write_byte(expected_addr, expected_value);
-    let result1 = nes_bus.read_byte(expected_addr);
+    // Write to unmapped address - this updates the data bus value
+    let result0 = nes_bus.write_byte(unmapped_addr, expected_value);
+    // Read from unmapped address - should return the last data bus value (0xAB)
+    let result1 = nes_bus.read_byte(unmapped_addr);
 
     assert_eq!(result0, Ok(()));
-    assert_eq!(result1, Ok(0x00));
+    assert_eq!(result1, Ok(expected_value));  // Open bus returns last data bus value
 }
 
 #[test]
