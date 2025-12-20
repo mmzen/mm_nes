@@ -2,16 +2,20 @@
 //! Test runner for SingleStepTests validation
 //!
 //! Executes test cases against the CPU and validates both final state
-//! and cycle-accurate bus activity.
+//! and cycle-accurate bus activity. Uses the cycle-accurate step_cycle()
+//! function to ensure per-cycle bus operations match expected behavior.
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::cpu::CPU;
+use crate::cpu::{CPU, BusOperation as CpuBusOperation};
 use crate::cpu_6502::Cpu6502;
-use super::{TestCase, TestResult, StateError, CycleError, BusCycle};
+use super::{TestCase, TestResult, StateError, CycleError, BusCycle, BusOperation};
 use super::tracing_bus::TracingBus;
 
 /// Run a single test case and return the result
+///
+/// Uses the cycle-accurate step_cycle() function to execute instructions
+/// one cycle at a time, recording bus activity for each cycle.
 pub fn run_test_case(test: &TestCase) -> TestResult {
     let mut result = TestResult::new(test.name.clone());
 
@@ -32,22 +36,46 @@ pub fn run_test_case(test: &TestCase) -> TestResult {
         test.initial.p,
     );
 
-    // 4. Clear trace, execute step_instruction()
-    bus.borrow().clear_trace();
+    // 4. Execute instruction using cycle-accurate step_cycle()
+    // Collect bus cycles directly from CpuCycleResult
+    let mut cycles_trace: Vec<BusCycle> = Vec::new();
+    const MAX_CYCLES: usize = 20; // Safety limit to prevent infinite loops
 
-    let step_result = cpu.step_instruction();
-    if let Err(_e) = step_result {
-        result.add_state_error(StateError::Register {
-            name: "execution",
-            expected: 0,
-            actual: 0,
-        });
-        // Add a note about the error in cycle errors
-        result.add_cycle_error(CycleError::CountMismatch {
-            expected: test.cycles.len(),
-            actual: 0,
-        });
-        return result;
+    for _ in 0..MAX_CYCLES {
+        let cycle_result = match cpu.step_cycle() {
+            Ok(r) => r,
+            Err(_e) => {
+                result.add_state_error(StateError::Register {
+                    name: "execution",
+                    expected: 0,
+                    actual: 0,
+                });
+                result.add_cycle_error(CycleError::CountMismatch {
+                    expected: test.cycles.len(),
+                    actual: cycles_trace.len(),
+                });
+                return result;
+            }
+        };
+
+        // Record bus activity from this cycle
+        if let (Some(addr), Some(data)) = (cycle_result.address, cycle_result.data) {
+            let operation = match cycle_result.bus_op {
+                CpuBusOperation::Read => BusOperation::Read,
+                CpuBusOperation::Write => BusOperation::Write,
+                CpuBusOperation::None => continue, // Skip cycles with no bus activity
+            };
+            cycles_trace.push(BusCycle {
+                address: addr,
+                value: data,
+                operation,
+            });
+        }
+
+        // Check if instruction completed
+        if cycle_result.instruction_complete {
+            break;
+        }
     }
 
     // 5. Compare final CPU state with test.final_state
@@ -56,9 +84,8 @@ pub fn run_test_case(test: &TestCase) -> TestResult {
     // 6. Validate final memory state
     validate_memory_state(&bus.borrow(), &test.final_state.ram, &mut result);
 
-    // 7. Compare bus trace with test.cycles
-    let trace = bus.borrow().get_trace();
-    validate_cycles(&trace, &test.cycles, &mut result);
+    // 7. Compare cycle-accurate bus trace with test.cycles
+    validate_cycles(&cycles_trace, &test.cycles, &mut result);
 
     result
 }

@@ -1,4 +1,4 @@
-// Authorship: Human 35% | Claude 65%
+// Authorship: Human 25% | Claude 75%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
@@ -773,6 +773,10 @@ impl Cpu6502 {
                     OpCode::BRK => {
                         self.execute_cycle_brk(instruction, cycle, state, is_interrupt)
                     }
+                    // JAM/KIL/HLT: 11 cycles - reads from interrupt vector area
+                    OpCode::JAM => {
+                        self.execute_cycle_jam(instruction, cycle, state, is_interrupt)
+                    }
                     // All other implicit instructions: 2 cycles
                     _ => {
                         // cycle=1 means we're on the 2nd cycle (after opcode fetch)
@@ -1129,8 +1133,8 @@ impl Cpu6502 {
             3 => {
                 let addr = state.effective_addr;
                 if is_write {
-                    // Write to indexed ZP
-                    let value = self.get_write_value(instruction)?;
+                    // Write to indexed ZP (use base_addr for SHA/SHX/SHY)
+                    let value = self.get_write_value_with_base(instruction, state.base_addr)?;
                     self.bus.borrow_mut().write_byte(addr, value)?;
 
                     if !is_interrupt {
@@ -1595,9 +1599,22 @@ impl Cpu6502 {
                 let addr = state.effective_addr;
 
                 if is_write {
-                    // Write to effective address
-                    let value = self.get_write_value(instruction)?;
-                    self.bus.borrow_mut().write_byte(addr, value)?;
+                    // Write to effective address (use base_addr for SHA/SHX/SHY)
+                    let value = self.get_write_value_with_base(instruction, state.base_addr)?;
+
+                    // TAS (OpCode::TAX) also sets SP = A & X before the store
+                    if instruction.opcode == OpCode::TAX {
+                        self.registers.sp = self.registers.a & self.registers.x;
+                    }
+
+                    // SHA/SHX/SHY/TAS with page crossing corrupt the target address
+                    let target_addr = if self.is_unstable_store(instruction) && state.page_crossed {
+                        self.get_corrupted_address(addr, value)
+                    } else {
+                        addr
+                    };
+
+                    self.bus.borrow_mut().write_byte(target_addr, value)?;
 
                     if !is_interrupt {
                         self.finalize_instruction(instruction)?;
@@ -1606,7 +1623,7 @@ impl Cpu6502 {
                     Ok(CpuCycleResult {
                         instruction_complete: true,
                         memory_write: true,
-                        address: Some(addr),
+                        address: Some(target_addr),
                         data: Some(value),
                         bus_op: BusOperation::Write,
                         cycle_description: "Abs,X/Y: write value",
@@ -1971,7 +1988,8 @@ impl Cpu6502 {
                 let addr = state.effective_addr;
 
                 if is_write {
-                    let value = self.get_write_value(instruction)?;
+                    // Use effective address high byte for SHA/SHX/SHY (Indirect X uses final address)
+                    let value = self.get_write_value_with_base(instruction, state.effective_addr)?;
                     self.bus.borrow_mut().write_byte(addr, value)?;
 
                     if !is_interrupt {
@@ -2179,8 +2197,17 @@ impl Cpu6502 {
                 let addr = state.effective_addr;
 
                 if is_write {
-                    let value = self.get_write_value(instruction)?;
-                    self.bus.borrow_mut().write_byte(addr, value)?;
+                    // Use base_addr for SHA/SHX/SHY (address before Y indexing)
+                    let value = self.get_write_value_with_base(instruction, state.base_addr)?;
+
+                    // SHA/SHX/SHY with page crossing corrupt the target address
+                    let target_addr = if self.is_unstable_store(instruction) && state.page_crossed {
+                        self.get_corrupted_address(addr, value)
+                    } else {
+                        addr
+                    };
+
+                    self.bus.borrow_mut().write_byte(target_addr, value)?;
 
                     if !is_interrupt {
                         self.finalize_instruction(instruction)?;
@@ -2189,7 +2216,7 @@ impl Cpu6502 {
                     Ok(CpuCycleResult {
                         instruction_complete: true,
                         memory_write: true,
-                        address: Some(addr),
+                        address: Some(target_addr),
                         data: Some(value),
                         bus_op: BusOperation::Write,
                         cycle_description: "(Ind),Y: write value",
@@ -2288,22 +2315,49 @@ impl Cpu6502 {
         matches!(instruction.opcode,
             OpCode::STA | OpCode::STX | OpCode::STY |
             // Illegal write opcodes
-            OpCode::SAX | OpCode::SHA | OpCode::SHX | OpCode::SHY
+            // Note: TAX is used for TAS (0x9B) which stores A & X & (H+1)
+            OpCode::SAX | OpCode::SHA | OpCode::SHX | OpCode::SHY | OpCode::TAX
         )
     }
 
     /// Get the value to write for a store instruction
+    /// For SHA/SHX/SHY, base_addr is needed to compute the correct value.
     fn get_write_value(&self, instruction: &Instruction) -> Result<u8, CpuError> {
+        self.get_write_value_with_base(instruction, 0)
+    }
+
+    /// Get the value to write for a store instruction, with base address for indexed modes
+    /// SHA, SHX, SHY use formula: register & (H+1) where H is high byte of base address
+    fn get_write_value_with_base(&self, instruction: &Instruction, base_addr: u16) -> Result<u8, CpuError> {
+        let h = (base_addr >> 8) as u8;
         match instruction.opcode {
             OpCode::STA => Ok(self.registers.a),
             OpCode::STX => Ok(self.registers.x),
             OpCode::STY => Ok(self.registers.y),
             OpCode::SAX => Ok(self.registers.a & self.registers.x),
-            OpCode::SHA => Ok(self.registers.a & self.registers.x & 0x07), // Unstable
-            OpCode::SHX => Ok(self.registers.x & 0x07), // Unstable, simplified
-            OpCode::SHY => Ok(self.registers.y & 0x07), // Unstable, simplified
+            // SHA: A & X & (H+1) where H is high byte of base address
+            OpCode::SHA => Ok(self.registers.a & self.registers.x & h.wrapping_add(1)),
+            // SHX: X & (H+1)
+            OpCode::SHX => Ok(self.registers.x & h.wrapping_add(1)),
+            // SHY: Y & (H+1)
+            OpCode::SHY => Ok(self.registers.y & h.wrapping_add(1)),
+            // TAX (TAS): A & X & (H+1) - same value as SHA
+            OpCode::TAX => Ok(self.registers.a & self.registers.x & h.wrapping_add(1)),
             _ => Err(CpuError::Unimplemented(format!("get_write_value for {:?}", instruction.opcode)))
         }
+    }
+
+    /// Check if instruction is an unstable store (SHA/SHX/SHY) that corrupts address on page crossing
+    fn is_unstable_store(&self, instruction: &Instruction) -> bool {
+        // SHA, SHX, SHY, and TAX (TAS) are unstable store instructions
+        // On page crossing, the address high byte gets corrupted
+        matches!(instruction.opcode, OpCode::SHA | OpCode::SHX | OpCode::SHY | OpCode::TAX)
+    }
+
+    /// Get the corrupted address for SHA/SHX/SHY when page crossing occurs
+    /// The address becomes: low byte from effective address, high byte from value stored
+    fn get_corrupted_address(&self, effective_addr: u16, value: u8) -> u16 {
+        (effective_addr & 0x00FF) | ((value as u16) << 8)
     }
 
     /// Evaluate branch condition for branch instructions
@@ -2815,6 +2869,112 @@ impl Cpu6502 {
                 })
             }
             _ => Err(CpuError::Unimplemented(format!("BRK cycle {} unexpected", cycle)))
+        }
+    }
+
+    /// Execute JAM/KIL/HLT instruction cycle by cycle.
+    /// JAM freezes the CPU but performs specific bus activity:
+    /// - Cycle 1: Fetch opcode (already done)
+    /// - Cycle 2: Dummy read PC+1
+    /// - Cycle 3: Read $FFFF
+    /// - Cycle 4: Read $FFFE
+    /// - Cycle 5: Read $FFFE
+    /// - Cycles 6-11: Read $FFFF (6 times)
+    fn execute_cycle_jam(
+        &mut self,
+        _instruction: &'static Instruction,
+        cycle: u8,
+        _state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Dummy read PC+1
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JAM: dummy read PC+1",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Read $FFFF
+                let addr = 0xFFFF;
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JAM: read $FFFF",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Read $FFFE
+                let addr = 0xFFFE;
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JAM: read $FFFE",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Read $FFFE again
+                let addr = 0xFFFE;
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JAM: read $FFFE (2)",
+                    ..Default::default()
+                })
+            }
+            5..=10 => {
+                // Read $FFFF (cycles 6-11 of the instruction)
+                let addr = 0xFFFF;
+                let data = self.bus.borrow().read_byte(addr)?;
+                let is_last = cycle == 10;
+
+                // On the last cycle, finalize the instruction
+                if is_last && !is_interrupt {
+                    // JAM just advances PC by 1 (the opcode byte)
+                    self.registers.set_pc(pc.wrapping_add(1));
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: is_last,
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: if is_last {
+                        "JAM: read $FFFF (last)"
+                    } else {
+                        "JAM: read $FFFF"
+                    },
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("JAM cycle {} unexpected", cycle)))
         }
     }
 
@@ -4622,6 +4782,7 @@ impl Instruction {
         // SHA stores A & X & (H+1) where H is high byte of BASE address (not effective)
         let (base_addr, effective_addr, page_crossed) = match operand {
             Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+            Operand::AddressEffectiveWithValue(base, effective, page_crossed, _) => (*base, *effective, *page_crossed),
             Operand::Address(addr) => (*addr, *addr, false),
             _ => { unreachable!() }
         };
@@ -4648,6 +4809,7 @@ impl Instruction {
         // SHX stores X & (H+1) where H is high byte of BASE address (not effective)
         let (base_addr, effective_addr, page_crossed) = match operand {
             Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+            Operand::AddressEffectiveWithValue(base, effective, page_crossed, _) => (*base, *effective, *page_crossed),
             Operand::Address(addr) => (*addr, *addr, false),
             _ => { unreachable!() }
         };
@@ -4674,6 +4836,7 @@ impl Instruction {
         // SHY stores Y & (H+1) where H is high byte of BASE address (not effective)
         let (base_addr, effective_addr, page_crossed) = match operand {
             Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+            Operand::AddressEffectiveWithValue(base, effective, page_crossed, _) => (*base, *effective, *page_crossed),
             Operand::Address(addr) => (*addr, *addr, false),
             _ => { unreachable!() }
         };
