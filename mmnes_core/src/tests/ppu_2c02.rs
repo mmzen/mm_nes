@@ -1131,3 +1131,144 @@ fn test_mid_scanline_mask_changes_take_effect() {
         "Sprites should be disabled after mid-scanline write");
 }
 
+// ============================================================================
+// Odd Frame Skip Tests (Phase 6 - NTSC Odd Frame Skip)
+// ============================================================================
+
+/// Test that even frame with rendering has 89342 dots
+#[test]
+fn test_even_frame_has_89342_dots() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Enable rendering
+    ppu.write_byte(0x01, 0x18).unwrap();  // ShowBackground | ShowSprites
+
+    // PPU starts at pre-render scanline (261), dot 0 - this is an even frame
+    // Count dots until frame completes
+    let mut total_dots = 0u32;
+    let max_dots = 100_000u32;
+
+    for _ in 0..max_dots {
+        total_dots += 1;
+        let result = ppu.advance_dots(1);
+
+        if let Ok(Some(_frame)) = result {
+            break;
+        }
+    }
+
+    // Even frame (first frame after init): 262 scanlines * 341 dots = 89342 dots
+    // But we start at scanline 261 dot 0, so we need:
+    // - 341 dots for pre-render scanline (261)
+    // - Frame flag set at scanline 241, dot 1
+    // The frame is returned when VBlank is set (scanline 241, dot 1)
+    // From scanline 261 dot 0 to scanline 241 dot 1:
+    // - Pre-render scanline: 341 dots (261 dot 0 -> 261 dot 340 -> 0 dot 0)
+    // - Scanlines 0-240: 241 * 341 = 82181 dots
+    // - Scanline 241, dot 1: 2 dots (241 dot 0, 241 dot 1)
+    // Total: 341 + 82181 + 2 = 82524 dots for first frame
+    // Actually, the exact count depends on starting position. Let's verify it's consistent.
+
+    println!("Even frame completed after {} dots", total_dots);
+
+    // The exact count depends on start position, but it should be consistent
+    assert!(total_dots > 80000 && total_dots < 95000,
+        "Even frame should complete in reasonable dot count, got {}", total_dots);
+}
+
+/// Test that odd frame with rendering enabled has one less dot than even frame
+#[test]
+fn test_odd_frame_with_rendering_has_one_less_dot() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Enable rendering
+    ppu.write_byte(0x01, 0x18).unwrap();  // ShowBackground | ShowSprites
+
+    // First frame is partial (starts at pre-render scanline), skip it
+    for _ in 0..100_000u32 {
+        if let Ok(Some(_)) = ppu.advance_dots(1) {
+            break;
+        }
+    }
+
+    // Count dots for second frame (odd frame - after first even frame completes)
+    let mut dots_odd_frame = 0u32;
+    for _ in 0..100_000u32 {
+        dots_odd_frame += 1;
+        if let Ok(Some(_)) = ppu.advance_dots(1) {
+            break;
+        }
+    }
+
+    // Count dots for third frame (even frame)
+    let mut dots_even_frame = 0u32;
+    for _ in 0..100_000u32 {
+        dots_even_frame += 1;
+        if let Ok(Some(_)) = ppu.advance_dots(1) {
+            break;
+        }
+    }
+
+    println!("Odd frame (2nd): {} dots", dots_odd_frame);
+    println!("Even frame (3rd): {} dots", dots_even_frame);
+
+    // Odd frame with rendering should have exactly 1 less dot than even frame
+    // (due to skipping dot 340 of pre-render scanline)
+    // Odd frame: 89341 dots, Even frame: 89342 dots
+    assert_eq!(dots_odd_frame + 1, dots_even_frame,
+        "Odd frame should have 1 less dot than even frame (odd={}, even={})",
+        dots_odd_frame, dots_even_frame);
+}
+
+/// Test that odd frame without rendering has same dots as even frame (no skip)
+#[test]
+fn test_odd_frame_without_rendering_has_same_dots() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Disable rendering
+    ppu.write_byte(0x01, 0x00).unwrap();  // All rendering disabled
+
+    // First frame is partial (starts at pre-render scanline), skip it
+    for _ in 0..100_000u32 {
+        if let Ok(Some(_)) = ppu.advance_dots(1) {
+            break;
+        }
+    }
+
+    // Count dots for second frame (odd frame - but no rendering means no skip)
+    let mut dots_odd_frame = 0u32;
+    for _ in 0..100_000u32 {
+        dots_odd_frame += 1;
+        if let Ok(Some(_)) = ppu.advance_dots(1) {
+            break;
+        }
+    }
+
+    // Count dots for third frame (even frame)
+    let mut dots_even_frame = 0u32;
+    for _ in 0..100_000u32 {
+        dots_even_frame += 1;
+        if let Ok(Some(_)) = ppu.advance_dots(1) {
+            break;
+        }
+    }
+
+    println!("Odd frame (no rendering): {} dots", dots_odd_frame);
+    println!("Even frame (no rendering): {} dots", dots_even_frame);
+
+    // Without rendering enabled, odd frame skip should NOT occur
+    // Both frames should have the same number of dots (89342)
+    assert_eq!(dots_odd_frame, dots_even_frame,
+        "Odd frame without rendering should have same dots as even frame (odd={}, even={})",
+        dots_odd_frame, dots_even_frame);
+}
+

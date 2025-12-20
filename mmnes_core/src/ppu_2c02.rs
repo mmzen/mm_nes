@@ -1,4 +1,4 @@
-// Authorship: Human 60% | Claude 40%
+// Authorship: Human 55% | Claude 45%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -404,6 +404,10 @@ pub struct Ppu2c02 {
 
     // Dot-level rendering mode flag
     dot_level_rendering: bool,  // true = per-dot rendering, false = scanline rendering (fallback)
+
+    // Odd frame tracking for NTSC odd frame skip
+    // On odd frames with rendering enabled, pre-render scanline has 340 dots instead of 341
+    frame_odd: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -1004,6 +1008,8 @@ impl Ppu2c02 {
             bg_next_tile_hi: 0,
             // Start with scanline rendering (can switch to dot-level later)
             dot_level_rendering: true,
+            // Start on even frame (first frame is even)
+            frame_odd: false,
         };
 
         ppu.recompute_timing();
@@ -2214,6 +2220,22 @@ impl Ppu2c02 {
             self.current_dot += 1;
             self.total_dots.set(self.total_dots.get().wrapping_add(1));
 
+            // NTSC odd frame skip: On odd frames with rendering enabled,
+            // the pre-render scanline is only 340 dots instead of 341.
+            // At dot 340 of pre-render scanline, skip directly to scanline 0, dot 0.
+            if self.current_dot == 340
+                && self.current_scanline == self.pre_render_scanline()
+                && self.frame_odd
+                && (self.get_flag(Mask(ShowBackground)) || self.get_flag(Mask(ShowSprites)))
+            {
+                self.current_dot = 0;
+                self.current_scanline = 0;
+                self.scanline_rendered = false;
+                self.sprite0_hit_pending = false;
+                self.last_rendered_dot = 0;
+                continue;
+            }
+
             // Handle end of scanline
             if self.current_dot >= DOTS_PER_SCANLINE {
                 self.current_dot = 0;
@@ -2368,6 +2390,8 @@ impl Ppu2c02 {
         }
 
         if frame_ready {
+            // Toggle frame parity for odd frame skip
+            self.frame_odd = !self.frame_odd;
             Ok(Some(self.frame()))
         } else {
             Ok(None)
