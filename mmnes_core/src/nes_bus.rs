@@ -1,4 +1,4 @@
-// Authorship: Human 90% | Claude 10%
+// Authorship: Human 85% | Claude 15%
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -25,7 +25,10 @@ impl Memory for NESBus {
         let (memory, effective_addr) = self.lookup_address(addr)?;
         let value = memory.borrow().read_byte(effective_addr)?;
 
-        self.data_bus.set(value);  // Update data bus with read value
+        // $4015 (APU status) is special - reading it should NOT update the data bus
+        if addr != 0x4015 {
+            self.data_bus.set(value);  // Update data bus with read value
+        }
         Ok(value)
     }
 

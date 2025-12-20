@@ -1,7 +1,8 @@
-// Authorship: Human 100% | Claude 0%
-use std::cell::RefCell;
+// Authorship: Human 90% | Claude 10%
+use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::{Debug};
+use std::rc::Rc;
 use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::bus_device::BusDeviceType::CONTROLLER;
@@ -29,6 +30,8 @@ pub struct StandardController<T: Input> {
     state: RefCell<State>,
     control_states: [u8; CONTROLLER_NUM_BUTTONS],
     control_index: RefCell<usize>,
+    /// Shared data bus for open bus behavior (upper 3 bits of read)
+    data_bus: Rc<Cell<u8>>,
 }
 
 impl<T: Input> Controller for StandardController<T> {
@@ -45,6 +48,10 @@ impl<T: Input> Memory for StandardController<T> {
     }
 
     fn read_byte(&self, _: u16) -> Result<u8, MemoryError> {
+        // NES controller read returns:
+        // - Bit 0: Controller serial data (button state)
+        // - Bits 1-4: Usually 0 for standard controller
+        // - Bits 5-7: Open bus (from data bus)
 
         let control_state = if *self.state.borrow() == State::StateReady {
             let index = *self.control_index.borrow();
@@ -60,7 +67,11 @@ impl<T: Input> Memory for StandardController<T> {
             DEFAULT_STATE
         };
 
-        Ok(control_state)
+        // Combine controller bit 0 with open bus bits 5-7
+        let open_bus_bits = self.data_bus.get() & 0xE0;  // Upper 3 bits from open bus
+        let result = (control_state & 0x1F) | open_bus_bits;
+
+        Ok(result)
     }
 
     fn trace_read_byte(&self, _: u16) -> Result<u8, MemoryError> {
@@ -122,12 +133,13 @@ impl<T: Input> BusDevice for StandardController<T> {
 
 impl<T: Input> StandardController<T> {
 
-    pub fn new(input: T) -> StandardController<T> {
+    pub fn new(input: T, data_bus: Rc<Cell<u8>>) -> StandardController<T> {
         StandardController {
             input,
             state: RefCell::new(State::Idle),
             control_states: [0; CONTROLLER_NUM_BUTTONS],
             control_index: RefCell::new(0),
+            data_bus,
         }
     }
 }

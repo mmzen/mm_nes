@@ -721,13 +721,13 @@ impl NesConsoleBuilder {
         Ok((ppu.clone(), dma))
     }
 
-    fn build_controller_device(&self, controller_type: &ControllerType) -> Result<Rc<RefCell<dyn Controller>>, NesConsoleError> {
+    fn build_controller_device(&self, controller_type: &ControllerType, data_bus: Rc<Cell<u8>>) -> Result<Rc<RefCell<dyn Controller>>, NesConsoleError> {
         debug!("creating controller {:?}", controller_type);
 
         let result = match controller_type {
             ControllerType::StandardController => {
                 let input = InputExternal::new();
-                StandardController::new(input)
+                StandardController::new(input, data_bus)
             },
         };
 
@@ -816,7 +816,7 @@ impl NesConsoleBuilder {
             },
 
             BusDeviceType::CONTROLLER(controller_type) => {
-                let controller = self.build_controller_device(controller_type)?;
+                let controller = self.build_controller_device(controller_type, data_bus.clone())?;
                 bus.borrow_mut().add_device(controller.clone())?;
                 self.controller = Some(controller.clone());
             }

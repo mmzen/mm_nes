@@ -1,4 +1,4 @@
-// Authorship: Human 25% | Claude 75%
+// Authorship: Human 20% | Claude 80%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
@@ -413,6 +413,10 @@ pub struct Cpu6502 {
     /// This tracks the NMI line state as seen during the last poll, separate from nmi_line_low
     /// which tracks the actual external line state.
     prev_nmi_line_low: bool,
+    /// Pending RMW result value for cycle-accurate mode.
+    /// When set, rmw_overwrite skips bus writes and stores the result here instead.
+    /// The cycle-accurate code then retrieves this value and does the write itself.
+    rmw_pending_value: Option<u8>,
 }
 
 impl Interruptible for Cpu6502 {
@@ -1061,13 +1065,17 @@ impl Cpu6502 {
 
                 if !is_interrupt {
                     // Use AddressWithValue to pass the pre-read value for RMW
+                    // This makes rmw_overwrite store result in rmw_pending_value instead of writing
                     let operand = Operand::AddressWithValue(addr, state.read_value);
                     self.execute_instruction(&instruction, &operand)?;
                     self.finalize_instruction(instruction)?;
                 }
 
-                // Read back the modified value for result
-                let value = self.bus.borrow().read_byte(addr)?;
+                // Get the modified value from rmw_pending_value (set by rmw_overwrite)
+                let value = self.rmw_pending_value.take().unwrap_or(state.read_value);
+
+                // Write the modified value to bus
+                self.bus.borrow_mut().write_byte(addr, value)?;
 
                 Ok(CpuCycleResult {
                     instruction_complete: true,
@@ -1205,12 +1213,17 @@ impl Cpu6502 {
 
                 if !is_interrupt {
                     // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    // This makes rmw_overwrite store result in rmw_pending_value instead of writing
                     let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, false, state.read_value);
                     self.execute_instruction(&instruction, &operand)?;
                     self.finalize_instruction(instruction)?;
                 }
 
-                let value = self.bus.borrow().read_byte(addr)?;
+                // Get the modified value from rmw_pending_value (set by rmw_overwrite)
+                let value = self.rmw_pending_value.take().unwrap_or(state.read_value);
+
+                // Write the modified value to bus
+                self.bus.borrow_mut().write_byte(addr, value)?;
 
                 Ok(CpuCycleResult {
                     instruction_complete: true,
@@ -1371,12 +1384,17 @@ impl Cpu6502 {
 
                 if !is_interrupt {
                     // Use AddressWithValue to pass pre-read value for RMW
+                    // This makes rmw_overwrite store result in rmw_pending_value instead of writing
                     let operand = Operand::AddressWithValue(addr, state.read_value);
                     self.execute_instruction(&instruction, &operand)?;
                     self.finalize_instruction(instruction)?;
                 }
 
-                let value = self.bus.borrow().read_byte(addr)?;
+                // Get the modified value from rmw_pending_value (set by rmw_overwrite)
+                let value = self.rmw_pending_value.take().unwrap_or(state.read_value);
+
+                // Write the modified value to bus
+                self.bus.borrow_mut().write_byte(addr, value)?;
 
                 Ok(CpuCycleResult {
                     instruction_complete: true,
@@ -1685,12 +1703,17 @@ impl Cpu6502 {
 
                 if !is_interrupt {
                     // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    // This makes rmw_overwrite store result in rmw_pending_value instead of writing
                     let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, state.page_crossed, state.read_value);
                     self.execute_instruction(&instruction, &operand)?;
                     self.finalize_instruction(instruction)?;
                 }
 
-                let value = self.bus.borrow().read_byte(addr)?;
+                // Get the modified value from rmw_pending_value (set by rmw_overwrite)
+                let value = self.rmw_pending_value.take().unwrap_or(state.read_value);
+
+                // Write the modified value to bus
+                self.bus.borrow_mut().write_byte(addr, value)?;
 
                 Ok(CpuCycleResult {
                     instruction_complete: true,
@@ -2057,12 +2080,17 @@ impl Cpu6502 {
 
                 if !is_interrupt {
                     // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    // This makes rmw_overwrite store result in rmw_pending_value instead of writing
                     let operand = Operand::AddressEffectiveWithValue(state.operand_lo as u16, addr, false, state.read_value);
                     self.execute_instruction(&instruction, &operand)?;
                     self.finalize_instruction(instruction)?;
                 }
 
-                let value = self.bus.borrow().read_byte(addr)?;
+                // Get the modified value from rmw_pending_value (set by rmw_overwrite)
+                let value = self.rmw_pending_value.take().unwrap_or(state.read_value);
+
+                // Write the modified value to bus
+                self.bus.borrow_mut().write_byte(addr, value)?;
 
                 Ok(CpuCycleResult {
                     instruction_complete: true,
@@ -2276,12 +2304,17 @@ impl Cpu6502 {
 
                 if !is_interrupt {
                     // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    // This makes rmw_overwrite store result in rmw_pending_value instead of writing
                     let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, state.page_crossed, state.read_value);
                     self.execute_instruction(&instruction, &operand)?;
                     self.finalize_instruction(instruction)?;
                 }
 
-                let value = self.bus.borrow().read_byte(addr)?;
+                // Get the modified value from rmw_pending_value (set by rmw_overwrite)
+                let value = self.rmw_pending_value.take().unwrap_or(state.read_value);
+
+                // Write the modified value to bus
+                self.bus.borrow_mut().write_byte(addr, value)?;
 
                 Ok(CpuCycleResult {
                     instruction_complete: true,
@@ -3000,6 +3033,7 @@ impl Cpu6502 {
             latched_nmi: false,
             latched_irq: false,
             prev_nmi_line_low: false,
+            rmw_pending_value: None,
         }
     }
 
@@ -3285,10 +3319,16 @@ impl Cpu6502 {
     /// perform a dummy write of the old value before writing the new value.
     fn rmw_overwrite(&mut self, operand: &Operand, old_value: u8, new_value: u8) -> Result<(), CpuError> {
         match operand {
+            // AddressWithValue and AddressEffectiveWithValue indicate cycle-accurate mode
+            // Cycle code handles bus writes - just store the result for retrieval
+            Operand::AddressWithValue(_, _) |
+            Operand::AddressEffectiveWithValue(_, _, _, _) => {
+                self.rmw_pending_value = Some(new_value);
+                Ok(())
+            },
+
             Operand::Address(addr) |
-            Operand::AddressWithValue(addr, _) |
-            Operand::AddressAndEffectiveAddress(_, addr, _) |
-            Operand::AddressEffectiveWithValue(_, addr, _, _) => {
+            Operand::AddressAndEffectiveAddress(_, addr, _) => {
                 // 6502 RMW: write old value (dummy), then write new value
                 self.bus.borrow_mut().write_byte(*addr, old_value)?;
                 self.bus.borrow_mut().write_byte(*addr, new_value)?;

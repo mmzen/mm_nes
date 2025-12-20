@@ -1,4 +1,4 @@
-// Authorship: Human 75% | Claude 25%
+// Authorship: Human 70% | Claude 30%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -1044,6 +1044,10 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         )?;
 
         let mut status = (pulse1 as u8) | ((pulse2 as u8) << 1) | ((triangle as u8) << 2) | ((noise as u8) << 3) | ((dmc as u8) << 4);
+
+        // Bit 5 is open bus - read from data bus
+        let open_bus_bit5 = self.data_bus.get() & 0x20;
+        status |= open_bus_bit5;
 
         status |= (frame_irq as u8) << 6;
         status |= (dmc_irq as u8) << 7;
