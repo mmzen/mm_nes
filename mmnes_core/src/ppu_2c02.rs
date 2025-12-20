@@ -1682,23 +1682,13 @@ impl Ppu2c02 {
         if dot <= 256 {
             let pixel_x = (dot - 1) as u8;  // dot 1 = pixel 0, dot 256 = pixel 255
 
-            // First dot of scanline: Initialize shift registers with first two tiles
+            // First dot of scanline: sprite evaluation (tiles already prefetched from dots 321-336)
             if dot == 1 {
-                // Reset shift registers and pre-fetch first two tiles
-                self.bg_shift_pattern_lo = 0;
-                self.bg_shift_pattern_hi = 0;
-                self.bg_shift_attrib_lo = 0;
-                self.bg_shift_attrib_hi = 0;
+                // NOTE: Shift registers already contain tile data from prefetch cycles (dots 321-336)
+                // of the previous scanline. Do NOT reset them here.
 
-                // Fetch and load first tile
-                self.bg_fetch_tile_id()?;
-                self.bg_fetch_attribute()?;
-                self.bg_fetch_pattern_lo()?;
-                self.bg_fetch_pattern_hi()?;
-                self.bg_load_shift_registers();
-                self.bg_increment_coarse_x();
-
-                // Fetch second tile into latches
+                // Start fetching tile 3 (tiles 1-2 are already in shift registers from prefetch)
+                // Fetch all data now (simplified), will be loaded at dot 8
                 self.bg_fetch_tile_id()?;
                 self.bg_fetch_attribute()?;
                 self.bg_fetch_pattern_lo()?;
@@ -2275,6 +2265,43 @@ impl Ppu2c02 {
                     }
 
                     self.state = PpuState::Rendering(0);
+                }
+
+                // Pre-render scanline, dots 321-336: Prefetch tiles for scanline 0
+                (scanline, dot) if scanline == self.pre_render_scanline() && dot >= 321 && dot <= 336 => {
+                    let show_bg = self.get_flag(Mask(ShowBackground));
+                    let show_spr = self.get_flag(Mask(ShowSprites));
+                    let rendering_enabled = show_bg || show_spr;
+
+                    if rendering_enabled && self.dot_level_rendering {
+                        let prefetch_dot = dot - 320;  // Maps 321-336 to 1-16
+
+                        // Shift registers shift every dot during prefetch
+                        self.bg_shift_registers();
+
+                        // Every 8 dots: complete a tile fetch cycle
+                        if prefetch_dot == 8 {
+                            // First tile complete - load into shift registers
+                            self.bg_load_shift_registers();
+                            self.bg_increment_coarse_x();
+
+                            // Start fetching second tile
+                            self.bg_fetch_tile_id()?;
+                            self.bg_fetch_attribute()?;
+                            self.bg_fetch_pattern_lo()?;
+                            self.bg_fetch_pattern_hi()?;
+                        } else if prefetch_dot == 16 {
+                            // Second tile complete - load into shift registers
+                            self.bg_load_shift_registers();
+                            self.bg_increment_coarse_x();
+                        } else if prefetch_dot == 1 {
+                            // Start first tile fetch
+                            self.bg_fetch_tile_id()?;
+                            self.bg_fetch_attribute()?;
+                            self.bg_fetch_pattern_lo()?;
+                            self.bg_fetch_pattern_hi()?;
+                        }
+                    }
                 }
 
                 // NMI scanline (241 for NTSC), dot 1: Set VBlank, trigger NMI
