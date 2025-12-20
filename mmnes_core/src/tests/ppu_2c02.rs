@@ -857,3 +857,43 @@ fn test_palette_read_updates_buffer_with_nametable_data() {
         "Read buffer should contain nametable data ($2F00) after palette read");
 }
 
+/// Test that advance_dots(3) eventually returns a frame when called in a loop.
+/// This simulates what step_frame_cycle_accurate() does.
+#[test]
+fn test_advance_dots_returns_frame_after_full_frame() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Enable rendering so something is drawn
+    ppu.write_byte(0x01, 0x18).unwrap();  // ShowBackground | ShowSprites
+
+    // PPU starts at pre-render scanline (261), dot 0
+    // A full frame is ~89,342 dots (262 scanlines * 341 dots)
+    // At 3 dots per call, that's ~29,781 calls
+    let max_cycles = 35_000u32;  // Give some margin
+    let mut frame_found = false;
+    let mut cycles_run = 0u32;
+
+    for _ in 0..max_cycles {
+        let result = ppu.advance_dots(3);
+        cycles_run += 1;
+
+        match result {
+            Ok(Some(_frame)) => {
+                frame_found = true;
+                break;
+            }
+            Ok(None) => continue,
+            Err(e) => panic!("PPU advance_dots error: {:?}", e),
+        }
+    }
+
+    assert!(frame_found,
+        "PPU should return a frame within {} cycles, but ran {} cycles without frame",
+        max_cycles, cycles_run);
+
+    println!("Frame found after {} cycles (expected ~29,781)", cycles_run);
+}
+

@@ -1385,8 +1385,7 @@ impl Ppu2c02 {
      * v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
      */
     fn put_vertical_t_into_v(&mut self) {
-        let mut v = *self.v.borrow_mut();
-
+        let mut v = *self.v.borrow();
         v = (v & !0x7BE0) | (self.t & 0x7BE0);
         *self.v.borrow_mut() = v;
     }
@@ -1438,9 +1437,6 @@ impl Ppu2c02 {
         let pixel_pos_y = scanline;
 
         let mut fine_x = self.get_fine_x();
-
-        //trace!("PPU: rendering background, scanline: {}, nametable: 0x{:04X}, fine_y: {}, coarse_y: {}, coarse_x: {}, pixel_pos_y: {}",
-        //    scanline, name_table_addr, fine_y, coarse_y, coarse_x, pixel_pos_y);
 
         self.background_pixels_line.clear();
 
@@ -1741,6 +1737,8 @@ impl Ppu2c02 {
             match (self.current_scanline, self.current_dot) {
                 // Pre-render scanline, dot 1: Clear flags
                 (scanline, VBLANK_SET_DOT) if scanline == self.pre_render_scanline() => {
+                    let show_bg = self.get_flag(Mask(ShowBackground));
+                    let show_spr = self.get_flag(Mask(ShowSprites));
                     self.set_flag(Status(VBlank), false);
                     self.set_flag(Status(Sprite0Hit), false);
                     self.set_flag(Status(SpriteOverflow), false);
@@ -1750,7 +1748,7 @@ impl Ppu2c02 {
                     self.register.borrow_mut().oam_addr = 0;
 
                     // Do sprite evaluation for scanline 0 if rendering enabled
-                    if self.get_flag(Mask(ShowBackground)) || self.get_flag(Mask(ShowSprites)) {
+                    if show_bg || show_spr {
                         self.put_horizontal_t_into_v();
                         self.put_vertical_t_into_v();
                         self.do_sprite_evaluation(0)?;

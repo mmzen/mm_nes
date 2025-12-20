@@ -8,3 +8,5 @@ llvm-cov-report.json
 
 # Python cache
 metrics/__pycache__/
+
+.venv/

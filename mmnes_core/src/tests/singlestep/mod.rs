@@ -14,7 +14,7 @@
 //! }
 //! ```
 
-mod tracing_bus;
+pub mod tracing_bus;
 mod runner;
 #[cfg(test)]
 mod tests;

@@ -1,4 +1,4 @@
-// Authorship: Human 65% | Claude 35%
+// Authorship: Human 50% | Claude 50%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -15,6 +15,7 @@ use crate::cpu::{CPU, CpuCycleResult, CpuError, CpuType};
 use crate::cpu_6502::Cpu6502;
 use crate::cpu_debugger::CpuSnapshot;
 use crate::dma::PpuDmaType;
+use crate::dma_controller::DmaController;
 use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::input::InputError;
@@ -81,12 +82,14 @@ pub struct NesConsole {
     apu_counter: CyclesCounter,
     ppu_counter: CyclesCounter,
     config: ConfigSpec,
-    /// Shared cell for OAM DMA halt cycles (set by PpuDma, read by scheduler)
-    dma_halt_cycles: Rc<Cell<u32>>,
+    /// Shared cell for OAM DMA start signal (page to transfer from)
+    dma_start_page: Rc<Cell<Option<u8>>>,
     /// Shared cell tracking CPU odd/even cycle (for DMA alignment)
     cpu_cycle_odd: Rc<Cell<bool>>,
     /// Total master cycles executed (for cycle-accurate mode)
     master_cycles: u64,
+    /// DMA controller for cycle-accurate OAM and DMC DMA
+    dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
 }
 
 impl Configurable for NesConsole {
@@ -137,8 +140,9 @@ impl NesConsole {
         controller: Rc<RefCell<dyn Controller>>,
         entry_point: Option<u16>,
         config: ConfigSpec,
-        dma_halt_cycles: Rc<Cell<u32>>,
+        dma_start_page: Rc<Cell<Option<u8>>>,
         cpu_cycle_odd: Rc<Cell<bool>>,
+        dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
     ) -> NesConsole {
         let mut console = NesConsole {
             cpu,
@@ -148,14 +152,20 @@ impl NesConsole {
             entry_point,
             cpu_counter: CyclesCounter::new(CYCLE_START_SEQUENCE),
             apu_counter: CyclesCounter::new(0),
-            ppu_counter: CyclesCounter::new(0),
+            // PPU counter starts at CYCLE_START_SEQUENCE to match CPU counter
+            ppu_counter: CyclesCounter::new(CYCLE_START_SEQUENCE),
             config: config.clone(),
-            dma_halt_cycles,
+            dma_start_page,
             cpu_cycle_odd,
             master_cycles: 0,
+            dma_controller,
         };
 
         console.set_config(config);
+
+        // Synchronize PPU internal dot position with CPU's initial cycle offset
+        let startup_dots = CYCLE_START_SEQUENCE * 3;
+        let _ = console.ppu.borrow_mut().advance_dots(startup_dots);
 
         console
     }
@@ -221,34 +231,58 @@ impl NesConsole {
         let mut out_frame: Option<NesFrame> = None;
         let mut out_samples: Option<NesSamples> = None;
 
-        // Check if OAM DMA was triggered and needs to halt CPU
-        let dma_cycles = self.dma_halt_cycles.get();
-        if dma_cycles > 0 {
-            self.dma_halt_cycles.set(0);
-            self.cpu.borrow_mut().halt_cycles(dma_cycles);
+        // Check if OAM DMA was triggered this cycle
+        if let Some(page) = self.dma_start_page.get() {
+            self.dma_start_page.set(None);
+            self.dma_controller.set_cpu_cycle_odd(self.cpu_cycle_odd.get());
+            self.dma_controller.start_oam_dma(page);
         }
 
-        // Execute one CPU cycle
-        let cpu_result = self.cpu.borrow_mut().step_cycle()?;
+        // Execute one cycle: either DMA or CPU
+        let cpu_result = if self.dma_controller.is_active() {
+            // DMA is active - step the DMA controller, CPU is halted
+            let dma_result = self.dma_controller.step_cycle()
+                .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
+
+            CpuCycleResult {
+                halted: true,
+                instruction_complete: false,
+                memory_read: dma_result.read_occurred,
+                memory_write: dma_result.write_occurred,
+                address: dma_result.address_accessed,
+                ..Default::default()
+            }
+        } else {
+            // Normal CPU execution
+            self.cpu.borrow_mut().step_cycle()?
+        };
+
+        // Calculate total CPU cycles this step (1 base + any interrupt cycles)
+        let total_cpu_cycles = 1 + cpu_result.interrupt_cycles;
 
         // Update cycle counters
-        self.cpu_counter.current += 1;
-        self.master_cycles += 1;
+        self.cpu_counter.current += total_cpu_cycles;
+        self.master_cycles += total_cpu_cycles as u64;
 
         // Toggle CPU cycle parity (for DMA alignment tracking)
-        let new_parity = !self.cpu_cycle_odd.get();
-        self.cpu_cycle_odd.set(new_parity);
+        // Parity changes once per cycle, so after N cycles it changes by (N mod 2)
+        // Only toggle if odd number of cycles consumed
+        if total_cpu_cycles % 2 == 1 {
+            let new_parity = !self.cpu_cycle_odd.get();
+            self.cpu_cycle_odd.set(new_parity);
+        }
+        self.dma_controller.set_cpu_cycle_odd(self.cpu_cycle_odd.get());
 
-        // Advance PPU by 3 dots (PPU runs at 3x CPU speed for NTSC)
-        // Use advance_dots() directly for cycle-accurate control
-        let ppu_frame = self.ppu.borrow_mut().advance_dots(3)?;
+        // Advance PPU using the same run() method as instruction-level mode
+        // This converts CPU cycles to PPU dots internally
+        let (new_ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, total_cpu_cycles)?;
         if let Some(frame) = ppu_frame {
             out_frame = Some(frame);
         }
-        self.ppu_counter.current += 1; // Track in CPU cycles for consistency
+        self.ppu_counter.current = new_ppu_cycles;
 
-        // Advance APU by 1 tick
-        let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
+        // Advance APU by total CPU cycles
+        let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, total_cpu_cycles)?;
         if let Some(samples) = apu_samples {
             out_samples = Some(samples);
         }
@@ -285,6 +319,18 @@ impl NesConsole {
 
         self.cpu_counter.current += self.cpu.borrow_mut().step_instruction()?;
         let snapshot = self.cpu.borrow().snapshot()?;
+
+        // Handle OAM DMA in instruction-level mode
+        // When the CPU writes to $4014, dma_start_page is set. We need to add the
+        // DMA transfer cycles (513-514) to maintain correct PPU/CPU synchronization.
+        if self.dma_start_page.get().is_some() {
+            self.dma_start_page.set(None);
+            // OAM DMA takes 513 cycles (even start) or 514 cycles (odd start)
+            // Since we don't track cycle parity in instruction-level mode, use 513
+            // which is the minimum. The actual transfer is handled by PpuDma device.
+            const OAM_DMA_CYCLES: u32 = 513;
+            self.cpu_counter.current += OAM_DMA_CYCLES;
+        }
 
         let (out_frame ,out_samples) = self.catch_up_ppu_and_apu()?;
 
@@ -353,10 +399,23 @@ impl NesConsole {
     fn reset_counters(&mut self) {
         self.cpu_counter = CyclesCounter::new(CYCLE_START_SEQUENCE);
         self.apu_counter = CyclesCounter::new(0);
-        self.ppu_counter = CyclesCounter::new(0);
-        self.dma_halt_cycles.set(0);
+        // PPU counter starts at CYCLE_START_SEQUENCE to match CPU counter.
+        // This ensures both instruction-level and cycle-accurate modes are synchronized.
+        self.ppu_counter = CyclesCounter::new(CYCLE_START_SEQUENCE);
+        self.dma_start_page.set(None);
         self.cpu_cycle_odd.set(false);
         self.master_cycles = 0;
+        self.dma_controller.reset();
+    }
+
+    /// Synchronize PPU internal dot position with the CPU's initial cycle offset.
+    /// The CPU starts at cycle 7 (reset sequence), so the PPU should be at dot 21 (7 * 3).
+    /// This must be called after reset_counters() and PPU reset.
+    fn sync_ppu_startup(&mut self) -> Result<(), NesConsoleError> {
+        // Advance PPU by the dots corresponding to CPU's initial cycle offset
+        let startup_dots = CYCLE_START_SEQUENCE * 3;
+        self.ppu.borrow_mut().advance_dots(startup_dots)?;
+        Ok(())
     }
 
     pub fn reset(&mut self) -> Result<(), NesConsoleError> {
@@ -366,7 +425,10 @@ impl NesConsole {
 
         self.reset_counters();
         self.reset_entry_point()?;
+        // set_config must be called before sync_ppu_startup because
+        // set_config resets PPU dot position, which sync_ppu_startup then adjusts
         self.set_config(self.config.clone());
+        self.sync_ppu_startup()?;
 
         Ok(())
     }
@@ -478,10 +540,12 @@ pub struct NesConsoleBuilder {
     entry_point: Option<u16>,
     cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
     config: ConfigSpec,
-    /// Shared cell for OAM DMA halt cycles
-    dma_halt_cycles: Rc<Cell<u32>>,
+    /// Shared cell for OAM DMA start signal (page to transfer from)
+    dma_start_page: Rc<Cell<Option<u8>>>,
     /// Shared cell for CPU cycle parity tracking
     cpu_cycle_odd: Rc<Cell<bool>>,
+    /// Reference to PPU as DmaDevice for DmaController
+    ppu_dma_device: Option<Rc<RefCell<dyn DmaDevice>>>,
 }
 
 impl NesConsoleBuilder {
@@ -502,8 +566,9 @@ impl NesConsoleBuilder {
             entry_point: None,
             cartridge: None,
             config: ConfigSpec::default(),
-            dma_halt_cycles: Rc::new(Cell::new(0)),
+            dma_start_page: Rc::new(Cell::new(None)),
             cpu_cycle_odd: Rc::new(Cell::new(false)),
+            ppu_dma_device: None,
         }
     }
 
@@ -588,17 +653,14 @@ impl NesConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
-    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, bus: Rc<RefCell<dyn Bus>>, ppu: Rc<RefCell<dyn DmaDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
+    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, _bus: Rc<RefCell<dyn Bus>>, _ppu: Rc<RefCell<dyn DmaDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
         debug!("creating ppu dma {:?}", ppu_dma_type);
 
         let ppu_dma = match ppu_dma_type {
             PpuDmaType::NESPPUDMA => {
-                PpuDma::new_with_cycle_tracking(
-                    ppu,
-                    bus,
-                    self.dma_halt_cycles.clone(),
-                    self.cpu_cycle_odd.clone(),
-                )
+                // PpuDma now just signals OAM DMA start via shared cell,
+                // actual transfer is handled by DmaController in the scheduler
+                PpuDma::new_with_dma_signal(self.dma_start_page.clone())
             },
         };
 
@@ -624,6 +686,8 @@ impl NesConsoleBuilder {
 
         self.ppu = Some(ppu.clone());
         self.ppu_type = Some(ppu_type.clone());
+        // Store PPU as DmaDevice for DmaController
+        self.ppu_dma_device = Some(ppu.clone());
 
         Ok((ppu.clone(), dma))
     }
@@ -777,6 +841,11 @@ impl NesConsoleBuilder {
         let controller = self.controller.take()
             .ok_or(NesConsoleError::BuilderError("controller missing".to_string()))?;
 
+        // Create DmaController with bus and PPU (as DmaDevice)
+        let ppu_dma_device = self.ppu_dma_device.take()
+            .ok_or(NesConsoleError::BuilderError("ppu_dma_device missing".to_string()))?;
+        let dma_controller = DmaController::new(bus, ppu_dma_device);
+
         let console = NesConsole::new(
             cpu,
             ppu,
@@ -784,8 +853,9 @@ impl NesConsoleBuilder {
             controller,
             self.entry_point.take(),
             self.config,
-            self.dma_halt_cycles,
+            self.dma_start_page,
             self.cpu_cycle_odd,
+            dma_controller,
         );
 
         Ok(console)

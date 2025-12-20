@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use std::hint::spin_loop;
 use std::ops::ControlFlow;
 use std::ops::ControlFlow::{Break, Continue};
@@ -51,7 +51,8 @@ pub struct NesFrontEnd {
     debug_tx: SyncSender<NesMessage>,
     error_tx: SyncSender<NesMessage>,
     nes: Option<NesConsole>,
-    state: NesFrontEndState
+    state: NesFrontEndState,
+    cycle_accurate: bool
 }
 
 impl NesFrontEnd {
@@ -98,7 +99,8 @@ impl NesFrontEnd {
         Ok(console)
     }
 
-    pub fn new(frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<NesFrontEnd, NesConsoleError> {
+    pub fn new(frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>, cycle_accurate: bool) -> Result<NesFrontEnd, NesConsoleError> {
+        info!("Emulator mode: {}", if cycle_accurate { "cycle-accurate" } else { "instruction-level" });
 
         let front = NesFrontEnd {
             nes: None,
@@ -106,7 +108,8 @@ impl NesFrontEnd {
             command_rx,
             debug_tx,
             error_tx,
-            state: NesFrontEndState::Halted
+            state: NesFrontEndState::Halted,
+            cycle_accurate
         };
 
         Ok(front)
@@ -255,7 +258,11 @@ impl NesFrontEnd {
 
             match self.state {
                 NesFrontEndState::Running => {
-                    let (frame, samples) = self.nes_mut()?.step_frame()?;
+                    let (frame, samples) = if self.cycle_accurate {
+                        self.nes_mut()?.step_frame_cycle_accurate()?
+                    } else {
+                        self.nes_mut()?.step_frame()?
+                    };
 
                     self.process_frame(frame)?;
                     self.process_samples(samples, &mut sound_player)?;

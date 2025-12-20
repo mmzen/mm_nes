@@ -1,4 +1,4 @@
-// Authorship: Human 85% | Claude 15%
+// Authorship: Human 75% | Claude 25%
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
@@ -10,6 +10,18 @@ use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
 pub enum CpuType {
     #[default]
     NES6502
+}
+
+/// Type of bus operation performed during a CPU cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BusOperation {
+    /// No bus operation (internal cycle, though 6502 always reads something)
+    #[default]
+    None,
+    /// Read from address
+    Read,
+    /// Write to address
+    Write,
 }
 
 /// Result of executing a single CPU cycle.
@@ -24,8 +36,18 @@ pub struct CpuCycleResult {
     pub memory_write: bool,
     /// The address accessed this cycle (if any).
     pub address: Option<u16>,
+    /// The data read or written this cycle (if any).
+    pub data: Option<u8>,
     /// True if the CPU is halted (waiting for DMA).
     pub halted: bool,
+    /// The type of bus operation performed.
+    pub bus_op: BusOperation,
+    /// Description of what this cycle did (for debugging).
+    pub cycle_description: &'static str,
+    /// Number of extra cycles consumed by interrupt handling (0 if no interrupt).
+    /// When an interrupt fires after instruction completion, this contains the
+    /// interrupt handler cycles (typically 7) that the PPU/APU must account for.
+    pub interrupt_cycles: u32,
 }
 
 pub trait CPU: Interruptible + Debug {

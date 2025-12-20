@@ -1,4 +1,5 @@
 // Authorship: Human 0% | Claude 100%
+// Updated: Fixed OAM DMA alignment logic (1 idle for even, 2 for odd), added comprehensive tests
 //! DMA Controller for cycle-accurate OAM DMA and DMC DMA handling.
 //!
 //! This module provides a centralized DMA controller that manages both:
@@ -152,20 +153,27 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     }
 
     /// Execute one cycle of OAM DMA
+    ///
+    /// OAM DMA timing (from NESDev):
+    /// - 513 cycles on even CPU cycle start: 1 idle + 512 transfer (256 reads + 256 writes)
+    /// - 514 cycles on odd CPU cycle start: 2 idle + 512 transfer
     fn step_oam_dma(&mut self) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
 
-        // Cycle 0: Alignment cycle (wait for put cycle if started on odd cycle)
+        // Cycle 0: First idle/alignment cycle (always present)
         if self.oam_dma.cycle == 0 {
             self.oam_dma.cycle = 1;
-            // If we started on an odd cycle, we have an extra alignment cycle
-            if self.oam_dma.started_on_odd {
-                return Ok(result);
-            }
+            return Ok(result);
+        }
+
+        // Cycle 1: Second idle cycle (only if started on odd CPU cycle)
+        if self.oam_dma.cycle == 1 && self.oam_dma.started_on_odd {
+            self.oam_dma.cycle = 2;
+            return Ok(result);
         }
 
         // After alignment, we alternate between read and write phases
-        // Cycles 1-512 (or 2-513 if started on odd): actual transfer
+        // 256 read cycles + 256 write cycles = 512 transfer cycles
         if self.oam_dma.read_phase {
             // Read phase: read byte from source address
             let source_addr = ((self.oam_dma.page as u16) << 8) | self.oam_dma.byte_index;
@@ -306,5 +314,127 @@ mod tests {
 
         controller.reset();
         assert!(!controller.is_active());
+    }
+
+    #[test]
+    fn test_oam_dma_completes_in_513_cycles_even_start() {
+        let mut controller = create_controller();
+        controller.set_cpu_cycle_odd(false);
+        controller.start_oam_dma(0x02);
+
+        let mut total_cycles = 0;
+        let mut read_count = 0;
+        let mut write_count = 0;
+
+        while controller.is_active() {
+            let result = controller.step_cycle().unwrap();
+            total_cycles += 1;
+
+            if result.read_occurred {
+                read_count += 1;
+            }
+            if result.write_occurred {
+                write_count += 1;
+            }
+
+            // Safety: prevent infinite loop
+            if total_cycles > 600 {
+                panic!("OAM DMA took too long");
+            }
+        }
+
+        assert_eq!(total_cycles, 513, "OAM DMA should take 513 cycles on even start");
+        assert_eq!(read_count, 256, "Should have 256 reads");
+        assert_eq!(write_count, 256, "Should have 256 writes");
+    }
+
+    #[test]
+    fn test_oam_dma_completes_in_514_cycles_odd_start() {
+        let mut controller = create_controller();
+        controller.set_cpu_cycle_odd(true);
+        controller.start_oam_dma(0x02);
+
+        let mut total_cycles = 0;
+
+        while controller.is_active() {
+            let _ = controller.step_cycle().unwrap();
+            total_cycles += 1;
+
+            // Safety: prevent infinite loop
+            if total_cycles > 600 {
+                panic!("OAM DMA took too long");
+            }
+        }
+
+        assert_eq!(total_cycles, 514, "OAM DMA should take 514 cycles on odd start");
+    }
+
+    #[test]
+    fn test_oam_dma_reads_from_correct_addresses() {
+        let mut controller = create_controller();
+        controller.set_cpu_cycle_odd(false); // Even start
+
+        // Start DMA from page 0x02 (addresses 0x0200-0x02FF)
+        controller.start_oam_dma(0x02);
+
+        // Cycle 0: First idle cycle (even start has only 1 idle)
+        let result = controller.step_cycle().unwrap();
+        assert!(!result.read_occurred && !result.write_occurred, "Idle cycle");
+
+        // Cycle 1: First read should be from 0x0200
+        let result = controller.step_cycle().unwrap();
+        assert!(result.read_occurred, "First op should be a read");
+        assert_eq!(result.address_accessed, Some(0x0200), "First read from 0x0200");
+
+        // Cycle 2: Write byte 0 to OAM
+        let result = controller.step_cycle().unwrap();
+        assert!(result.write_occurred, "Second op should be a write");
+
+        // Cycle 3: Read from 0x0201
+        let result = controller.step_cycle().unwrap();
+        assert!(result.read_occurred, "Third op should be a read");
+        assert_eq!(result.address_accessed, Some(0x0201), "Second read from 0x0201");
+    }
+
+    #[test]
+    fn test_oam_dma_alternates_read_write() {
+        let mut controller = create_controller();
+        controller.set_cpu_cycle_odd(false); // Even start
+        controller.start_oam_dma(0x00);
+
+        // Skip the 1 idle cycle for even start
+        let result = controller.step_cycle().unwrap();
+        assert!(!result.read_occurred && !result.write_occurred, "Should be idle cycle");
+
+        // Check first 10 transfer operations alternate between read and write
+        for i in 0..10 {
+            let result = controller.step_cycle().unwrap();
+            if i % 2 == 0 {
+                assert!(result.read_occurred, "Cycle {} should be read", i);
+                assert!(!result.write_occurred, "Cycle {} should not be write", i);
+            } else {
+                assert!(result.write_occurred, "Cycle {} should be write", i);
+                assert!(!result.read_occurred, "Cycle {} should not be read", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_oam_dma_odd_start_has_two_idle_cycles() {
+        let mut controller = create_controller();
+        controller.set_cpu_cycle_odd(true); // Odd start
+        controller.start_oam_dma(0x00);
+
+        // First idle cycle
+        let result = controller.step_cycle().unwrap();
+        assert!(!result.read_occurred && !result.write_occurred, "First idle cycle");
+
+        // Second idle cycle (only on odd start)
+        let result = controller.step_cycle().unwrap();
+        assert!(!result.read_occurred && !result.write_occurred, "Second idle cycle");
+
+        // Now the first read
+        let result = controller.step_cycle().unwrap();
+        assert!(result.read_occurred, "Third cycle should be first read");
     }
 }

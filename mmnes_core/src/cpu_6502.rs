@@ -1,12 +1,12 @@
-// Authorship: Human 65% | Claude 35%
+// Authorship: Human 40% | Claude 60%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
-use log::{error, info, trace, warn};
+use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
-use crate::cpu::{CPU, CpuCycleResult, CpuError, Interruptible};
+use crate::cpu::{BusOperation, CPU, CpuCycleResult, CpuError, Interruptible};
 use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
 use crate::memory::{MemoryError};
 
@@ -55,7 +55,11 @@ impl Display for OpCode {
 enum Operand {
     Byte(u8),
     Address(u16),
+    /// Address with pre-read value - used by cycle-accurate mode to avoid double reads
+    AddressWithValue(u16, u8),
     AddressAndEffectiveAddress(u16, u16, bool),
+    /// Address/effective address with pre-read value - used by cycle-accurate mode
+    AddressEffectiveWithValue(u16, u16, bool, u8),
     Accumulator,
     None
 }
@@ -65,10 +69,14 @@ impl Display for Operand {
         match self {
             Operand::Byte(val) => write!(f, "byte: 0x{:02X}", val),
             Operand::Address(addr) => write!(f, "word: 0x{:04X}", addr),
+            Operand::AddressWithValue(addr, val) => write!(f, "word: 0x{:04X} = 0x{:02X}", addr, val),
             Operand::Accumulator => write!(f, "accumulator"),
             Operand::None => { write!(f, "none") }
             Operand::AddressAndEffectiveAddress(addr, effective, page_crossed) => {
                 write!(f, "address: 0x{:04X}, effective address: 0x{:04X}, page crossed: {}", addr, effective, page_crossed)
+            }
+            Operand::AddressEffectiveWithValue(addr, effective, page_crossed, val) => {
+                write!(f, "address: 0x{:04X}, effective: 0x{:04X}, page crossed: {}, value: 0x{:02X}", addr, effective, page_crossed, val)
             }
         }
     }
@@ -329,22 +337,44 @@ impl Cpu6502Snapshot {
     }
 }
 
+/// Intermediate state data during instruction execution.
+/// Holds values fetched on previous cycles that are needed for later cycles.
+#[derive(Debug, Clone, Default)]
+struct InstructionState {
+    /// First operand byte (low byte of address or immediate value)
+    operand_lo: u8,
+    /// Second operand byte (high byte of address)
+    operand_hi: u8,
+    /// Computed effective address (after indexing)
+    effective_addr: u16,
+    /// Base address (before indexing, for indirect modes)
+    base_addr: u16,
+    /// Whether page boundary was crossed (affects cycle count for some operations)
+    page_crossed: bool,
+    /// Value read from effective address (for RMW operations or ALU input)
+    read_value: u8,
+    /// Whether branch was taken (for relative addressing)
+    branch_taken: bool,
+    /// For branches: the target address after taking the branch
+    branch_target: u16,
+}
+
 /// State of the CPU cycle-stepping state machine.
 /// Tracks where we are in the execution of the current instruction.
 #[derive(Debug, Clone)]
 enum CpuCycleState {
     /// CPU is ready to fetch the next instruction opcode.
     FetchOpcode,
-    /// CPU is executing an instruction. Contains cycles remaining (including current).
+    /// CPU is executing an instruction cycle-by-cycle.
     Executing {
-        /// The instruction being executed
+        /// The opcode byte (for decode)
+        opcode: u8,
+        /// The instruction being executed (from decode table)
         instruction: &'static Instruction,
-        /// The operand for this instruction
-        operand: Operand,
-        /// Total cycles for this instruction
-        total_cycles: u32,
-        /// Current cycle within instruction (1-based, 1 = opcode fetch already done)
-        current_cycle: u32,
+        /// Current cycle within instruction (1-based, 1 = after opcode fetch)
+        cycle: u8,
+        /// Intermediate state accumulated during execution
+        state: InstructionState,
         /// True if this is an interrupt sequence (NMI/IRQ), not a regular instruction
         is_interrupt: bool,
     },
@@ -579,27 +609,24 @@ impl CPU for Cpu6502 {
 
             return Ok(CpuCycleResult {
                 halted: true,
+                cycle_description: "CPU halted (DMA)",
                 ..Default::default()
             });
         }
 
         match &self.cycle_state {
             CpuCycleState::FetchOpcode => {
-                // First cycle: fetch opcode, decode, and prepare for execution
-                let byte = self.bus.borrow().read_byte(self.registers.pc)?;
-                let instruction = Cpu6502::decode_instruction(byte)?;
-                let operand = Cpu6502::fetch_operand(instruction, &self.registers, self.bus.clone())?;
+                // Cycle 1: fetch opcode only
+                let pc = self.registers.pc;
+                let opcode = self.bus.borrow().read_byte(pc)?;
+                let instruction = Cpu6502::decode_instruction(opcode)?;
 
-                // Calculate total cycles for this instruction
-                let additional_cycles = self.calculate_additional_cycles(instruction, &operand);
-                let total_cycles = instruction.cycles + additional_cycles;
-
-                // Move to executing state
+                // Move to executing state - cycle 1 means "after opcode fetch"
                 self.cycle_state = CpuCycleState::Executing {
+                    opcode,
                     instruction,
-                    operand,
-                    total_cycles,
-                    current_cycle: 1,
+                    cycle: 1,
+                    state: InstructionState::default(),
                     is_interrupt: false,
                 };
 
@@ -607,65 +634,50 @@ impl CPU for Cpu6502 {
 
                 Ok(CpuCycleResult {
                     memory_read: true,
-                    address: Some(self.registers.pc),
+                    address: Some(pc),
+                    data: Some(opcode),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Fetch opcode",
                     ..Default::default()
                 })
             }
 
-            CpuCycleState::Executing { instruction, operand, total_cycles, current_cycle, is_interrupt } => {
+            CpuCycleState::Executing { opcode, instruction, cycle, state, is_interrupt } => {
+                let opcode = *opcode;
                 let instruction = *instruction;
-                let operand = operand.clone();
-                let total_cycles = *total_cycles;
-                let current_cycle = *current_cycle;
+                let cycle = *cycle;
+                let mut state = state.clone();
                 let is_interrupt = *is_interrupt;
 
                 self.cycles += 1;
 
-                // Check if this is the last cycle
-                if current_cycle >= total_cycles {
-                    // Execute the instruction on the last cycle
-                    if !is_interrupt {
-                        let _ = self.execute_instruction(&instruction, &operand)?;
+                // Execute the appropriate action for this cycle based on addressing mode
+                let mut result = self.execute_cycle(opcode, instruction, cycle, &mut state, is_interrupt)?;
 
-                        // Update PC if not already modified by the instruction
-                        if !self.registers.is_pc_dirty {
-                            self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
-                        } else {
-                            self.registers.is_pc_dirty = false;
-                        }
-
-                        self.instructions_executed += 1;
-
-                        // Handle pending I flag changes
-                        if let Some(new_i_flag) = self.pending_i_flag.take() {
-                            self.registers.set_status(StatusFlag::InterruptDisable, new_i_flag);
-                        }
-                    }
-
+                // Check if instruction is complete
+                if result.instruction_complete {
                     // Check for interrupts after instruction completion
                     let interrupt_cycles = self.check_and_setup_interrupt()?;
 
-                    if interrupt_cycles == 0 {
-                        // No interrupt, ready for next instruction
-                        self.cycle_state = CpuCycleState::FetchOpcode;
-                    }
+                    self.cycle_state = CpuCycleState::FetchOpcode;
 
-                    return Ok(CpuCycleResult {
-                        instruction_complete: true,
-                        ..Default::default()
-                    });
+                    // If an interrupt occurred, add its cycles and report to caller
+                    if interrupt_cycles > 0 {
+                        self.cycles += interrupt_cycles;
+                        result.interrupt_cycles = interrupt_cycles;
+                    }
+                } else {
+                    // Continue to next cycle
+                    self.cycle_state = CpuCycleState::Executing {
+                        opcode,
+                        instruction,
+                        cycle: cycle + 1,
+                        state,
+                        is_interrupt,
+                    };
                 }
 
-                // Not the last cycle, just advance
-                self.cycle_state = CpuCycleState::Executing {
-                    instruction,
-                    operand,
-                    total_cycles,
-                    current_cycle: current_cycle + 1,
-                    is_interrupt,
-                };
-
-                Ok(CpuCycleResult::default())
+                Ok(result)
             }
 
             CpuCycleState::Halted { .. } => {
@@ -695,6 +707,2092 @@ impl CPU for Cpu6502 {
 }
 
 impl Cpu6502 {
+    /// Execute a single cycle of an instruction.
+    /// Returns the CpuCycleResult describing what happened this cycle.
+    /// Updates `state` with any intermediate values computed.
+    fn execute_cycle(
+        &mut self,
+        _opcode: u8,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        use AddressingMode::*;
+
+        let pc = self.registers.pc;
+
+        match instruction.addressing_mode {
+            // ========== Implicit addressing mode ==========
+            // Most implicit instructions are 2 cycles, but stack operations have special timing
+            Implicit => {
+                // Check for stack operations that have special timing
+                match instruction.opcode {
+                    // PHA/PHP: 3 cycles - fetch, dummy read, write to stack
+                    OpCode::PHA | OpCode::PHP => {
+                        self.execute_cycle_push_stack(instruction, cycle, state, is_interrupt)
+                    }
+                    // PLA/PLP: 4 cycles - fetch, dummy read, dummy stack read, read from stack
+                    OpCode::PLA | OpCode::PLP => {
+                        self.execute_cycle_pull_stack(instruction, cycle, state, is_interrupt)
+                    }
+                    // RTS: 6 cycles - special return timing
+                    OpCode::RTS => {
+                        self.execute_cycle_rts(instruction, cycle, state, is_interrupt)
+                    }
+                    // RTI: 6 cycles - special return timing
+                    OpCode::RTI => {
+                        self.execute_cycle_rti(instruction, cycle, state, is_interrupt)
+                    }
+                    // BRK: 7 cycles - interrupt sequence
+                    OpCode::BRK => {
+                        self.execute_cycle_brk(instruction, cycle, state, is_interrupt)
+                    }
+                    // All other implicit instructions: 2 cycles
+                    _ => {
+                        // cycle=1 means we're on the 2nd cycle (after opcode fetch)
+                        let addr = pc.wrapping_add(1);
+                        let data = self.bus.borrow().read_byte(addr)?; // dummy read
+
+                        // Execute the instruction
+                        if !is_interrupt {
+                            let operand = Operand::None;
+                            self.execute_instruction(&instruction, &operand)?;
+                            self.finalize_instruction(instruction)?;
+                        }
+
+                        Ok(CpuCycleResult {
+                            instruction_complete: true,
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "Implicit: dummy read, execute",
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
+
+            // ========== Accumulator (2 cycles total) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Dummy read PC+1, execute
+            Accumulator => {
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?; // dummy read
+
+                if !is_interrupt {
+                    let operand = Operand::Accumulator;
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Accumulator: dummy read, execute",
+                    ..Default::default()
+                })
+            }
+
+            // ========== Immediate (2 cycles total) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch immediate value, execute
+            Immediate => {
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                if !is_interrupt {
+                    let operand = Operand::Byte(data);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Immediate: fetch value, execute",
+                    ..Default::default()
+                })
+            }
+
+            // ========== Zero Page (3 cycles for read/write, 5 for RMW) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch ZP address
+            // Cycle 3: Read/Write from ZP
+            // (RMW) Cycle 4: Dummy write original value
+            // (RMW) Cycle 5: Write modified value
+            ZeroPage => {
+                self.execute_cycle_zero_page(instruction, cycle, state, is_interrupt)
+            }
+
+            // ========== Zero Page,X (4 cycles for read/write, 6 for RMW) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch ZP address
+            // Cycle 3: Dummy read from ZP while adding X
+            // Cycle 4: Read/Write from (ZP + X) & 0xFF
+            // (RMW) Cycle 5: Dummy write original value
+            // (RMW) Cycle 6: Write modified value
+            ZeroPageIndexedX => {
+                self.execute_cycle_zero_page_indexed(instruction, cycle, state, is_interrupt, self.registers.x)
+            }
+
+            // ========== Zero Page,Y (4 cycles for read/write) ==========
+            // Same as ZP,X but with Y register
+            ZeroPageIndexedY => {
+                self.execute_cycle_zero_page_indexed(instruction, cycle, state, is_interrupt, self.registers.y)
+            }
+
+            // ========== Absolute (4 cycles for read/write, 6 for RMW) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch address low byte
+            // Cycle 3: Fetch address high byte
+            // Cycle 4: Read/Write from address
+            // (RMW) Cycle 5: Dummy write original value
+            // (RMW) Cycle 6: Write modified value
+            Absolute => {
+                self.execute_cycle_absolute(instruction, cycle, state, is_interrupt)
+            }
+
+            // ========== Absolute,X (4-5 cycles for read, 5 for write, 7 for RMW) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch address low byte
+            // Cycle 3: Fetch address high byte
+            // Cycle 4: Read from (addr + X) - may be wrong page
+            // Cycle 5: Read from correct address (if page crossed) OR always for write/RMW
+            // (RMW) Cycle 6: Dummy write original value
+            // (RMW) Cycle 7: Write modified value
+            AbsoluteIndexedX => {
+                self.execute_cycle_absolute_indexed(instruction, cycle, state, is_interrupt, self.registers.x)
+            }
+
+            // ========== Absolute,Y (4-5 cycles for read, 5 for write) ==========
+            // Same as Absolute,X but with Y register
+            AbsoluteIndexedY => {
+                self.execute_cycle_absolute_indexed(instruction, cycle, state, is_interrupt, self.registers.y)
+            }
+
+            // ========== Relative (2-4 cycles for branches) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch offset
+            // Cycle 3: (if taken) Fetch from wrong address while adding offset
+            // Cycle 4: (if page crossed) Fetch from wrong address while fixing high byte
+            Relative => {
+                self.execute_cycle_relative(instruction, cycle, state, is_interrupt)
+            }
+
+            // ========== Indirect (JMP only, 5 cycles) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch pointer low byte
+            // Cycle 3: Fetch pointer high byte
+            // Cycle 4: Fetch effective address low byte
+            // Cycle 5: Fetch effective address high byte (with page wrap bug)
+            Indirect => {
+                self.execute_cycle_indirect_jmp(instruction, cycle, state, is_interrupt)
+            }
+
+            // ========== (Indirect,X) (6 cycles for read/write, 8 for RMW) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch pointer address
+            // Cycle 3: Dummy read from pointer while adding X
+            // Cycle 4: Fetch effective address low from (ptr + X) & 0xFF
+            // Cycle 5: Fetch effective address high from (ptr + X + 1) & 0xFF
+            // Cycle 6: Read/Write from effective address
+            // (RMW) Cycle 7: Dummy write original value
+            // (RMW) Cycle 8: Write modified value
+            IndirectIndexedX => {
+                self.execute_cycle_indirect_x(instruction, cycle, state, is_interrupt)
+            }
+
+            // ========== (Indirect),Y (5-6 cycles for read, 6 for write, 8 for RMW) ==========
+            // Cycle 1: Fetch opcode (done)
+            // Cycle 2: Fetch pointer address
+            // Cycle 3: Fetch effective address low from ptr
+            // Cycle 4: Fetch effective address high from (ptr + 1) & 0xFF
+            // Cycle 5: Read from (effective + Y) - may be wrong page
+            // Cycle 6: Read from correct address (if page crossed) OR always for write
+            // (RMW) Cycle 7: Dummy write original value
+            // (RMW) Cycle 8: Write modified value
+            IndirectIndexedY => {
+                self.execute_cycle_indirect_y(instruction, cycle, state, is_interrupt)
+            }
+        }
+    }
+
+    /// Execute cycle for Zero Page addressing mode
+    fn execute_cycle_zero_page(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+        let is_rmw = self.is_rmw_instruction(instruction);
+        let is_write = self.is_write_instruction(instruction);
+
+        match cycle {
+            1 => {
+                // Fetch ZP address
+                let addr = pc.wrapping_add(1);
+                let zp_addr = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = zp_addr;
+                state.effective_addr = zp_addr as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(zp_addr),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "ZP: fetch address",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                let addr = state.effective_addr;
+                if is_write {
+                    // Write instruction - write value to ZP
+                    let value = self.get_write_value(instruction)?;
+                    self.bus.borrow_mut().write_byte(addr, value)?;
+
+                    if !is_interrupt {
+                        // For write instructions, we don't call execute_instruction
+                        // as the write IS the operation
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_write: true,
+                        address: Some(addr),
+                        data: Some(value),
+                        bus_op: BusOperation::Write,
+                        cycle_description: "ZP: write value",
+                        ..Default::default()
+                    })
+                } else {
+                    // Read/RMW - read from ZP
+                    let data = self.bus.borrow().read_byte(addr)?;
+                    state.read_value = data;
+
+                    if is_rmw {
+                        Ok(CpuCycleResult {
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "ZP: read value (RMW)",
+                            ..Default::default()
+                        })
+                    } else {
+                        // Read instruction - execute now
+                        if !is_interrupt {
+                            // Use AddressWithValue to avoid double-read in instruction executor
+                            let operand = Operand::AddressWithValue(addr, data);
+                            self.execute_instruction(&instruction, &operand)?;
+                            self.finalize_instruction(instruction)?;
+                        }
+
+                        Ok(CpuCycleResult {
+                            instruction_complete: true,
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "ZP: read value, execute",
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
+            3 if is_rmw => {
+                // RMW: Dummy write of original value
+                let addr = state.effective_addr;
+                let value = state.read_value;
+                self.bus.borrow_mut().write_byte(addr, value)?;
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "ZP RMW: dummy write",
+                    ..Default::default()
+                })
+            }
+            4 if is_rmw => {
+                // RMW: Execute and write modified value
+                let addr = state.effective_addr;
+
+                if !is_interrupt {
+                    // Use AddressWithValue to pass the pre-read value for RMW
+                    let operand = Operand::AddressWithValue(addr, state.read_value);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                // Read back the modified value for result
+                let value = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "ZP RMW: write result",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("ZP cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for Zero Page Indexed addressing mode
+    fn execute_cycle_zero_page_indexed(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+        index: u8,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+        let is_rmw = self.is_rmw_instruction(instruction);
+        let is_write = self.is_write_instruction(instruction);
+
+        match cycle {
+            1 => {
+                // Fetch ZP address
+                let addr = pc.wrapping_add(1);
+                let zp_addr = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = zp_addr;
+                state.base_addr = zp_addr as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(zp_addr),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "ZP,X/Y: fetch address",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Dummy read from unindexed ZP while adding index
+                let addr = state.base_addr;
+                let data = self.bus.borrow().read_byte(addr)?;
+                state.effective_addr = state.operand_lo.wrapping_add(index) as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "ZP,X/Y: dummy read while indexing",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                let addr = state.effective_addr;
+                if is_write {
+                    // Write to indexed ZP
+                    let value = self.get_write_value(instruction)?;
+                    self.bus.borrow_mut().write_byte(addr, value)?;
+
+                    if !is_interrupt {
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_write: true,
+                        address: Some(addr),
+                        data: Some(value),
+                        bus_op: BusOperation::Write,
+                        cycle_description: "ZP,X/Y: write value",
+                        ..Default::default()
+                    })
+                } else {
+                    // Read from indexed ZP
+                    let data = self.bus.borrow().read_byte(addr)?;
+                    state.read_value = data;
+
+                    if is_rmw {
+                        Ok(CpuCycleResult {
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "ZP,X/Y: read value (RMW)",
+                            ..Default::default()
+                        })
+                    } else {
+                        if !is_interrupt {
+                            // Use AddressEffectiveWithValue to avoid double-read
+                            let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, false, data);
+                            self.execute_instruction(&instruction, &operand)?;
+                            self.finalize_instruction(instruction)?;
+                        }
+
+                        Ok(CpuCycleResult {
+                            instruction_complete: true,
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "ZP,X/Y: read value, execute",
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
+            4 if is_rmw => {
+                // RMW: Dummy write of original value
+                let addr = state.effective_addr;
+                let value = state.read_value;
+                self.bus.borrow_mut().write_byte(addr, value)?;
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "ZP,X/Y RMW: dummy write",
+                    ..Default::default()
+                })
+            }
+            5 if is_rmw => {
+                // RMW: Execute and write
+                let addr = state.effective_addr;
+
+                if !is_interrupt {
+                    // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, false, state.read_value);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                let value = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "ZP,X/Y RMW: write result",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("ZP,X/Y cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for Absolute addressing mode
+    fn execute_cycle_absolute(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+        let is_rmw = self.is_rmw_instruction(instruction);
+        let is_write = self.is_write_instruction(instruction);
+        let is_jmp = instruction.opcode == OpCode::JMP;
+        let is_jsr = instruction.opcode == OpCode::JSR;
+
+        // JSR has special timing - handle separately
+        if is_jsr {
+            return self.execute_cycle_jsr(instruction, cycle, state, is_interrupt);
+        }
+
+        match cycle {
+            1 => {
+                // Fetch address low byte
+                let addr = pc.wrapping_add(1);
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = lo;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Abs: fetch addr low",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Fetch address high byte
+                let addr = pc.wrapping_add(2);
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.operand_hi = hi;
+                state.effective_addr = (hi as u16) << 8 | state.operand_lo as u16;
+
+                if is_jmp {
+                    // JMP executes immediately after fetching address
+                    if !is_interrupt {
+                        self.registers.set_pc(state.effective_addr);
+                        // Clear is_pc_dirty so the next instruction advances PC correctly
+                        self.registers.is_pc_dirty = false;
+                        self.instructions_executed += 1;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(hi),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs JMP: fetch addr high, jump",
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(hi),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs: fetch addr high",
+                        ..Default::default()
+                    })
+                }
+            }
+            3 => {
+                let addr = state.effective_addr;
+                if is_write {
+                    let value = self.get_write_value(instruction)?;
+                    self.bus.borrow_mut().write_byte(addr, value)?;
+
+                    if !is_interrupt {
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_write: true,
+                        address: Some(addr),
+                        data: Some(value),
+                        bus_op: BusOperation::Write,
+                        cycle_description: "Abs: write value",
+                        ..Default::default()
+                    })
+                } else {
+                    // Read
+                    let data = self.bus.borrow().read_byte(addr)?;
+                    state.read_value = data;
+
+                    if is_rmw {
+                        Ok(CpuCycleResult {
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "Abs: read value (RMW)",
+                            ..Default::default()
+                        })
+                    } else {
+                        if !is_interrupt {
+                            // Use AddressWithValue to avoid double-read in instruction executor
+                            let operand = Operand::AddressWithValue(addr, data);
+                            self.execute_instruction(&instruction, &operand)?;
+                            self.finalize_instruction(instruction)?;
+                        }
+
+                        Ok(CpuCycleResult {
+                            instruction_complete: true,
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "Abs: read value, execute",
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
+            4 if is_rmw => {
+                let addr = state.effective_addr;
+                let value = state.read_value;
+                self.bus.borrow_mut().write_byte(addr, value)?;
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Abs RMW: dummy write",
+                    ..Default::default()
+                })
+            }
+            5 if is_rmw => {
+                let addr = state.effective_addr;
+
+                if !is_interrupt {
+                    // Use AddressWithValue to pass pre-read value for RMW
+                    let operand = Operand::AddressWithValue(addr, state.read_value);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                let value = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Abs RMW: write result",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("Abs cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for JSR (special absolute timing)
+    fn execute_cycle_jsr(
+        &mut self,
+        _instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Fetch address low byte
+                let addr = pc.wrapping_add(1);
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = lo;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JSR: fetch addr low",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Internal operation (dummy read of stack)
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let data = self.bus.borrow().read_byte(stack_addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JSR: internal (stack read)",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Push PCH
+                let return_addr = pc.wrapping_add(2); // PC + 2 (points to last byte of JSR instruction)
+                let pch = (return_addr >> 8) as u8;
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, pch)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(pch),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "JSR: push PCH",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Push PCL
+                let return_addr = pc.wrapping_add(2);
+                let pcl = return_addr as u8;
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, pcl)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(pcl),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "JSR: push PCL",
+                    ..Default::default()
+                })
+            }
+            5 => {
+                // Fetch address high byte and jump
+                let addr = pc.wrapping_add(2);
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.operand_hi = hi;
+                let target = (hi as u16) << 8 | state.operand_lo as u16;
+
+                if !is_interrupt {
+                    self.registers.set_pc(target);
+                    // Clear is_pc_dirty so the next instruction advances PC correctly
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JSR: fetch addr high, jump",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("JSR cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for Absolute Indexed addressing mode
+    fn execute_cycle_absolute_indexed(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+        index: u8,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+        let is_rmw = self.is_rmw_instruction(instruction);
+        let is_write = self.is_write_instruction(instruction);
+
+        match cycle {
+            1 => {
+                // Fetch address low byte
+                let addr = pc.wrapping_add(1);
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = lo;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Abs,X/Y: fetch addr low",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Fetch address high byte, calculate effective address
+                let addr = pc.wrapping_add(2);
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.operand_hi = hi;
+                state.base_addr = (hi as u16) << 8 | state.operand_lo as u16;
+                state.effective_addr = state.base_addr.wrapping_add(index as u16);
+                state.page_crossed = (state.base_addr & 0xFF00) != (state.effective_addr & 0xFF00);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Abs,X/Y: fetch addr high",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                if is_write || is_rmw {
+                    // Write/RMW always reads from possibly-wrong address
+                    let wrong_addr = (state.base_addr & 0xFF00) | ((state.operand_lo.wrapping_add(index)) as u16);
+                    let data = self.bus.borrow().read_byte(wrong_addr)?;
+
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(wrong_addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs,X/Y: read (fix high byte)",
+                        ..Default::default()
+                    })
+                } else if state.page_crossed {
+                    // Read with page crossing - dummy read from wrong address
+                    let wrong_addr = (state.base_addr & 0xFF00) | ((state.operand_lo.wrapping_add(index)) as u16);
+                    let data = self.bus.borrow().read_byte(wrong_addr)?;
+
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(wrong_addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs,X/Y: dummy read (page cross)",
+                        ..Default::default()
+                    })
+                } else {
+                    // Read without page crossing - execute on this cycle
+                    let addr = state.effective_addr;
+                    let data = self.bus.borrow().read_byte(addr)?;
+
+                    if !is_interrupt {
+                        // Use AddressEffectiveWithValue to avoid double-read
+                        let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, false, data);
+                        self.execute_instruction(&instruction, &operand)?;
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs,X/Y: read, execute",
+                        ..Default::default()
+                    })
+                }
+            }
+            4 => {
+                let addr = state.effective_addr;
+
+                if is_write {
+                    // Write to effective address
+                    let value = self.get_write_value(instruction)?;
+                    self.bus.borrow_mut().write_byte(addr, value)?;
+
+                    if !is_interrupt {
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_write: true,
+                        address: Some(addr),
+                        data: Some(value),
+                        bus_op: BusOperation::Write,
+                        cycle_description: "Abs,X/Y: write value",
+                        ..Default::default()
+                    })
+                } else if is_rmw {
+                    // RMW: Read from effective address
+                    let data = self.bus.borrow().read_byte(addr)?;
+                    state.read_value = data;
+
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs,X/Y RMW: read value",
+                        ..Default::default()
+                    })
+                } else {
+                    // Read with page cross - now read from correct address
+                    let data = self.bus.borrow().read_byte(addr)?;
+
+                    if !is_interrupt {
+                        // Use AddressEffectiveWithValue to avoid double-read
+                        let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, true, data);
+                        self.execute_instruction(&instruction, &operand)?;
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Abs,X/Y: read correct addr, execute",
+                        ..Default::default()
+                    })
+                }
+            }
+            5 if is_rmw => {
+                // RMW: Dummy write
+                let addr = state.effective_addr;
+                let value = state.read_value;
+                self.bus.borrow_mut().write_byte(addr, value)?;
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Abs,X/Y RMW: dummy write",
+                    ..Default::default()
+                })
+            }
+            6 if is_rmw => {
+                // RMW: Write result
+                let addr = state.effective_addr;
+
+                if !is_interrupt {
+                    // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, state.page_crossed, state.read_value);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                let value = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Abs,X/Y RMW: write result",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("Abs,X/Y cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for Relative (branch) addressing mode
+    fn execute_cycle_relative(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Fetch offset
+                let addr = pc.wrapping_add(1);
+                let offset = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = offset;
+
+                // Calculate target address
+                let next_pc = pc.wrapping_add(2); // PC after branch instruction
+                let target = next_pc.wrapping_add_signed(offset as i8 as i16);
+                state.branch_target = target;
+                state.page_crossed = (next_pc & 0xFF00) != (target & 0xFF00);
+
+                // Evaluate branch condition
+                state.branch_taken = self.evaluate_branch_condition(instruction)?;
+
+                if !state.branch_taken {
+                    // Branch not taken - instruction complete
+                    if !is_interrupt {
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(offset),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Branch: fetch offset (not taken)",
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(offset),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Branch: fetch offset (taken)",
+                        ..Default::default()
+                    })
+                }
+            }
+            2 => {
+                // Branch taken - fetch from old PC+2 while adding offset
+                let addr = pc.wrapping_add(2);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                if !state.page_crossed {
+                    // No page cross - branch completes
+                    if !is_interrupt {
+                        self.registers.set_pc(state.branch_target);
+                        // Clear is_pc_dirty so the next instruction advances PC correctly
+                        self.registers.is_pc_dirty = false;
+                        self.instructions_executed += 1;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Branch: taken (no page cross)",
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Branch: taken (page cross pending)",
+                        ..Default::default()
+                    })
+                }
+            }
+            3 => {
+                // Page crossed - extra cycle to fix high byte
+                // Dummy read from wrong address (same low byte, wrong high byte)
+                let wrong_addr = (pc.wrapping_add(2) & 0xFF00) | (state.branch_target & 0x00FF);
+                let data = self.bus.borrow().read_byte(wrong_addr)?;
+
+                if !is_interrupt {
+                    self.registers.set_pc(state.branch_target);
+                    // Clear is_pc_dirty so the next instruction advances PC correctly
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(wrong_addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Branch: fix page crossing",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("Relative cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for Indirect JMP
+    fn execute_cycle_indirect_jmp(
+        &mut self,
+        _instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Fetch pointer low byte
+                let addr = pc.wrapping_add(1);
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = lo;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JMP ind: fetch ptr low",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Fetch pointer high byte
+                let addr = pc.wrapping_add(2);
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.operand_hi = hi;
+                state.base_addr = (hi as u16) << 8 | state.operand_lo as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JMP ind: fetch ptr high",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Fetch effective address low byte
+                let addr = state.base_addr;
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.effective_addr = lo as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JMP ind: fetch eff low",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Fetch effective address high byte (with page wrap bug)
+                let ptr_lo = state.base_addr as u8;
+                let addr = (state.base_addr & 0xFF00) | ptr_lo.wrapping_add(1) as u16;
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.effective_addr |= (hi as u16) << 8;
+
+                if !is_interrupt {
+                    self.registers.set_pc(state.effective_addr);
+                    // Clear is_pc_dirty so the next instruction advances PC correctly
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "JMP ind: fetch eff high, jump",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("JMP ind cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for (Indirect,X) addressing mode
+    fn execute_cycle_indirect_x(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+        let x = self.registers.x;
+        let is_rmw = self.is_rmw_instruction(instruction);
+        let is_write = self.is_write_instruction(instruction);
+
+        match cycle {
+            1 => {
+                // Fetch pointer address
+                let addr = pc.wrapping_add(1);
+                let ptr = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = ptr;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(ptr),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind,X): fetch ptr",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Dummy read from pointer while adding X
+                let addr = state.operand_lo as u16;
+                let data = self.bus.borrow().read_byte(addr)?;
+                state.base_addr = state.operand_lo.wrapping_add(x) as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind,X): dummy read (adding X)",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Fetch effective address low byte
+                let addr = state.base_addr;
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.effective_addr = lo as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind,X): fetch eff low",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Fetch effective address high byte
+                let addr = (state.base_addr as u8).wrapping_add(1) as u16;
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.effective_addr |= (hi as u16) << 8;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind,X): fetch eff high",
+                    ..Default::default()
+                })
+            }
+            5 => {
+                let addr = state.effective_addr;
+
+                if is_write {
+                    let value = self.get_write_value(instruction)?;
+                    self.bus.borrow_mut().write_byte(addr, value)?;
+
+                    if !is_interrupt {
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_write: true,
+                        address: Some(addr),
+                        data: Some(value),
+                        bus_op: BusOperation::Write,
+                        cycle_description: "(Ind,X): write value",
+                        ..Default::default()
+                    })
+                } else {
+                    let data = self.bus.borrow().read_byte(addr)?;
+                    state.read_value = data;
+
+                    if is_rmw {
+                        Ok(CpuCycleResult {
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "(Ind,X) RMW: read value",
+                            ..Default::default()
+                        })
+                    } else {
+                        if !is_interrupt {
+                            // Use AddressEffectiveWithValue to avoid double-read
+                            let operand = Operand::AddressEffectiveWithValue(state.operand_lo as u16, addr, false, data);
+                            self.execute_instruction(&instruction, &operand)?;
+                            self.finalize_instruction(instruction)?;
+                        }
+
+                        Ok(CpuCycleResult {
+                            instruction_complete: true,
+                            memory_read: true,
+                            address: Some(addr),
+                            data: Some(data),
+                            bus_op: BusOperation::Read,
+                            cycle_description: "(Ind,X): read, execute",
+                            ..Default::default()
+                        })
+                    }
+                }
+            }
+            6 if is_rmw => {
+                let addr = state.effective_addr;
+                let value = state.read_value;
+                self.bus.borrow_mut().write_byte(addr, value)?;
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "(Ind,X) RMW: dummy write",
+                    ..Default::default()
+                })
+            }
+            7 if is_rmw => {
+                let addr = state.effective_addr;
+
+                if !is_interrupt {
+                    // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    let operand = Operand::AddressEffectiveWithValue(state.operand_lo as u16, addr, false, state.read_value);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                let value = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "(Ind,X) RMW: write result",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("(Ind,X) cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Execute cycle for (Indirect),Y addressing mode
+    fn execute_cycle_indirect_y(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+        let y = self.registers.y;
+        let is_rmw = self.is_rmw_instruction(instruction);
+        let is_write = self.is_write_instruction(instruction);
+
+        match cycle {
+            1 => {
+                // Fetch pointer address
+                let addr = pc.wrapping_add(1);
+                let ptr = self.bus.borrow().read_byte(addr)?;
+                state.operand_lo = ptr;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(ptr),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind),Y: fetch ptr",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Fetch effective address low byte from ptr
+                let addr = state.operand_lo as u16;
+                let lo = self.bus.borrow().read_byte(addr)?;
+                state.effective_addr = lo as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind),Y: fetch eff low",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Fetch effective address high byte from (ptr+1) & 0xFF
+                let addr = state.operand_lo.wrapping_add(1) as u16;
+                let hi = self.bus.borrow().read_byte(addr)?;
+                state.base_addr = (hi as u16) << 8 | state.effective_addr;
+                state.effective_addr = state.base_addr.wrapping_add(y as u16);
+                state.page_crossed = (state.base_addr & 0xFF00) != (state.effective_addr & 0xFF00);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "(Ind),Y: fetch eff high",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                if is_write || is_rmw {
+                    // Write/RMW always reads from possibly-wrong address
+                    let base_lo = state.base_addr as u8;
+                    let wrong_addr = (state.base_addr & 0xFF00) | base_lo.wrapping_add(y) as u16;
+                    let data = self.bus.borrow().read_byte(wrong_addr)?;
+
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(wrong_addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "(Ind),Y: fix high byte",
+                        ..Default::default()
+                    })
+                } else if state.page_crossed {
+                    // Page crossed - dummy read from wrong address
+                    let base_lo = state.base_addr as u8;
+                    let wrong_addr = (state.base_addr & 0xFF00) | base_lo.wrapping_add(y) as u16;
+                    let data = self.bus.borrow().read_byte(wrong_addr)?;
+
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(wrong_addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "(Ind),Y: dummy read (page cross)",
+                        ..Default::default()
+                    })
+                } else {
+                    // No page crossing - execute
+                    let addr = state.effective_addr;
+                    let data = self.bus.borrow().read_byte(addr)?;
+
+                    if !is_interrupt {
+                        // Use AddressEffectiveWithValue to avoid double-read
+                        let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, false, data);
+                        self.execute_instruction(&instruction, &operand)?;
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "(Ind),Y: read, execute",
+                        ..Default::default()
+                    })
+                }
+            }
+            5 => {
+                let addr = state.effective_addr;
+
+                if is_write {
+                    let value = self.get_write_value(instruction)?;
+                    self.bus.borrow_mut().write_byte(addr, value)?;
+
+                    if !is_interrupt {
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_write: true,
+                        address: Some(addr),
+                        data: Some(value),
+                        bus_op: BusOperation::Write,
+                        cycle_description: "(Ind),Y: write value",
+                        ..Default::default()
+                    })
+                } else if is_rmw {
+                    // Read value for RMW
+                    let data = self.bus.borrow().read_byte(addr)?;
+                    state.read_value = data;
+
+                    Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "(Ind),Y RMW: read value",
+                        ..Default::default()
+                    })
+                } else {
+                    // Read after page cross
+                    let data = self.bus.borrow().read_byte(addr)?;
+
+                    if !is_interrupt {
+                        // Use AddressEffectiveWithValue to avoid double-read
+                        let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, true, data);
+                        self.execute_instruction(&instruction, &operand)?;
+                        self.finalize_instruction(instruction)?;
+                    }
+
+                    Ok(CpuCycleResult {
+                        instruction_complete: true,
+                        memory_read: true,
+                        address: Some(addr),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "(Ind),Y: read correct, execute",
+                        ..Default::default()
+                    })
+                }
+            }
+            6 if is_rmw => {
+                let addr = state.effective_addr;
+                let value = state.read_value;
+                self.bus.borrow_mut().write_byte(addr, value)?;
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "(Ind),Y RMW: dummy write",
+                    ..Default::default()
+                })
+            }
+            7 if is_rmw => {
+                let addr = state.effective_addr;
+
+                if !is_interrupt {
+                    // Use AddressEffectiveWithValue to pass pre-read value for RMW
+                    let operand = Operand::AddressEffectiveWithValue(state.base_addr, addr, state.page_crossed, state.read_value);
+                    self.execute_instruction(&instruction, &operand)?;
+                    self.finalize_instruction(instruction)?;
+                }
+
+                let value = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "(Ind),Y RMW: write result",
+                    ..Default::default()
+                })
+            }
+            _ => {
+                Err(CpuError::Unimplemented(format!("(Ind),Y cycle {} unexpected", cycle)))
+            }
+        }
+    }
+
+    /// Check if instruction is a Read-Modify-Write operation
+    fn is_rmw_instruction(&self, instruction: &Instruction) -> bool {
+        matches!(instruction.opcode,
+            OpCode::ASL | OpCode::LSR | OpCode::ROL | OpCode::ROR |
+            OpCode::INC | OpCode::DEC |
+            // Illegal RMW opcodes
+            OpCode::SLO | OpCode::SRE | OpCode::RLA | OpCode::RRA |
+            OpCode::ISB | OpCode::DCP
+        )
+    }
+
+    /// Check if instruction is a write-only operation (STA, STX, STY, SAX, etc.)
+    fn is_write_instruction(&self, instruction: &Instruction) -> bool {
+        matches!(instruction.opcode,
+            OpCode::STA | OpCode::STX | OpCode::STY |
+            // Illegal write opcodes
+            OpCode::SAX | OpCode::SHA | OpCode::SHX | OpCode::SHY
+        )
+    }
+
+    /// Get the value to write for a store instruction
+    fn get_write_value(&self, instruction: &Instruction) -> Result<u8, CpuError> {
+        match instruction.opcode {
+            OpCode::STA => Ok(self.registers.a),
+            OpCode::STX => Ok(self.registers.x),
+            OpCode::STY => Ok(self.registers.y),
+            OpCode::SAX => Ok(self.registers.a & self.registers.x),
+            OpCode::SHA => Ok(self.registers.a & self.registers.x & 0x07), // Unstable
+            OpCode::SHX => Ok(self.registers.x & 0x07), // Unstable, simplified
+            OpCode::SHY => Ok(self.registers.y & 0x07), // Unstable, simplified
+            _ => Err(CpuError::Unimplemented(format!("get_write_value for {:?}", instruction.opcode)))
+        }
+    }
+
+    /// Evaluate branch condition for branch instructions
+    fn evaluate_branch_condition(&self, instruction: &Instruction) -> Result<bool, CpuError> {
+        let taken = match instruction.opcode {
+            OpCode::BCC => !self.registers.get_status(StatusFlag::Carry),
+            OpCode::BCS => self.registers.get_status(StatusFlag::Carry),
+            OpCode::BEQ => self.registers.get_status(StatusFlag::Zero),
+            OpCode::BMI => self.registers.get_status(StatusFlag::Negative),
+            OpCode::BNE => !self.registers.get_status(StatusFlag::Zero),
+            OpCode::BPL => !self.registers.get_status(StatusFlag::Negative),
+            OpCode::BVC => !self.registers.get_status(StatusFlag::Overflow),
+            OpCode::BVS => self.registers.get_status(StatusFlag::Overflow),
+            _ => return Err(CpuError::Unimplemented(format!("Branch condition for {:?}", instruction.opcode)))
+        };
+        Ok(taken)
+    }
+
+    /// Finalize instruction - update PC and increment instruction counter
+    fn finalize_instruction(&mut self, instruction: &Instruction) -> Result<(), CpuError> {
+        // Update PC if not already modified by the instruction
+        if !self.registers.is_pc_dirty {
+            self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
+        } else {
+            self.registers.is_pc_dirty = false;
+        }
+
+        self.instructions_executed += 1;
+
+        // Handle pending I flag changes
+        if let Some(new_i_flag) = self.pending_i_flag.take() {
+            self.registers.set_status(StatusFlag::InterruptDisable, new_i_flag);
+        }
+
+        Ok(())
+    }
+
+    /// Execute cycle for PHA/PHP (3 cycles total)
+    /// Cycle 1: Fetch opcode (done)
+    /// Cycle 2: Dummy read from PC+1
+    /// Cycle 3: Write A/P to stack, decrement SP
+    fn execute_cycle_push_stack(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        _state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Dummy read from PC+1
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "PHA/PHP: dummy read",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Write to stack
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let value = match instruction.opcode {
+                    OpCode::PHA => self.registers.a,
+                    OpCode::PHP => self.registers.p | 0x30, // Set B and unused flags
+                    _ => unreachable!()
+                };
+                self.bus.borrow_mut().write_byte(stack_addr, value)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                if !is_interrupt {
+                    self.finalize_instruction(instruction)?;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "PHA/PHP: write to stack",
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("PHA/PHP cycle {} unexpected", cycle)))
+        }
+    }
+
+    /// Execute cycle for PLA/PLP (4 cycles total)
+    /// Cycle 1: Fetch opcode (done)
+    /// Cycle 2: Dummy read from PC+1
+    /// Cycle 3: Dummy read from stack pointer (increment SP)
+    /// Cycle 4: Read from new stack location
+    fn execute_cycle_pull_stack(
+        &mut self,
+        instruction: &'static Instruction,
+        cycle: u8,
+        _state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Dummy read from PC+1
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "PLA/PLP: dummy read",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Dummy read from current stack pointer (while incrementing)
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let data = self.bus.borrow().read_byte(stack_addr)?;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "PLA/PLP: dummy stack read",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Read from new stack location
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let value = self.bus.borrow().read_byte(stack_addr)?;
+
+                if !is_interrupt {
+                    match instruction.opcode {
+                        OpCode::PLA => {
+                            self.registers.a = value;
+                            self.update_flags_zero_negative(value);
+                        }
+                        OpCode::PLP => {
+                            // Ignore B flag and unused bit when pulling
+                            self.registers.p = (value & 0xCF) | (self.registers.p & 0x30);
+                        }
+                        _ => unreachable!()
+                    }
+                    self.finalize_instruction(instruction)?;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(value),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "PLA/PLP: read from stack",
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("PLA/PLP cycle {} unexpected", cycle)))
+        }
+    }
+
+    /// Execute cycle for RTS (6 cycles total)
+    /// Cycle 1: Fetch opcode (done)
+    /// Cycle 2: Dummy read from PC+1
+    /// Cycle 3: Dummy read from stack (increment SP)
+    /// Cycle 4: Read PCL from stack
+    /// Cycle 5: Read PCH from stack
+    /// Cycle 6: Increment PC (internal)
+    fn execute_cycle_rts(
+        &mut self,
+        _instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Dummy read from PC+1
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTS: dummy read",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Dummy read from stack (while incrementing)
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let data = self.bus.borrow().read_byte(stack_addr)?;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTS: dummy stack read",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Read PCL from stack
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let pcl = self.bus.borrow().read_byte(stack_addr)?;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                state.operand_lo = pcl;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(pcl),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTS: read PCL",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Read PCH from stack
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let pch = self.bus.borrow().read_byte(stack_addr)?;
+                state.operand_hi = pch;
+                state.effective_addr = ((pch as u16) << 8) | state.operand_lo as u16;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(pch),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTS: read PCH",
+                    ..Default::default()
+                })
+            }
+            5 => {
+                // Increment PC (internal, dummy read from return address)
+                let addr = state.effective_addr;
+                let data = self.bus.borrow().read_byte(addr)?;
+                let new_pc = state.effective_addr.wrapping_add(1);
+
+                if !is_interrupt {
+                    self.registers.set_pc(new_pc);
+                    // Clear is_pc_dirty so the next instruction advances PC correctly
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTS: increment PC",
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("RTS cycle {} unexpected", cycle)))
+        }
+    }
+
+    /// Execute cycle for RTI (6 cycles total)
+    /// Cycle 1: Fetch opcode (done)
+    /// Cycle 2: Dummy read from PC+1
+    /// Cycle 3: Dummy read from stack (increment SP)
+    /// Cycle 4: Read P from stack
+    /// Cycle 5: Read PCL from stack
+    /// Cycle 6: Read PCH from stack
+    fn execute_cycle_rti(
+        &mut self,
+        _instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Dummy read from PC+1
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTI: dummy read",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Dummy read from stack (while incrementing)
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let data = self.bus.borrow().read_byte(stack_addr)?;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTI: dummy stack read",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Read P from stack
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let p = self.bus.borrow().read_byte(stack_addr)?;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+
+                if !is_interrupt {
+                    // Ignore B flag and set unused bit when pulling
+                    self.registers.p = (p & 0xCF) | 0x20;
+                }
+                state.read_value = p;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(p),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTI: read P",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Read PCL from stack
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let pcl = self.bus.borrow().read_byte(stack_addr)?;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                state.operand_lo = pcl;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(pcl),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTI: read PCL",
+                    ..Default::default()
+                })
+            }
+            5 => {
+                // Read PCH from stack
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                let pch = self.bus.borrow().read_byte(stack_addr)?;
+                let new_pc = ((pch as u16) << 8) | state.operand_lo as u16;
+
+                if !is_interrupt {
+                    self.registers.set_pc(new_pc);
+                    // Clear is_pc_dirty so the next instruction advances PC correctly
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(stack_addr),
+                    data: Some(pch),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "RTI: read PCH, set PC",
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("RTI cycle {} unexpected", cycle)))
+        }
+    }
+
+    /// Execute cycle for BRK (7 cycles total)
+    /// Cycle 1: Fetch opcode (done)
+    /// Cycle 2: Read and discard PC+1 (padding byte)
+    /// Cycle 3: Push PCH to stack
+    /// Cycle 4: Push PCL to stack
+    /// Cycle 5: Push P to stack (with B flag set)
+    /// Cycle 6: Read IRQ vector low
+    /// Cycle 7: Read IRQ vector high
+    fn execute_cycle_brk(
+        &mut self,
+        _instruction: &'static Instruction,
+        cycle: u8,
+        state: &mut InstructionState,
+        is_interrupt: bool,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        match cycle {
+            1 => {
+                // Read and discard padding byte
+                let addr = pc.wrapping_add(1);
+                let data = self.bus.borrow().read_byte(addr)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(addr),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "BRK: read padding",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Push PCH to stack
+                let return_addr = pc.wrapping_add(2); // PC + 2 for BRK
+                let pch = (return_addr >> 8) as u8;
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, pch)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(pch),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "BRK: push PCH",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Push PCL to stack
+                let return_addr = pc.wrapping_add(2);
+                let pcl = return_addr as u8;
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, pcl)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(pcl),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "BRK: push PCL",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Push P to stack with B flag set
+                let p = self.registers.p | 0x30; // Set B and unused flags
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, p)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(p),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "BRK: push P",
+                    ..Default::default()
+                })
+            }
+            5 => {
+                // Read IRQ vector low
+                let vector_addr = BRK_VECTOR;
+                let vector_lo = self.bus.borrow().read_byte(vector_addr)?;
+                state.operand_lo = vector_lo;
+
+                // Set interrupt disable flag
+                self.registers.set_status(StatusFlag::InterruptDisable, true);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(vector_addr),
+                    data: Some(vector_lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "BRK: read vector low",
+                    ..Default::default()
+                })
+            }
+            6 => {
+                // Read IRQ vector high
+                let vector_addr = BRK_VECTOR.wrapping_add(1);
+                let vector_hi = self.bus.borrow().read_byte(vector_addr)?;
+                let new_pc = ((vector_hi as u16) << 8) | state.operand_lo as u16;
+
+                if !is_interrupt {
+                    self.registers.set_pc(new_pc);
+                    // Clear is_pc_dirty so the next instruction advances PC correctly
+                    self.registers.is_pc_dirty = false;
+                    self.instructions_executed += 1;
+                }
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(vector_addr),
+                    data: Some(vector_hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "BRK: read vector high, jump",
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("BRK cycle {} unexpected", cycle)))
+        }
+    }
+
     pub fn new(bus: Rc<RefCell<dyn Bus>>) -> Self {
         Cpu6502 {
             registers: Registers {
@@ -922,7 +3020,9 @@ impl Cpu6502 {
     fn overwrite(&mut self, operand: &Operand, value: u8) -> Result<(), CpuError> {
         match operand {
             Operand::Address(addr) |
-            Operand::AddressAndEffectiveAddress(_, addr, _) => {
+            Operand::AddressWithValue(addr, _) |
+            Operand::AddressAndEffectiveAddress(_, addr, _) |
+            Operand::AddressEffectiveWithValue(_, addr, _, _) => {
                 self.bus.borrow_mut().write_byte(*addr, value)?;
                 Ok(())
             },
@@ -944,7 +3044,9 @@ impl Cpu6502 {
     fn rmw_overwrite(&mut self, operand: &Operand, old_value: u8, new_value: u8) -> Result<(), CpuError> {
         match operand {
             Operand::Address(addr) |
-            Operand::AddressAndEffectiveAddress(_, addr, _) => {
+            Operand::AddressWithValue(addr, _) |
+            Operand::AddressAndEffectiveAddress(_, addr, _) |
+            Operand::AddressEffectiveWithValue(_, addr, _, _) => {
                 // 6502 RMW: write old value (dummy), then write new value
                 self.bus.borrow_mut().write_byte(*addr, old_value)?;
                 self.bus.borrow_mut().write_byte(*addr, new_value)?;
@@ -975,9 +3077,17 @@ impl Cpu6502 {
                 let value = self.bus.borrow().read_byte(*addr)?;
                 Ok(value)
             },
+            // Use pre-read value to avoid double-read (cycle-accurate mode)
+            Operand::AddressWithValue(_, value) => {
+                Ok(*value)
+            },
             Operand::AddressAndEffectiveAddress(_, effective, _) => {
                 let value = self.bus.borrow().read_byte(*effective)?;
                 Ok(value)
+            }
+            // Use pre-read value to avoid double-read (cycle-accurate mode)
+            Operand::AddressEffectiveWithValue(_, _, _, value) => {
+                Ok(*value)
             }
             Operand::None => {
                 Err(CpuError::InvalidOperand(format!("{}", operand)))
@@ -993,9 +3103,15 @@ impl Cpu6502 {
                 let value = *addr;
                 Ok(value)
             },
+            Operand::AddressWithValue(addr, _) => {
+                Ok(*addr)
+            },
             Operand::AddressAndEffectiveAddress(_, effective, _) => {
                 let value = *effective;
                 Ok(value)
+            },
+            Operand::AddressEffectiveWithValue(_, effective, _, _) => {
+                Ok(*effective)
             },
             _ => Err(CpuError::InvalidOperand(format!("{}", operand)))
         };
@@ -1016,17 +3132,20 @@ impl Cpu6502 {
             AddressingMode::AbsoluteIndexedX | AddressingMode::AbsoluteIndexedY | AddressingMode::IndirectIndexedY);
 
         if needs_dummy_read {
-            if let Operand::AddressAndEffectiveAddress(base, effective, page_crossed) = operand {
-                // Calculate the dummy read address:
-                // - If page crossed: read from (base_high | effective_low) - the "wrong" address
-                // - If not crossed: read from effective address (still a dummy read)
-                let dummy_addr = if *page_crossed {
-                    (*base & 0xFF00) | (*effective & 0x00FF)
-                } else {
-                    *effective
-                };
-                let _ = self.bus.borrow().read_byte(dummy_addr)?;
-            }
+            let (base, effective, page_crossed) = match operand {
+                Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+                Operand::AddressEffectiveWithValue(base, effective, page_crossed, _) => (*base, *effective, *page_crossed),
+                _ => return Ok(()),
+            };
+            // Calculate the dummy read address:
+            // - If page crossed: read from (base_high | effective_low) - the "wrong" address
+            // - If not crossed: read from effective address (still a dummy read)
+            let dummy_addr = if page_crossed {
+                (base & 0xFF00) | (effective & 0x00FF)
+            } else {
+                effective
+            };
+            let _ = self.bus.borrow().read_byte(dummy_addr)?;
         }
         Ok(())
     }
@@ -1041,13 +3160,16 @@ impl Cpu6502 {
             AddressingMode::AbsoluteIndexedX | AddressingMode::AbsoluteIndexedY | AddressingMode::IndirectIndexedY);
 
         if is_indexed {
-            if let Operand::AddressAndEffectiveAddress(base, effective, page_crossed) = operand {
-                // Only do dummy read when page is crossed
-                if *page_crossed {
-                    // Dummy read from "wrong" address (base_high | effective_low)
-                    let dummy_addr = (*base & 0xFF00) | (*effective & 0x00FF);
-                    let _ = self.bus.borrow().read_byte(dummy_addr)?;
-                }
+            let (base, effective, page_crossed) = match operand {
+                Operand::AddressAndEffectiveAddress(base, effective, page_crossed) => (*base, *effective, *page_crossed),
+                Operand::AddressEffectiveWithValue(base, effective, page_crossed, _) => (*base, *effective, *page_crossed),
+                _ => return Ok(()),
+            };
+            // Only do dummy read when page is crossed
+            if page_crossed {
+                // Dummy read from "wrong" address (base_high | effective_low)
+                let dummy_addr = (base & 0xFF00) | (effective & 0x00FF);
+                let _ = self.bus.borrow().read_byte(dummy_addr)?;
             }
         }
         Ok(())
@@ -1085,7 +3207,8 @@ impl Cpu6502 {
 
     fn get_cycles_by_page_crossing_for_load(&self, operand: &Operand) -> u32 {
         match operand {
-            Operand::AddressAndEffectiveAddress(_, _, page_crossed) => {
+            Operand::AddressAndEffectiveAddress(_, _, page_crossed) |
+            Operand::AddressEffectiveWithValue(_, _, page_crossed, _) => {
                 if *page_crossed { 1 } else { 0 }
             },
             _ => 0
@@ -1535,8 +3658,8 @@ impl Instruction {
     }
 
     fn bit_test_bits_in_memory_with_accumulator(&self, cpu: &mut Cpu6502, operand: &Operand) -> Result<u32, CpuError> {
-        let addr = cpu.get_operand_word_value(operand)?;
-        let value = cpu.bus.borrow().read_byte(addr)?;
+        // Use get_operand_byte_value to use pre-read value in cycle-accurate mode
+        let value = cpu.get_operand_byte_value(operand)?;
         let result = cpu.registers.a & value;
 
         cpu.registers.set_status(StatusFlag::Zero, result == 0);
