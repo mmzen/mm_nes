@@ -1,4 +1,4 @@
-// Authorship: Human 50% | Claude 50%
+// Authorship: Human 45% | Claude 55%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -238,24 +238,53 @@ impl NesConsole {
             self.dma_controller.start_oam_dma(page);
         }
 
+        // Check if DMC DMA is needed (before executing CPU cycle)
+        // DMC DMA can steal cycles mid-instruction, so we check every cycle
+        if !self.dma_controller.is_dmc_dma_active() {
+            if let Some(dmc_address) = self.apu.borrow().needs_dmc_dma() {
+                // Calculate how many cycles to steal based on current CPU state
+                let cpu_is_halted = self.dma_controller.is_active() || self.cpu.borrow().is_halted();
+                let oam_dma_active = self.dma_controller.is_oam_dma_active();
+                // For writes, we need to wait longer. We'll determine this from the previous cycle's activity.
+                // Since we're checking BEFORE the cycle, we use false for writes (conservative approach).
+                // The real 2A03 checks what the CPU is about to do, but we don't have that info yet.
+                let cpu_is_writing = false; // Will be refined if needed
+
+                let dmc_cycles = DmaController::<dyn Bus, dyn DmaDevice>::calculate_dmc_dma_cycles(
+                    cpu_is_writing,
+                    cpu_is_halted,
+                    oam_dma_active,
+                );
+                self.dma_controller.start_dmc_dma(dmc_address, dmc_cycles);
+            }
+        }
+
         // Execute one cycle: either DMA or CPU
-        let cpu_result = if self.dma_controller.is_active() {
+        let (cpu_result, dmc_sample) = if self.dma_controller.is_active() {
             // DMA is active - step the DMA controller, CPU is halted
             let dma_result = self.dma_controller.step_cycle()
                 .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
 
-            CpuCycleResult {
+            let result = CpuCycleResult {
                 halted: true,
                 instruction_complete: false,
                 memory_read: dma_result.read_occurred,
                 memory_write: dma_result.write_occurred,
                 address: dma_result.address_accessed,
                 ..Default::default()
-            }
+            };
+
+            (result, dma_result.dmc_dma_complete)
         } else {
             // Normal CPU execution
-            self.cpu.borrow_mut().step_cycle()?
+            (self.cpu.borrow_mut().step_cycle()?, None)
         };
+
+        // Deliver DMC sample to APU if DMC DMA completed
+        if let Some(sample) = dmc_sample {
+            self.apu.borrow_mut().provide_dmc_sample(sample)
+                .map_err(|e| NesConsoleError::ApuError(e))?;
+        }
 
         // Calculate total CPU cycles this step (1 base + any interrupt cycles)
         let total_cpu_cycles = 1 + cpu_result.interrupt_cycles;

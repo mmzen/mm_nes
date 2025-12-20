@@ -115,15 +115,51 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         };
     }
 
-    /// Start a DMC DMA fetch from the specified address
-    pub fn start_dmc_dma(&mut self, address: u16) {
-        // DMC DMA takes 1-4 cycles depending on CPU state
-        // For simplicity, we use 4 cycles (can be refined later)
+    /// Start a DMC DMA fetch from the specified address.
+    ///
+    /// The cycle count depends on the CPU's current bus activity:
+    /// - 4 cycles if CPU is writing (cannot interrupt mid-write)
+    /// - 3 cycles if CPU is reading
+    /// - 2 cycles if OAM DMA is in progress
+    /// - 1 cycle if CPU is already halted
+    ///
+    /// # Arguments
+    /// * `address` - The address to fetch the sample byte from
+    /// * `cycles` - Number of cycles to steal (1-4), determined by caller based on CPU state
+    pub fn start_dmc_dma(&mut self, address: u16, cycles: u8) {
+        // Clamp to valid range (1-4 cycles)
+        let cycles = cycles.clamp(1, 4);
         self.dmc_dma = DmcDmaState {
             active: true,
             address,
-            cycles_remaining: 4,
+            cycles_remaining: cycles,
         };
+    }
+
+    /// Calculate the number of cycles DMC DMA should steal based on CPU state.
+    ///
+    /// This implements the real 2A03 behavior where DMC DMA timing depends on
+    /// what the CPU is currently doing.
+    ///
+    /// Returns the number of cycles to steal (1-4).
+    pub fn calculate_dmc_dma_cycles(
+        cpu_is_writing: bool,
+        cpu_is_halted: bool,
+        oam_dma_active: bool,
+    ) -> u8 {
+        if cpu_is_halted && !oam_dma_active {
+            // CPU already halted (rare case) - minimal overhead
+            1
+        } else if oam_dma_active {
+            // During OAM DMA - wait for current RMW pair
+            2
+        } else if cpu_is_writing {
+            // CPU is writing - cannot interrupt, must wait for write to complete
+            4
+        } else {
+            // CPU is reading - standard 3-cycle steal
+            3
+        }
     }
 
     /// Update the CPU cycle parity tracking
@@ -285,9 +321,39 @@ mod tests {
     #[test]
     fn test_start_dmc_dma_activates_controller() {
         let mut controller = create_controller();
-        controller.start_dmc_dma(0xC000);
+        controller.start_dmc_dma(0xC000, 4);
         assert!(controller.is_active());
         assert!(controller.is_dmc_dma_active());
+    }
+
+    #[test]
+    fn test_calculate_dmc_dma_cycles_cpu_writing() {
+        // CPU is writing - 4 cycles
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, false);
+        assert_eq!(cycles, 4);
+    }
+
+    #[test]
+    fn test_calculate_dmc_dma_cycles_cpu_reading() {
+        // CPU is reading - 3 cycles
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, false);
+        assert_eq!(cycles, 3);
+    }
+
+    #[test]
+    fn test_calculate_dmc_dma_cycles_oam_dma_active() {
+        // OAM DMA is active - 2 cycles (regardless of CPU read/write)
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, true);
+        assert_eq!(cycles, 2);
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, true);
+        assert_eq!(cycles, 2);
+    }
+
+    #[test]
+    fn test_calculate_dmc_dma_cycles_cpu_halted() {
+        // CPU is halted (not OAM DMA) - 1 cycle
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, true, false);
+        assert_eq!(cycles, 1);
     }
 
     #[test]
@@ -309,7 +375,7 @@ mod tests {
     fn test_reset_clears_dma_state() {
         let mut controller = create_controller();
         controller.start_oam_dma(0x02);
-        controller.start_dmc_dma(0xC000);
+        controller.start_dmc_dma(0xC000, 4);
         assert!(controller.is_active());
 
         controller.reset();
