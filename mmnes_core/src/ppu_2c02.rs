@@ -1,4 +1,4 @@
-// Authorship: Human 70% | Claude 30%
+// Authorship: Human 60% | Claude 40%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -143,6 +143,16 @@ enum StatusFlag {
     SpriteOverflow = 0x20,
     Sprite0Hit = 0x40,
     VBlank = 0x80,
+}
+
+/// Public enum for test access to PPU flags (Phase 5.4: mid-scanline effects)
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub enum PpuFlagType {
+    ShowBackground,
+    ShowSprites,
+    VBlank,
+    Sprite0Hit,
 }
 
 #[derive(Debug, PartialEq)]
@@ -372,6 +382,28 @@ pub struct Ppu2c02 {
     sprite0_hit_x: u16,         // X position (dot) where sprite 0 hit should be triggered
     // Partial scanline rendering support
     last_rendered_dot: u16,     // Last dot that was rendered (0-255 for visible, 256+ for hblank)
+
+    // =========================================================================
+    // Background shift registers for dot-level rendering (Phase 5)
+    // =========================================================================
+    // Two 16-bit shift registers hold pattern table data for 2 tiles (current + next)
+    // The upper 8 bits hold the next tile, lower 8 bits hold the current tile
+    bg_shift_pattern_lo: u16,   // Pattern table low plane (bit 0 of color)
+    bg_shift_pattern_hi: u16,   // Pattern table high plane (bit 1 of color)
+
+    // Two 8-bit shift registers hold palette attributes for 2 tiles
+    // These contain the same value for all 8 pixels of a tile
+    bg_shift_attrib_lo: u16,    // Attribute bit 0 (bit 2 of color)
+    bg_shift_attrib_hi: u16,    // Attribute bit 1 (bit 3 of color)
+
+    // Latches for next tile data (loaded during fetch cycles, transferred to shift registers)
+    bg_next_tile_id: u8,        // Nametable byte (tile ID)
+    bg_next_tile_attrib: u8,    // Attribute byte (2-bit palette selection)
+    bg_next_tile_lo: u8,        // Pattern table low byte
+    bg_next_tile_hi: u8,        // Pattern table high byte
+
+    // Dot-level rendering mode flag
+    dot_level_rendering: bool,  // true = per-dot rendering, false = scanline rendering (fallback)
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -961,6 +993,17 @@ impl Ppu2c02 {
             sprite0_hit_x: 0,
             // Partial scanline rendering
             last_rendered_dot: 0,
+            // Background shift registers (Phase 5)
+            bg_shift_pattern_lo: 0,
+            bg_shift_pattern_hi: 0,
+            bg_shift_attrib_lo: 0,
+            bg_shift_attrib_hi: 0,
+            bg_next_tile_id: 0,
+            bg_next_tile_attrib: 0,
+            bg_next_tile_lo: 0,
+            bg_next_tile_hi: 0,
+            // Start with scanline rendering (can switch to dot-level later)
+            dot_level_rendering: true,
         };
 
         ppu.recompute_timing();
@@ -1046,6 +1089,92 @@ impl Ppu2c02 {
         self.get_flag(Status(Sprite0Hit))
     }
 
+    // =========================================================================
+    // Shift Register Test Helpers (Phase 5 - Dot-Level Rendering)
+    // =========================================================================
+
+    /// Test helper: get background pattern shift register (low plane)
+    #[cfg(test)]
+    pub fn get_bg_shift_pattern_lo(&self) -> u16 {
+        self.bg_shift_pattern_lo
+    }
+
+    /// Test helper: get background pattern shift register (high plane)
+    #[cfg(test)]
+    pub fn get_bg_shift_pattern_hi(&self) -> u16 {
+        self.bg_shift_pattern_hi
+    }
+
+    /// Test helper: get background attribute shift register (low plane)
+    #[cfg(test)]
+    pub fn get_bg_shift_attrib_lo(&self) -> u16 {
+        self.bg_shift_attrib_lo
+    }
+
+    /// Test helper: get background attribute shift register (high plane)
+    #[cfg(test)]
+    pub fn get_bg_shift_attrib_hi(&self) -> u16 {
+        self.bg_shift_attrib_hi
+    }
+
+    /// Test helper: set background pattern shift register (low plane)
+    #[cfg(test)]
+    pub fn set_bg_shift_pattern_lo(&mut self, value: u16) {
+        self.bg_shift_pattern_lo = value;
+    }
+
+    /// Test helper: set background pattern shift register (high plane)
+    #[cfg(test)]
+    pub fn set_bg_shift_pattern_hi(&mut self, value: u16) {
+        self.bg_shift_pattern_hi = value;
+    }
+
+    /// Test helper: set background attribute shift register (low plane)
+    #[cfg(test)]
+    pub fn set_bg_shift_attrib_lo(&mut self, value: u16) {
+        self.bg_shift_attrib_lo = value;
+    }
+
+    /// Test helper: set background attribute shift register (high plane)
+    #[cfg(test)]
+    pub fn set_bg_shift_attrib_hi(&mut self, value: u16) {
+        self.bg_shift_attrib_hi = value;
+    }
+
+    /// Test helper: set next tile pattern low byte
+    #[cfg(test)]
+    pub fn set_bg_next_tile_lo(&mut self, value: u8) {
+        self.bg_next_tile_lo = value;
+    }
+
+    /// Test helper: set next tile pattern high byte
+    #[cfg(test)]
+    pub fn set_bg_next_tile_hi(&mut self, value: u8) {
+        self.bg_next_tile_hi = value;
+    }
+
+    /// Test helper: set next tile attribute
+    #[cfg(test)]
+    pub fn set_bg_next_tile_attrib(&mut self, value: u8) {
+        self.bg_next_tile_attrib = value;
+    }
+
+    /// Test helper: set fine X scroll
+    #[cfg(test)]
+    pub fn set_fine_x(&mut self, value: u8) {
+        self.x = value & 0x07;
+    }
+
+    /// Test helper: get flag value for testing mid-scanline effects
+    #[cfg(test)]
+    pub fn get_flag_for_test(&self, flag_type: PpuFlagType) -> bool {
+        match flag_type {
+            PpuFlagType::ShowBackground => self.get_flag(Mask(ShowBackground)),
+            PpuFlagType::ShowSprites => self.get_flag(Mask(ShowSprites)),
+            PpuFlagType::VBlank => self.get_flag(Status(VBlank)),
+            PpuFlagType::Sprite0Hit => self.get_flag(Status(Sprite0Hit)),
+        }
+    }
 
     fn get_flag(&self, flag: PpuFlag) -> bool {
         match flag {
@@ -1388,6 +1517,397 @@ impl Ppu2c02 {
         let mut v = *self.v.borrow();
         v = (v & !0x7BE0) | (self.t & 0x7BE0);
         *self.v.borrow_mut() = v;
+    }
+
+    // =========================================================================
+    // Background shift register operations (Phase 5: Dot-level rendering)
+    // =========================================================================
+
+    /// Shift all background shift registers left by 1 bit.
+    /// Called every dot during visible pixels (dots 1-256) and prefetch (dots 321-336).
+    pub(crate) fn bg_shift_registers(&mut self) {
+        self.bg_shift_pattern_lo <<= 1;
+        self.bg_shift_pattern_hi <<= 1;
+        self.bg_shift_attrib_lo <<= 1;
+        self.bg_shift_attrib_hi <<= 1;
+    }
+
+    /// Load the next tile data into the lower 8 bits of the shift registers.
+    /// Called every 8 dots when the shift registers need to be refilled.
+    /// Note: Data is loaded into lower bits, then shifted left over the next 8 dots.
+    pub(crate) fn bg_load_shift_registers(&mut self) {
+        // Load pattern data into lower 8 bits
+        self.bg_shift_pattern_lo = (self.bg_shift_pattern_lo & 0xFF00) | (self.bg_next_tile_lo as u16);
+        self.bg_shift_pattern_hi = (self.bg_shift_pattern_hi & 0xFF00) | (self.bg_next_tile_hi as u16);
+
+        // Attribute bits are the same for all 8 pixels of a tile
+        // Bit 0 of attribute goes to all bits of attrib_lo lower byte
+        // Bit 1 of attribute goes to all bits of attrib_hi lower byte
+        let attrib_lo_fill: u16 = if self.bg_next_tile_attrib & 0x01 != 0 { 0x00FF } else { 0x0000 };
+        let attrib_hi_fill: u16 = if self.bg_next_tile_attrib & 0x02 != 0 { 0x00FF } else { 0x0000 };
+        self.bg_shift_attrib_lo = (self.bg_shift_attrib_lo & 0xFF00) | attrib_lo_fill;
+        self.bg_shift_attrib_hi = (self.bg_shift_attrib_hi & 0xFF00) | attrib_hi_fill;
+    }
+
+    /// Get the background pixel color (0-3) at the current fine X position.
+    /// The fine X scroll selects which bit of the shift registers to use.
+    pub(crate) fn bg_get_pixel_color(&self) -> u8 {
+        // Fine X scroll determines which bit to select (0-7)
+        // We select from the high bits of the 16-bit registers
+        // bit_select = 15 - fine_x (so fine_x=0 selects bit 15, fine_x=7 selects bit 8)
+        let bit_select = 15 - self.x;
+        let bit_mask = 1u16 << bit_select;
+
+        let p0 = ((self.bg_shift_pattern_lo & bit_mask) >> bit_select) as u8;
+        let p1 = ((self.bg_shift_pattern_hi & bit_mask) >> bit_select) as u8;
+        let a0 = ((self.bg_shift_attrib_lo & bit_mask) >> bit_select) as u8;
+        let a1 = ((self.bg_shift_attrib_hi & bit_mask) >> bit_select) as u8;
+
+        // Combine: palette_index = (attribute << 2) | pattern
+        (a1 << 3) | (a0 << 2) | (p1 << 1) | p0
+    }
+
+    /// Fetch the next tile ID from the nametable.
+    /// Address = 0x2000 | (v & 0x0FFF)
+    fn bg_fetch_tile_id(&mut self) -> Result<(), PpuError> {
+        let v = *self.v.borrow();
+        let addr = 0x2000 | (v & 0x0FFF);
+        self.bg_next_tile_id = self.bus.read_byte(addr)?;
+        Ok(())
+    }
+
+    /// Fetch the attribute byte for the current tile.
+    /// Address = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07)
+    fn bg_fetch_attribute(&mut self) -> Result<(), PpuError> {
+        let v = *self.v.borrow();
+        let addr = 0x23C0 | (v & 0x0C00) | ((v >> 4) & 0x38) | ((v >> 2) & 0x07);
+        let attrib_byte = self.bus.read_byte(addr)?;
+
+        // The attribute byte contains 4 2-bit palette selections for a 4x4 tile area
+        // We need to extract the correct 2 bits based on coarse X and coarse Y
+        let coarse_x = v & 0x001F;
+        let coarse_y = (v >> 5) & 0x001F;
+
+        // Determine which quadrant (2x2 tiles) we're in
+        // bit 1 of coarse_x and coarse_y determine the shift
+        let shift = ((coarse_y & 0x02) << 1) | (coarse_x & 0x02);
+        self.bg_next_tile_attrib = (attrib_byte >> shift) & 0x03;
+        Ok(())
+    }
+
+    /// Fetch the low byte of the pattern table for the current tile.
+    /// Address = (control.background_pattern << 12) | (tile_id << 4) | fine_y
+    fn bg_fetch_pattern_lo(&mut self) -> Result<(), PpuError> {
+        let v = *self.v.borrow();
+        let fine_y = (v >> 12) & 0x07;
+        let pattern_table = if self.get_flag(Control(BackgroundPatternTableAddr)) { 0x1000u16 } else { 0x0000u16 };
+        let addr = pattern_table | ((self.bg_next_tile_id as u16) << 4) | fine_y;
+        self.bg_next_tile_lo = self.bus.read_byte(addr)?;
+        Ok(())
+    }
+
+    /// Fetch the high byte of the pattern table for the current tile.
+    /// Address = (control.background_pattern << 12) | (tile_id << 4) | fine_y + 8
+    fn bg_fetch_pattern_hi(&mut self) -> Result<(), PpuError> {
+        let v = *self.v.borrow();
+        let fine_y = (v >> 12) & 0x07;
+        let pattern_table = if self.get_flag(Control(BackgroundPatternTableAddr)) { 0x1000u16 } else { 0x0000u16 };
+        let addr = pattern_table | ((self.bg_next_tile_id as u16) << 4) | fine_y | 0x08;
+        self.bg_next_tile_hi = self.bus.read_byte(addr)?;
+        Ok(())
+    }
+
+    /// Increment the coarse X position in the v register.
+    /// Called at the end of each 8-dot tile fetch cycle.
+    fn bg_increment_coarse_x(&mut self) {
+        let mut v = *self.v.borrow();
+        if (v & 0x001F) == 31 {
+            // Wrap around and switch horizontal nametable
+            v = (v & !0x001F) ^ 0x0400;
+        } else {
+            v += 1;
+        }
+        *self.v.borrow_mut() = v;
+    }
+
+    /// Increment the fine Y and coarse Y position in the v register.
+    /// Called at the end of each scanline (dot 256).
+    fn bg_increment_y(&mut self) {
+        let mut v = *self.v.borrow();
+        if (v & 0x7000) != 0x7000 {
+            // Fine Y < 7, just increment
+            v += 0x1000;
+        } else {
+            // Fine Y = 7, reset to 0 and increment coarse Y
+            v &= !0x7000;
+            let mut coarse_y = (v & 0x03E0) >> 5;
+            if coarse_y == 29 {
+                // Row 29 is the last row of tiles, wrap to 0 and switch vertical nametable
+                coarse_y = 0;
+                v ^= 0x0800;
+            } else if coarse_y == 31 {
+                // Coarse Y = 31 wraps to 0 but doesn't switch nametable
+                coarse_y = 0;
+            } else {
+                coarse_y += 1;
+            }
+            v = (v & !0x03E0) | (coarse_y << 5);
+        }
+        *self.v.borrow_mut() = v;
+    }
+
+    /// Render a single dot for the current scanline (Phase 5: Dot-level rendering).
+    ///
+    /// This method implements per-dot pixel output and tile fetching.
+    /// It is called for each dot during visible scanlines (0-239) when dot_level_rendering is enabled.
+    ///
+    /// Timing overview for dots 1-256:
+    /// - Each dot: Shift registers shift, output one pixel
+    /// - Every 8 dots (at dots 9, 17, 25, ...): Load new tile into shift registers
+    /// - Tile fetch cycle (dots 1-8 of each tile):
+    ///   - Dots 1-2: Fetch nametable byte
+    ///   - Dots 3-4: Fetch attribute byte
+    ///   - Dots 5-6: Fetch pattern low byte
+    ///   - Dots 7-8: Fetch pattern high byte, then load shift registers
+    ///
+    /// Mid-scanline effects (Phase 5.4):
+    /// - PPUMASK flags are read fresh at each dot for pixel output
+    /// - Scroll register changes affect tile fetches immediately
+    /// - Sprite 0 hit is evaluated with current flag state
+    fn render_dot(&mut self, scanline: u16, dot: u16, _show_background: bool, _show_sprites: bool) -> Result<(), PpuError> {
+        // Read PPUMASK flags fresh at each dot for mid-scanline effects
+        let show_background = self.get_flag(Mask(ShowBackground));
+        let show_sprites = self.get_flag(Mask(ShowSprites));
+        // Dots 1-256: Visible pixel output
+        if dot <= 256 {
+            let pixel_x = (dot - 1) as u8;  // dot 1 = pixel 0, dot 256 = pixel 255
+
+            // First dot of scanline: Initialize shift registers with first two tiles
+            if dot == 1 {
+                // Reset shift registers and pre-fetch first two tiles
+                self.bg_shift_pattern_lo = 0;
+                self.bg_shift_pattern_hi = 0;
+                self.bg_shift_attrib_lo = 0;
+                self.bg_shift_attrib_hi = 0;
+
+                // Fetch and load first tile
+                self.bg_fetch_tile_id()?;
+                self.bg_fetch_attribute()?;
+                self.bg_fetch_pattern_lo()?;
+                self.bg_fetch_pattern_hi()?;
+                self.bg_load_shift_registers();
+                self.bg_increment_coarse_x();
+
+                // Fetch second tile into latches
+                self.bg_fetch_tile_id()?;
+                self.bg_fetch_attribute()?;
+                self.bg_fetch_pattern_lo()?;
+                self.bg_fetch_pattern_hi()?;
+
+                // Do sprite evaluation for this scanline
+                self.do_sprite_evaluation(scanline)?;
+
+                // Render sprites for comparison (still using scanline-based for now)
+                if show_sprites {
+                    self.render_sprites(scanline)?;
+                }
+            }
+
+            // Output pixel from shift registers
+            let bg_pixel = if show_background {
+                self.bg_get_pixel_color()
+            } else {
+                0
+            };
+
+            // Get background color from palette
+            let bg_color = self.get_palette_color(bg_pixel, false)?;
+
+            // Check sprite pixel at this position
+            let sprite_pixel = &self.sprites_pixels_line.rgba_pixels[pixel_x as usize];
+            let sprite_color_index = self.get_sprite_pixel_color_index(pixel_x);
+
+            // Pixel priority logic
+            let (final_r, final_g, final_b) = if sprite_color_index != 0 && show_sprites {
+                // Sprite is non-transparent
+                if bg_pixel == 0 {
+                    // Background is transparent, show sprite
+                    (sprite_pixel.r, sprite_pixel.g, sprite_pixel.b)
+                } else if sprite_pixel.priority == SpritePriority::Front {
+                    // Sprite has front priority, show sprite
+                    (sprite_pixel.r, sprite_pixel.g, sprite_pixel.b)
+                } else {
+                    // Sprite has back priority and BG is non-transparent, show BG
+                    bg_color
+                }
+            } else {
+                // Sprite is transparent or sprites disabled, show background
+                bg_color
+            };
+
+            // Check for sprite 0 hit
+            if !self.get_flag(Status(Sprite0Hit))
+                && show_background
+                && show_sprites
+                && bg_pixel != 0
+                && sprite_color_index != 0
+            {
+                // Check if this is sprite 0
+                if self.is_sprite_0_at_x(pixel_x) {
+                    // Sprite 0 hit! But don't set on leftmost 8 pixels if clipping
+                    let clip_left = !self.get_flag(Mask(MaskFlag::ShowLeftmostBackground))
+                        || !self.get_flag(Mask(MaskFlag::ShowLeftmostSprites));
+                    if !(clip_left && pixel_x < 8) && pixel_x != 255 {
+                        self.set_flag(Status(Sprite0Hit), true);
+                    }
+                }
+            }
+
+            // Write pixel to frame
+            self.renderer.borrow_mut().frame_as_mut().set_pixel(
+                pixel_x,
+                scanline as u8,
+                (final_r, final_g, final_b),
+            );
+
+            // Shift registers shift every dot
+            self.bg_shift_registers();
+
+            // Every 8 dots: Load new tile data and increment coarse X
+            if dot % 8 == 0 && dot < 256 {
+                self.bg_load_shift_registers();
+                self.bg_increment_coarse_x();
+
+                // Fetch next tile into latches
+                self.bg_fetch_tile_id()?;
+                self.bg_fetch_attribute()?;
+                self.bg_fetch_pattern_lo()?;
+                self.bg_fetch_pattern_hi()?;
+            }
+
+            // Dot 256: Increment Y
+            if dot == 256 {
+                self.bg_increment_y();
+            }
+        }
+
+        // Dot 257: Copy horizontal bits from t to v, reset OAMADDR
+        if dot == 257 {
+            self.put_horizontal_t_into_v();
+            self.register.borrow_mut().oam_addr = 0;
+        }
+
+        // Dots 257-320: Sprite tile fetches
+        // 8 sprites × 8 cycles each = 64 cycles
+        // Each sprite: garbage NT (2), garbage AT (2), pattern lo (2), pattern hi (2)
+        // These fetches are important for MMC2/MMC4 mappers
+        if dot >= 257 && dot <= 320 {
+            // Note: Actual sprite pattern fetches happen here on real hardware
+            // For now, we do sprite rendering at dot 1 (atomic), but we still
+            // perform the fetches for mapper compatibility if needed
+            // The sprite_cycle within the 64-dot window determines which sprite
+            let _sprite_cycle = dot - 257;
+            // Future: implement per-sprite pattern fetches here
+        }
+
+        // Dots 321-336: Prefetch first two tiles of next scanline
+        // Same fetch pattern as dots 1-16
+        if dot >= 321 && dot <= 336 {
+            let prefetch_dot = dot - 320;  // Maps 321-336 to 1-16
+
+            // Shift registers shift every dot during prefetch
+            self.bg_shift_registers();
+
+            // Every 8 dots: complete a tile fetch cycle
+            if prefetch_dot == 8 {
+                // First tile complete - load into shift registers
+                self.bg_load_shift_registers();
+                self.bg_increment_coarse_x();
+
+                // Start fetching second tile
+                self.bg_fetch_tile_id()?;
+                self.bg_fetch_attribute()?;
+                self.bg_fetch_pattern_lo()?;
+                self.bg_fetch_pattern_hi()?;
+            } else if prefetch_dot == 16 {
+                // Second tile complete - load into shift registers
+                self.bg_load_shift_registers();
+                self.bg_increment_coarse_x();
+            } else if prefetch_dot == 1 {
+                // Start first tile fetch
+                self.bg_fetch_tile_id()?;
+                self.bg_fetch_attribute()?;
+                self.bg_fetch_pattern_lo()?;
+                self.bg_fetch_pattern_hi()?;
+            }
+        }
+
+        // Dots 337-340: Dummy nametable fetches (2 fetches × 2 cycles each)
+        // These are unused fetches that just read the nametable
+        if dot == 337 || dot == 339 {
+            let _ = self.bg_fetch_tile_id();  // Dummy fetch, result unused
+        }
+
+        // Mark scanline as rendered after dot 256
+        if dot == 256 && !self.scanline_rendered {
+            self.scanline_rendered = true;
+            self.last_rendered_dot = VISIBLE_DOTS;
+            self.state = PpuState::Rendering(scanline + 1);
+        }
+
+        Ok(())
+    }
+
+    /// Get the color index for a sprite pixel at the given X position.
+    /// Returns 0 if transparent, or the palette index (1-3) if opaque.
+    fn get_sprite_pixel_color_index(&self, x: u8) -> u8 {
+        let pixel = &self.sprites_pixels_line.rgba_pixels[x as usize];
+        // Check if sprite pixel is transparent (priority == None means no sprite)
+        if pixel.priority == SpritePriority::None {
+            0
+        } else {
+            // Return non-zero to indicate opaque sprite
+            // The actual color is already stored in the pixel
+            1
+        }
+    }
+
+    /// Check if sprite 0 is at the given X position.
+    fn is_sprite_0_at_x(&self, x: u8) -> bool {
+        // Check secondary OAM for sprite 0
+        for i in 0..self.oam.sprite_count {
+            let sprite = &self.oam.secondary[i];
+            if sprite.sprite0 && x >= sprite.x && x < sprite.x.saturating_add(SPRITE_WIDTH) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Get a color from the palette for dot-level rendering.
+    /// Returns (r, g, b) tuple.
+    ///
+    /// The color_index is a 4-bit value:
+    /// - bits 0-1: pattern table color (0-3)
+    /// - bits 2-3: palette selection (0-3)
+    ///
+    /// For background: palette address = 0x3F00 + (palette << 2) + pattern_color
+    /// Color 0 always uses the universal background color at 0x3F00.
+    fn get_palette_color(&self, color_index: u8, _is_sprite: bool) -> Result<(u8, u8, u8), PpuError> {
+        let pattern_color = color_index & 0x03;
+        let palette = (color_index >> 2) & 0x03;
+
+        let palette_addr = if pattern_color == 0 {
+            // Color 0 is always the universal background color
+            0x3F00u16
+        } else {
+            // Background palette: 0x3F00 + (palette * 4) + pattern_color
+            0x3F00 + ((palette as u16) << 2) + (pattern_color as u16)
+        };
+
+        let nes_color_index = self.bus.read_byte(palette_addr)? & 0x3F;
+        let (r, g, b, _a) = Palette2C02::rgba_opaque(nes_color_index);
+        Ok((r, g, b))
     }
 
     fn coarse_x_increment(&self, name_table_addr: u16, coarse_x: u8) -> (u16, u8) {
@@ -1772,34 +2292,38 @@ impl Ppu2c02 {
                     self.state = PpuState::VBlank(scanline + 1);
                 }
 
-                // Visible scanlines (0-239): Render at start of scanline if not yet rendered
-                (scanline, dot) if scanline <= self.last_visible_scanline() && !self.scanline_rendered && dot >= 1 => {
+                // Visible scanlines (0-239): Handle per-dot or scanline-based rendering
+                (scanline, dot) if scanline <= self.last_visible_scanline() && dot >= 1 => {
                     let show_background = self.get_flag(Mask(ShowBackground));
                     let show_sprites = self.get_flag(Mask(ShowSprites));
+                    let rendering_enabled = show_background || show_sprites;
 
-                    // Background tile fetches occur when either background OR sprites are enabled.
-                    // This clocks the background shift registers even when only sprites are shown.
-                    // The actual display of background pixels is controlled separately in write_pixels_lines_to_frame().
-                    if show_background || show_sprites {
-                        self.render_background(scanline)?;
+                    if self.dot_level_rendering && rendering_enabled {
+                        // Per-dot rendering mode (Phase 5)
+                        self.render_dot(scanline, dot, show_background, show_sprites)?;
+                    } else if !self.scanline_rendered && dot >= 1 {
+                        // Fallback: Scanline-based rendering (original behavior)
+                        if rendering_enabled {
+                            self.render_background(scanline)?;
+                        }
+
+                        if show_sprites {
+                            self.render_sprites(scanline)?;
+                        }
+
+                        if rendering_enabled {
+                            self.do_sprite_evaluation(scanline + 1)?;
+                            self.put_horizontal_t_into_v();
+                        } else {
+                            self.oam.clear_secondary();
+                        }
+
+                        self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
+                        self.register.borrow_mut().oam_addr = 0;
+                        self.scanline_rendered = true;
+                        self.last_rendered_dot = VISIBLE_DOTS;
+                        self.state = PpuState::Rendering(scanline + 1);
                     }
-
-                    if show_sprites {
-                        self.render_sprites(scanline)?;
-                    }
-
-                    if show_background || show_sprites {
-                        self.do_sprite_evaluation(scanline + 1)?;
-                        self.put_horizontal_t_into_v();
-                    } else {
-                        self.oam.clear_secondary();
-                    }
-
-                    self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
-                    self.register.borrow_mut().oam_addr = 0;
-                    self.scanline_rendered = true;
-                    self.last_rendered_dot = VISIBLE_DOTS;  // Rendered all visible pixels
-                    self.state = PpuState::Rendering(scanline + 1);
                 }
 
                 // Post-render scanline (240): Just update state

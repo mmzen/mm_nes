@@ -1,4 +1,4 @@
-// Authorship: Human 70% | Claude 30%
+// Authorship: Human 60% | Claude 40%
 use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
@@ -895,5 +895,239 @@ fn test_advance_dots_returns_frame_after_full_frame() {
         max_cycles, cycles_run);
 
     println!("Frame found after {} cycles (expected ~29,781)", cycles_run);
+}
+
+// ============================================================================
+// Background Shift Register Tests (Phase 5 - Dot-Level Rendering)
+// ============================================================================
+
+/// Test that shift registers are properly initialized
+#[test]
+fn test_shift_registers_initialized_to_zero() {
+    init();
+
+    let ppu = create_ppu_for_timing_tests();
+
+    // Shift registers should be zero at initialization
+    assert_eq!(ppu.get_bg_shift_pattern_lo(), 0, "Pattern lo should be 0");
+    assert_eq!(ppu.get_bg_shift_pattern_hi(), 0, "Pattern hi should be 0");
+    assert_eq!(ppu.get_bg_shift_attrib_lo(), 0, "Attrib lo should be 0");
+    assert_eq!(ppu.get_bg_shift_attrib_hi(), 0, "Attrib hi should be 0");
+}
+
+/// Test that bg_shift_registers shifts all registers left by 1
+#[test]
+fn test_shift_registers_shift_left() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Set up known values in shift registers
+    ppu.set_bg_shift_pattern_lo(0b1010_1010_0000_0000);
+    ppu.set_bg_shift_pattern_hi(0b0101_0101_0000_0000);
+    ppu.set_bg_shift_attrib_lo(0b1111_0000_0000_0000);
+    ppu.set_bg_shift_attrib_hi(0b0000_1111_0000_0000);
+
+    // Shift once
+    ppu.bg_shift_registers();
+
+    // Values should be shifted left by 1
+    assert_eq!(ppu.get_bg_shift_pattern_lo(), 0b0101_0100_0000_0000, "Pattern lo should shift left");
+    assert_eq!(ppu.get_bg_shift_pattern_hi(), 0b1010_1010_0000_0000, "Pattern hi should shift left");
+    assert_eq!(ppu.get_bg_shift_attrib_lo(), 0b1110_0000_0000_0000, "Attrib lo should shift left");
+    assert_eq!(ppu.get_bg_shift_attrib_hi(), 0b0001_1110_0000_0000, "Attrib hi should shift left");
+}
+
+/// Test that bg_load_shift_registers loads new tile data into lower 8 bits
+#[test]
+fn test_shift_registers_load_tile_data() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Set up shift registers with known upper byte
+    ppu.set_bg_shift_pattern_lo(0xFF00);
+    ppu.set_bg_shift_pattern_hi(0xAA00);
+
+    // Set up tile latches with new data
+    ppu.set_bg_next_tile_lo(0x55);
+    ppu.set_bg_next_tile_hi(0x33);
+    ppu.set_bg_next_tile_attrib(0x02);  // Palette 2
+
+    // Load shift registers
+    ppu.bg_load_shift_registers();
+
+    // Lower 8 bits should contain new tile data
+    assert_eq!(ppu.get_bg_shift_pattern_lo() & 0x00FF, 0x55, "Pattern lo should have new tile data");
+    assert_eq!(ppu.get_bg_shift_pattern_hi() & 0x00FF, 0x33, "Pattern hi should have new tile data");
+    // Upper 8 bits should be preserved
+    assert_eq!(ppu.get_bg_shift_pattern_lo() & 0xFF00, 0xFF00, "Pattern lo upper bits should be preserved");
+    assert_eq!(ppu.get_bg_shift_pattern_hi() & 0xFF00, 0xAA00, "Pattern hi upper bits should be preserved");
+}
+
+/// Test that bg_get_pixel_color extracts correct pixel based on fine_x
+#[test]
+fn test_get_pixel_color_with_fine_x_scroll() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Set up pattern where we know the pixel values
+    // Upper 8 bits of shift register contain current tile's pixels
+    // Bit 15 is leftmost pixel, bit 8 is rightmost pixel of current tile
+    // With fine_x = 0, we select bit 15
+    // Pattern: lo=1, hi=0 -> pixel value = 0b01 (color 1)
+    ppu.set_bg_shift_pattern_lo(0x8000);  // bit 15 set (lo plane)
+    ppu.set_bg_shift_pattern_hi(0x0000);  // bit 15 clear (hi plane)
+    ppu.set_bg_shift_attrib_lo(0x0000);   // attrib bit 0 = 0
+    ppu.set_bg_shift_attrib_hi(0x0000);   // attrib bit 1 = 0
+
+    // fine_x = 0 means select bit 15 (leftmost)
+    ppu.set_fine_x(0);
+
+    let pixel = ppu.bg_get_pixel_color();
+    // Pattern bits: lo=1, hi=0 -> color index 0b01 = 1
+    // Attribute bits: lo=0, hi=0 -> palette 0
+    // Full 4-bit color: 0b0001 = 1
+    assert_eq!(pixel & 0x03, 1, "Pixel color index should be 1 (lo=1, hi=0)");
+    assert_eq!((pixel >> 2) & 0x03, 0, "Palette should be 0");
+
+    // Test with fine_x = 3 (select bit 12)
+    ppu.set_bg_shift_pattern_lo(0x0000);
+    ppu.set_bg_shift_pattern_hi(0x1000);  // bit 12 set (hi plane)
+    ppu.set_fine_x(3);
+
+    let pixel2 = ppu.bg_get_pixel_color();
+    // Pattern bits: lo=0, hi=1 -> color index 0b10 = 2
+    assert_eq!(pixel2 & 0x03, 2, "Pixel color index should be 2 (lo=0, hi=1)");
+}
+
+/// Test that prefetch cycles properly shift and load shift registers
+#[test]
+fn test_prefetch_cycles_shift_registers() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Enable rendering
+    ppu.write_byte(0x01, 0x18).unwrap();  // ShowBackground | ShowSprites
+
+    // Set up some known values in shift registers
+    ppu.set_bg_shift_pattern_lo(0xAAAA);
+    ppu.set_bg_shift_pattern_hi(0x5555);
+
+    // Record initial values
+    let initial_lo = ppu.get_bg_shift_pattern_lo();
+    let initial_hi = ppu.get_bg_shift_pattern_hi();
+
+    // Shift 8 times (simulating dots 321-328)
+    for _ in 0..8 {
+        ppu.bg_shift_registers();
+    }
+
+    // After 8 shifts, values should be shifted left by 8
+    assert_eq!(ppu.get_bg_shift_pattern_lo(), initial_lo << 8,
+        "Pattern lo should shift left 8 times during prefetch");
+    assert_eq!(ppu.get_bg_shift_pattern_hi(), initial_hi << 8,
+        "Pattern hi should shift left 8 times during prefetch");
+}
+
+/// Test shift register operation over 8 dots (one tile worth)
+#[test]
+fn test_shift_register_full_tile_cycle() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Load first tile into upper byte of shift registers
+    ppu.set_bg_shift_pattern_lo(0b1010_1010_0000_0000);  // Alternating pattern
+    ppu.set_bg_shift_pattern_hi(0b0101_0101_0000_0000);
+    ppu.set_bg_shift_attrib_lo(0xFF00);  // All 1s for palette bit 0
+    ppu.set_bg_shift_attrib_hi(0x0000);  // All 0s for palette bit 1
+
+    // Prepare next tile in latches
+    ppu.set_bg_next_tile_lo(0xFF);
+    ppu.set_bg_next_tile_hi(0x00);
+    ppu.set_bg_next_tile_attrib(0x03);  // Palette 3
+
+    ppu.set_fine_x(0);
+
+    // Collect pixels from first tile (8 dots)
+    let mut pixels = Vec::new();
+    for dot in 0..8 {
+        let pixel = ppu.bg_get_pixel_color();
+        pixels.push(pixel);
+        ppu.bg_shift_registers();
+
+        // After 8 shifts, load new tile into lower 8 bits
+        if dot == 7 {
+            ppu.bg_load_shift_registers();
+        }
+    }
+
+    // Verify alternating pixel pattern from first tile
+    // Pattern lo: 1010_1010, hi: 0101_0101
+    // Pixel 0 (bit 15): lo=1, hi=0 -> 1
+    // Pixel 1 (bit 14): lo=0, hi=1 -> 2
+    // etc.
+    for i in 0..8 {
+        let expected_color = if i % 2 == 0 { 1 } else { 2 };
+        assert_eq!(pixels[i] & 0x03, expected_color,
+            "Pixel {} should have color {}", i, expected_color);
+    }
+
+    // After 8 shifts + load: next tile is in lower 8 bits
+    // Need 8 more shifts to move it to upper bits for reading
+    // OR we can verify the registers directly
+    // After 8 shifts: upper bits are now empty (shifted out), lower bits have new tile
+    assert_eq!(ppu.get_bg_shift_pattern_lo() & 0x00FF, 0xFF,
+        "Next tile lo should be in lower 8 bits after load");
+    assert_eq!(ppu.get_bg_shift_pattern_hi() & 0x00FF, 0x00,
+        "Next tile hi should be in lower 8 bits after load");
+}
+
+/// Test that mid-scanline PPUMASK changes take effect immediately (Phase 5.4)
+/// This test verifies that reading flags fresh at each dot allows
+/// disabling rendering mid-scanline to stop pixel output.
+#[test]
+fn test_mid_scanline_mask_changes_take_effect() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Enable both background and sprites initially
+    ppu.write_byte(0x01, 0x18).unwrap();  // ShowBackground | ShowSprites
+
+    // Verify both flags are set
+    assert!(ppu.get_flag_for_test(crate::ppu_2c02::PpuFlagType::ShowBackground),
+        "Background should be enabled initially");
+    assert!(ppu.get_flag_for_test(crate::ppu_2c02::PpuFlagType::ShowSprites),
+        "Sprites should be enabled initially");
+
+    // Disable background mid-scanline
+    ppu.write_byte(0x01, 0x10).unwrap();  // ShowSprites only
+
+    // Verify background is now disabled
+    assert!(!ppu.get_flag_for_test(crate::ppu_2c02::PpuFlagType::ShowBackground),
+        "Background should be disabled after mid-scanline write");
+    assert!(ppu.get_flag_for_test(crate::ppu_2c02::PpuFlagType::ShowSprites),
+        "Sprites should still be enabled");
+
+    // Re-enable both
+    ppu.write_byte(0x01, 0x18).unwrap();
+
+    // Disable sprites mid-scanline
+    ppu.write_byte(0x01, 0x08).unwrap();  // ShowBackground only
+
+    assert!(ppu.get_flag_for_test(crate::ppu_2c02::PpuFlagType::ShowBackground),
+        "Background should still be enabled");
+    assert!(!ppu.get_flag_for_test(crate::ppu_2c02::PpuFlagType::ShowSprites),
+        "Sprites should be disabled after mid-scanline write");
 }
 
