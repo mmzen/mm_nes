@@ -91,4 +91,9 @@ pub trait APU: Configurable {
 
     /// Provide the DMC with a fetched sample byte (called after DMC DMA completes).
     fn provide_dmc_sample(&mut self, value: u8) -> Result<(), ApuError>;
+
+    /// Enable or disable external DMC DMA handling.
+    /// When enabled, the APU will NOT do internal DMA prefetch.
+    /// Instead, the scheduler should use needs_dmc_dma() and provide_dmc_sample().
+    fn set_external_dmc_dma(&mut self, enabled: bool);
 }

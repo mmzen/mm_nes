@@ -1,5 +1,6 @@
 // Authorship: Human 0% | Claude 100%
 // Updated: Fixed OAM DMA alignment logic (1 idle for even, 2 for odd), added comprehensive tests
+// Updated: Added DMC DMA bus conflict behavior - halt cycles read from CPU's conflict address
 //! DMA Controller for cycle-accurate OAM DMA and DMC DMA handling.
 //!
 //! This module provides a centralized DMA controller that manages both:
@@ -40,10 +41,13 @@ pub struct OamDmaState {
 pub struct DmcDmaState {
     /// Whether DMC DMA is currently pending/active
     pub active: bool,
-    /// Address to fetch from
+    /// Address to fetch the DMC sample from
     pub address: u16,
     /// Cycles remaining for this DMC DMA
     pub cycles_remaining: u8,
+    /// Address the CPU was accessing when DMC DMA started (for bus conflict reads)
+    /// During halt cycles, reads from this address cause side effects
+    pub conflict_address: Option<u16>,
 }
 
 /// DMA Controller managing OAM and DMC DMA operations
@@ -126,13 +130,15 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// # Arguments
     /// * `address` - The address to fetch the sample byte from
     /// * `cycles` - Number of cycles to steal (1-4), determined by caller based on CPU state
-    pub fn start_dmc_dma(&mut self, address: u16, cycles: u8) {
+    /// * `conflict_address` - The address the CPU was reading from (for halt cycle side effects)
+    pub fn start_dmc_dma(&mut self, address: u16, cycles: u8, conflict_address: Option<u16>) {
         // Clamp to valid range (1-4 cycles)
         let cycles = cycles.clamp(1, 4);
         self.dmc_dma = DmcDmaState {
             active: true,
             address,
             cycles_remaining: cycles,
+            conflict_address,
         };
     }
 
@@ -142,17 +148,30 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// what the CPU is currently doing.
     ///
     /// Returns the number of cycles to steal (1-4).
+    ///
+    /// DMC DMA cycle counts:
+    /// - 4 cycles: CPU is writing (halt, halt, halt, get)
+    /// - 3 cycles: CPU is reading (halt, halt, get)
+    /// - 2 cycles: During OAM DMA write phase (halt, get)
+    /// - 1 cycle:  During OAM DMA read phase or CPU already halted (get only)
     pub fn calculate_dmc_dma_cycles(
         cpu_is_writing: bool,
         cpu_is_halted: bool,
         oam_dma_active: bool,
+        oam_dma_on_read: bool,
     ) -> u8 {
-        if cpu_is_halted && !oam_dma_active {
+        if oam_dma_active {
+            // During OAM DMA - depends on read/write phase
+            if oam_dma_on_read {
+                // OAM DMA is reading - DMC can steal immediately after the read
+                1
+            } else {
+                // OAM DMA is writing - DMC must wait for write to complete
+                2
+            }
+        } else if cpu_is_halted {
             // CPU already halted (rare case) - minimal overhead
             1
-        } else if oam_dma_active {
-            // During OAM DMA - wait for current RMW pair
-            2
         } else if cpu_is_writing {
             // CPU is writing - cannot interrupt, must wait for write to complete
             4
@@ -160,6 +179,11 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             // CPU is reading - standard 3-cycle steal
             3
         }
+    }
+
+    /// Check if OAM DMA is currently on a read phase
+    pub fn is_oam_dma_on_read(&self) -> bool {
+        self.oam_dma.active && self.oam_dma.read_phase
     }
 
     /// Update the CPU cycle parity tracking
@@ -244,13 +268,22 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     }
 
     /// Execute one cycle of DMC DMA
+    ///
+    /// During DMC DMA, the CPU is halted by pulling RDY low. The sequence is:
+    /// - Halt cycles (all but last): Read from CPU's conflict address (causes side effects)
+    /// - Final cycle: Read from DMC sample address
+    ///
+    /// The conflict reads are important because they affect special registers:
+    /// - $2007: Increments PPU VRAM address
+    /// - $4015: Clears APU frame counter interrupt flag
+    /// - $4016/$4017: Clocks controller shift register
     fn step_dmc_dma(&mut self) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
 
         self.dmc_dma.cycles_remaining -= 1;
 
-        // On the last cycle, perform the actual read
         if self.dmc_dma.cycles_remaining == 0 {
+            // Final cycle: Perform the actual DMC sample read
             let address = self.dmc_dma.address;
             let value = self.bus.borrow().read_byte(address)?;
 
@@ -259,7 +292,15 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             result.dmc_dma_complete = Some(value);
 
             self.dmc_dma.active = false;
+        } else if let Some(conflict_addr) = self.dmc_dma.conflict_address {
+            // Halt cycle: Read from CPU's conflict address (causes side effects)
+            // This is the "bus conflict" behavior where the CPU's read keeps happening
+            let _ = self.bus.borrow().read_byte(conflict_addr)?;
+
+            result.address_accessed = Some(conflict_addr);
+            result.read_occurred = true;
         }
+        // If no conflict address, this is an idle halt cycle (no bus activity)
 
         Ok(result)
     }
@@ -321,7 +362,7 @@ mod tests {
     #[test]
     fn test_start_dmc_dma_activates_controller() {
         let mut controller = create_controller();
-        controller.start_dmc_dma(0xC000, 4);
+        controller.start_dmc_dma(0xC000, 4, None);
         assert!(controller.is_active());
         assert!(controller.is_dmc_dma_active());
     }
@@ -329,30 +370,39 @@ mod tests {
     #[test]
     fn test_calculate_dmc_dma_cycles_cpu_writing() {
         // CPU is writing - 4 cycles
-        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, false);
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, false, false);
         assert_eq!(cycles, 4);
     }
 
     #[test]
     fn test_calculate_dmc_dma_cycles_cpu_reading() {
         // CPU is reading - 3 cycles
-        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, false);
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, false, false);
         assert_eq!(cycles, 3);
     }
 
     #[test]
-    fn test_calculate_dmc_dma_cycles_oam_dma_active() {
-        // OAM DMA is active - 2 cycles (regardless of CPU read/write)
-        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, true);
+    fn test_calculate_dmc_dma_cycles_oam_dma_write_phase() {
+        // OAM DMA is active on write phase - 2 cycles
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, true, false);
         assert_eq!(cycles, 2);
-        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, true);
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, true, false);
         assert_eq!(cycles, 2);
+    }
+
+    #[test]
+    fn test_calculate_dmc_dma_cycles_oam_dma_read_phase() {
+        // OAM DMA is active on read phase - 1 cycle
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(true, false, true, true);
+        assert_eq!(cycles, 1);
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, false, true, true);
+        assert_eq!(cycles, 1);
     }
 
     #[test]
     fn test_calculate_dmc_dma_cycles_cpu_halted() {
         // CPU is halted (not OAM DMA) - 1 cycle
-        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, true, false);
+        let cycles = DmaController::<MockBusStub, MockDmaDeviceStub>::calculate_dmc_dma_cycles(false, true, false, false);
         assert_eq!(cycles, 1);
     }
 
@@ -375,7 +425,7 @@ mod tests {
     fn test_reset_clears_dma_state() {
         let mut controller = create_controller();
         controller.start_oam_dma(0x02);
-        controller.start_dmc_dma(0xC000, 4);
+        controller.start_dmc_dma(0xC000, 4, None);
         assert!(controller.is_active());
 
         controller.reset();
@@ -502,5 +552,52 @@ mod tests {
         // Now the first read
         let result = controller.step_cycle().unwrap();
         assert!(result.read_occurred, "Third cycle should be first read");
+    }
+
+    #[test]
+    fn test_dmc_dma_bus_conflict_reads_from_conflict_address() {
+        let mut controller = create_controller();
+
+        // Start DMC DMA with 4 cycles and a conflict address of 0x2007
+        controller.start_dmc_dma(0xC000, 4, Some(0x2007));
+
+        // Cycle 1, 2, 3: Halt cycles should read from conflict address (0x2007)
+        for i in 0..3 {
+            let result = controller.step_cycle().unwrap();
+            assert!(result.read_occurred, "Halt cycle {} should perform read", i);
+            assert_eq!(result.address_accessed, Some(0x2007), "Halt cycle {} should read from conflict address", i);
+            assert!(result.dmc_dma_complete.is_none(), "Halt cycle {} should not complete DMA", i);
+        }
+
+        // Cycle 4: Final cycle should read from DMC sample address (0xC000)
+        let result = controller.step_cycle().unwrap();
+        assert!(result.read_occurred, "Final cycle should perform read");
+        assert_eq!(result.address_accessed, Some(0xC000), "Final cycle should read from DMC address");
+        assert!(result.dmc_dma_complete.is_some(), "Final cycle should complete DMA");
+
+        // DMA should now be inactive
+        assert!(!controller.is_dmc_dma_active());
+    }
+
+    #[test]
+    fn test_dmc_dma_without_conflict_address_has_idle_halt_cycles() {
+        let mut controller = create_controller();
+
+        // Start DMC DMA with 4 cycles but no conflict address
+        controller.start_dmc_dma(0xC000, 4, None);
+
+        // Cycle 1, 2, 3: Halt cycles should be idle (no bus activity)
+        for i in 0..3 {
+            let result = controller.step_cycle().unwrap();
+            assert!(!result.read_occurred, "Halt cycle {} should NOT perform read without conflict address", i);
+            assert!(result.address_accessed.is_none(), "Halt cycle {} should have no address", i);
+            assert!(result.dmc_dma_complete.is_none(), "Halt cycle {} should not complete DMA", i);
+        }
+
+        // Cycle 4: Final cycle should read from DMC sample address
+        let result = controller.step_cycle().unwrap();
+        assert!(result.read_occurred, "Final cycle should perform read");
+        assert_eq!(result.address_accessed, Some(0xC000), "Final cycle should read from DMC address");
+        assert!(result.dmc_dma_complete.is_some(), "Final cycle should complete DMA");
     }
 }

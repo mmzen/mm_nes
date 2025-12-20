@@ -1,4 +1,4 @@
-// Authorship: Human 55% | Claude 45%
+// Authorship: Human 50% | Claude 50%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -1006,7 +1006,7 @@ impl Ppu2c02 {
             bg_next_tile_attrib: 0,
             bg_next_tile_lo: 0,
             bg_next_tile_hi: 0,
-            // Start with scanline rendering (can switch to dot-level later)
+            // Dot-level rendering for Phase 5 cycle accuracy
             dot_level_rendering: true,
             // Start on even frame (first frame is even)
             frame_odd: false,
@@ -1700,25 +1700,17 @@ impl Ppu2c02 {
         if dot <= 256 {
             let pixel_x = (dot - 1) as u8;  // dot 1 = pixel 0, dot 256 = pixel 255
 
-            // First dot of scanline: sprite evaluation (tiles already prefetched from dots 321-336)
+            // First dot of scanline: tile fetches only
+            // Sprite handling is done at the scanline level, not per-dot
             if dot == 1 {
                 // NOTE: Shift registers already contain tile data from prefetch cycles (dots 321-336)
                 // of the previous scanline. Do NOT reset them here.
 
                 // Start fetching tile 3 (tiles 1-2 are already in shift registers from prefetch)
-                // Fetch all data now (simplified), will be loaded at dot 8
                 self.bg_fetch_tile_id()?;
                 self.bg_fetch_attribute()?;
                 self.bg_fetch_pattern_lo()?;
                 self.bg_fetch_pattern_hi()?;
-
-                // Do sprite evaluation for this scanline
-                self.do_sprite_evaluation(scanline)?;
-
-                // Render sprites for comparison (still using scanline-based for now)
-                if show_sprites {
-                    self.render_sprites(scanline)?;
-                }
             }
 
             // Output pixel from shift registers
@@ -1736,9 +1728,13 @@ impl Ppu2c02 {
             let sprite_color_index = self.get_sprite_pixel_color_index(pixel_x);
 
             // Pixel priority logic
+            // Note: bg_pixel contains both pattern (bits 0-1) and attribute (bits 2-3).
+            // Background is transparent when the pattern bits (color index) are 0.
+            let bg_transparent = (bg_pixel & 0x03) == 0;
+
             let (final_r, final_g, final_b) = if sprite_color_index != 0 && show_sprites {
                 // Sprite is non-transparent
-                if bg_pixel == 0 {
+                if bg_transparent {
                     // Background is transparent, show sprite
                     (sprite_pixel.r, sprite_pixel.g, sprite_pixel.b)
                 } else if sprite_pixel.priority == SpritePriority::Front {
@@ -1754,10 +1750,11 @@ impl Ppu2c02 {
             };
 
             // Check for sprite 0 hit
+            // Sprite 0 hit requires both BG and sprite to be non-transparent
             if !self.get_flag(Status(Sprite0Hit))
                 && show_background
                 && show_sprites
-                && bg_pixel != 0
+                && !bg_transparent
                 && sprite_color_index != 0
             {
                 // Check if this is sprite 0
@@ -1805,17 +1802,14 @@ impl Ppu2c02 {
             self.register.borrow_mut().oam_addr = 0;
         }
 
-        // Dots 257-320: Sprite tile fetches
+        // Dots 257-320: Sprite tile fetch timing window
         // 8 sprites × 8 cycles each = 64 cycles
         // Each sprite: garbage NT (2), garbage AT (2), pattern lo (2), pattern hi (2)
-        // These fetches are important for MMC2/MMC4 mappers
+        // Note: Actual sprite fetching is done atomically at dot 1 after all BG tiles,
+        // which ensures correct MMC2/MMC4 latch behavior.
         if dot >= 257 && dot <= 320 {
-            // Note: Actual sprite pattern fetches happen here on real hardware
-            // For now, we do sprite rendering at dot 1 (atomic), but we still
-            // perform the fetches for mapper compatibility if needed
-            // The sprite_cycle within the 64-dot window determines which sprite
-            let _sprite_cycle = dot - 257;
-            // Future: implement per-sprite pattern fetches here
+            // Sprite tile fetches would happen here on real hardware
+            // Currently handled atomically at dot 1 for simplicity
         }
 
         // Dots 321-336: Prefetch first two tiles of next scanline
@@ -2361,6 +2355,17 @@ impl Ppu2c02 {
 
                     if self.dot_level_rendering && rendering_enabled {
                         // Per-dot rendering mode (Phase 5)
+
+                        // At dot 1: Do sprite evaluation and rendering BEFORE any pixel output
+                        // This ensures sprites_pixels_line is populated for the entire scanline
+                        if dot == 1 {
+                            self.do_sprite_evaluation(scanline)?;
+                            if show_sprites {
+                                self.render_sprites(scanline)?;
+                            }
+                        }
+
+                        // Background rendering happens per-dot via render_dot
                         self.render_dot(scanline, dot, show_background, show_sprites)?;
                     } else if !self.scanline_rendered && dot >= 1 {
                         // Fallback: Scanline-based rendering (original behavior)

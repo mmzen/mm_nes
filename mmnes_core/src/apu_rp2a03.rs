@@ -1,4 +1,4 @@
-// Authorship: Human 70% | Claude 30%
+// Authorship: Human 60% | Claude 40%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -711,6 +711,9 @@ pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> {
     cpu_cycle_odd: bool,
     // Shared data bus for open bus behavior on write-only registers
     data_bus: Rc<Cell<u8>>,
+    // When true, DMC DMA is handled externally via needs_dmc_dma()/provide_dmc_sample()
+    // When false (default), DMC DMA is handled internally via cond_dma_prefetch()
+    external_dmc_dma: bool,
 }
 
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03<T, U, V> {
@@ -806,28 +809,50 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> Configurable for ApuRp2
 impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
 
     fn recompute_timing(&mut self) {
+        // Frame counter timing uses exact hardware cycle counts for cycle-accurate emulation.
+        // These are APU cycles (half of CPU cycles).
+        //
+        // Reference: https://www.nesdev.org/wiki/APU_Frame_Counter
+        //
+        // NTSC 4-step mode (mode=0):
+        //   Step 1: APU 3728.5 (CPU 7457)  - quarter frame
+        //   Step 2: APU 7456.5 (CPU 14913) - quarter + half frame
+        //   Step 3: APU 11185.5 (CPU 22371) - quarter frame
+        //   Step 4: APU 14914 (CPU 29828) - quarter + half frame + IRQ
+        //   Reset at APU 14914.5 (CPU 29829)
+        //
+        // NTSC 5-step mode (mode=1):
+        //   Step 1: APU 3728.5 (CPU 7457)  - quarter frame
+        //   Step 2: APU 7456.5 (CPU 14913) - quarter + half frame
+        //   Step 3: APU 11185.5 (CPU 22371) - quarter frame
+        //   Step 4: APU 14914.5 (CPU 29829) - nothing
+        //   Step 5: APU 18640.5 (CPU 37281) - quarter + half frame
+        //   Reset at APU 18640.5 (CPU 37281)
 
-        // frame-sequencer scheduling (in APU cycles)
-        // quarter-frame rate = apu_frame_counter_rate_hz * 4
-        // example: NTSC = 60 * 4 = 240 Hz, PAL = 50 * 4 = 200 Hz, Dendy = 59 * 4 = 236 Hz
-        let quarter = self.config.apu_clock_hz / (self.config.apu_frame_counter_rate_hz * 4.0);
+        // Use exact hardware values for NTSC (most common), formula for others
+        if (self.config.apu_frame_counter_rate_hz - 60.0).abs() < 1.0 {
+            // NTSC: exact hardware values (APU cycles, ceiling of .5 values)
+            self.frame_events_4 = [3729, 7457, 11186, 14915];
+            self.frame_events_5 = [3729, 7457, 11186, 14915, 18641];
+        } else {
+            // PAL/Dendy: use formula (approximate)
+            let quarter = self.config.apu_clock_hz / (self.config.apu_frame_counter_rate_hz * 4.0);
 
-        // 4-step mode: events at 1,2,3,4 quarters
-        self.frame_events_4 = [
-            (1.0 * quarter).round() as u32,
-            (2.0 * quarter).round() as u32,
-            (3.0 * quarter).round() as u32,
-            (4.0 * quarter).round() as u32,
-        ];
+            self.frame_events_4 = [
+                (1.0 * quarter).round() as u32,
+                (2.0 * quarter).round() as u32,
+                (3.0 * quarter).round() as u32,
+                (4.0 * quarter).round() as u32,
+            ];
 
-        // 5-step mode: events at 1,2,3,4,5 quarters
-        self.frame_events_5 = [
-            (1.0 * quarter).round() as u32,
-            (2.0 * quarter).round() as u32,
-            (3.0 * quarter).round() as u32,
-            (4.0 * quarter).round() as u32,
-            (5.0 * quarter).round() as u32,
-        ];
+            self.frame_events_5 = [
+                (1.0 * quarter).round() as u32,
+                (2.0 * quarter).round() as u32,
+                (3.0 * quarter).round() as u32,
+                (4.0 * quarter).round() as u32,
+                (5.0 * quarter).round() as u32,
+            ];
+        }
     }
 
     pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>, config: ConfigSpec, data_bus: Rc<Cell<u8>>) -> ApuRp2A03<T, U, V> {
@@ -846,10 +871,19 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             dmc_stall_cycles: 0,
             cpu_cycle_odd: false,
             data_bus,
+            external_dmc_dma: false,
         };
 
         apu.recompute_timing();
         apu
+    }
+
+    /// Enable external DMC DMA handling.
+    /// When enabled, the APU will NOT do internal DMA prefetch.
+    /// Instead, call needs_dmc_dma() to check if DMA is needed,
+    /// and provide_dmc_sample() to deliver the sample.
+    pub fn set_external_dmc_dma(&mut self, enabled: bool) {
+        self.external_dmc_dma = enabled;
     }
 
     /// Returns open bus value for write-only registers
@@ -1084,11 +1118,12 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
 
         if dmc_bit == true {
-            if self.dmc.enabled == false {
-                self.dmc.enabled = true;
-                if self.dmc.bytes_remaining == 0 {
-                    self.dmc.reload_sample_window();
-                }
+            // Enable DMC. If bytes_remaining is 0 (previous sample ended), restart sample.
+            // Per nesdev wiki: "If the DMC bit is set, the DMC sample will be restarted
+            // only if its bytes remaining is 0."
+            self.dmc.enabled = true;
+            if self.dmc.bytes_remaining == 0 {
+                self.dmc.reload_sample_window();
             }
         } else {
             self.dmc.enabled = false;
@@ -1226,11 +1261,13 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
 
         // DMA prefetch - steals CPU cycles when it occurs
-        // DMC DMA takes 4 cycles on average (can be 1-4 depending on CPU state,
-        // but we use 4 as a typical value for accuracy)
-        let dma_occurred = self.dmc.cond_dma_prefetch()?;
-        if dma_occurred {
-            self.dmc_stall_cycles += 4;
+        // Only do internal prefetch if external DMC DMA is disabled
+        // When external_dmc_dma is true, the scheduler handles DMA via needs_dmc_dma()/provide_dmc_sample()
+        if !self.external_dmc_dma {
+            let dma_occurred = self.dmc.cond_dma_prefetch()?;
+            if dma_occurred {
+                self.dmc_stall_cycles += 4;
+            }
         }
 
         if self.dmc.timer_counter == 0 {
@@ -1392,7 +1429,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         self.apu_cycles_acc = 0f64;
         self.sound_player.clear();
         self.dmc_stall_cycles = 0;
-        self.cpu_cycle_odd = false;
+        // APU clocks on even CPU cycles (2, 4, 6...), not odd (1, 3, 5...).
+        // First CPU cycle is cycle 1 (odd), so we initialize to true to skip clocking.
+        self.cpu_cycle_odd = true;
 
         self.recompute_timing();
         Ok(())
@@ -1510,6 +1549,10 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
             self.dmc.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
         }
         Ok(())
+    }
+
+    fn set_external_dmc_dma(&mut self, enabled: bool) {
+        self.external_dmc_dma = enabled;
     }
 }
 
@@ -1655,5 +1698,25 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
     /// Get frame counter IRQ inhibit flag
     pub fn test_get_frame_counter_irq_inhibit(&self) -> bool {
         self.frame_counter.inhibit_irq.get()
+    }
+
+    /// Get frame counter 4-step event thresholds (APU cycles)
+    pub fn test_get_frame_events_4(&self) -> [u32; 4] {
+        self.frame_events_4
+    }
+
+    /// Get frame counter 5-step event thresholds (APU cycles)
+    pub fn test_get_frame_events_5(&self) -> [u32; 5] {
+        self.frame_events_5
+    }
+
+    /// Get current frame counter APU cycle count
+    pub fn test_get_frame_counter_cycle(&self) -> u32 {
+        self.frame_counter.apu_cycle
+    }
+
+    /// Get current frame counter step
+    pub fn test_get_frame_counter_step(&self) -> usize {
+        self.frame_counter.next_step
     }
 }

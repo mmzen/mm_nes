@@ -499,6 +499,85 @@ fn frame_counter_irq_inhibit() {
 }
 
 // ============================================================================
+// Frame Counter Timing Tests (Phase 8)
+// ============================================================================
+
+/// Test that NTSC 4-step mode uses exact hardware cycle values
+/// Reference: https://www.nesdev.org/wiki/APU_Frame_Counter
+#[test]
+fn frame_counter_4_step_timing_ntsc() {
+    init();
+    let apu = create_apu();
+
+    // Get 4-step event thresholds (in APU cycles)
+    let events = apu.test_get_frame_events_4();
+
+    // NTSC exact values (APU cycles = CPU cycles / 2):
+    // Step 1: CPU 7457  -> APU 3728.5 -> ceil to 3729
+    // Step 2: CPU 14913 -> APU 7456.5 -> ceil to 7457
+    // Step 3: CPU 22371 -> APU 11185.5 -> ceil to 11186
+    // Step 4: CPU 29829 -> APU 14914.5 -> ceil to 14915
+    assert_eq!(events[0], 3729, "4-step event 1 should be at APU cycle 3729 (CPU 7457)");
+    assert_eq!(events[1], 7457, "4-step event 2 should be at APU cycle 7457 (CPU 14913)");
+    assert_eq!(events[2], 11186, "4-step event 3 should be at APU cycle 11186 (CPU 22371)");
+    assert_eq!(events[3], 14915, "4-step event 4 should be at APU cycle 14915 (CPU 29829)");
+
+    println!("4-step frame events (APU cycles): {:?}", events);
+    println!("4-step frame events (CPU cycles): {:?}",
+        events.map(|e| e * 2));
+}
+
+/// Test that NTSC 5-step mode uses exact hardware cycle values
+#[test]
+fn frame_counter_5_step_timing_ntsc() {
+    init();
+    let apu = create_apu();
+
+    // Get 5-step event thresholds (in APU cycles)
+    let events = apu.test_get_frame_events_5();
+
+    // NTSC exact values (APU cycles = CPU cycles / 2):
+    // Step 1: CPU 7457  -> APU 3728.5 -> ceil to 3729
+    // Step 2: CPU 14913 -> APU 7456.5 -> ceil to 7457
+    // Step 3: CPU 22371 -> APU 11185.5 -> ceil to 11186
+    // Step 4: CPU 29829 -> APU 14914.5 -> ceil to 14915
+    // Step 5: CPU 37281 -> APU 18640.5 -> ceil to 18641
+    assert_eq!(events[0], 3729, "5-step event 1 should be at APU cycle 3729 (CPU 7457)");
+    assert_eq!(events[1], 7457, "5-step event 2 should be at APU cycle 7457 (CPU 14913)");
+    assert_eq!(events[2], 11186, "5-step event 3 should be at APU cycle 11186 (CPU 22371)");
+    assert_eq!(events[3], 14915, "5-step event 4 should be at APU cycle 14915 (CPU 29829)");
+    assert_eq!(events[4], 18641, "5-step event 5 should be at APU cycle 18641 (CPU 37281)");
+
+    println!("5-step frame events (APU cycles): {:?}", events);
+    println!("5-step frame events (CPU cycles): {:?}",
+        events.map(|e| e * 2));
+}
+
+/// Test that frame counter steps advance at correct cycle counts
+#[test]
+fn frame_counter_step_advancement() {
+    init();
+    let mut apu = create_apu();
+    apu.initialize().unwrap();
+
+    // Set 4-step mode, no IRQ inhibit
+    apu.write_byte(0x17, 0x00).unwrap();
+
+    // Initial state: step 0, cycle 0
+    assert_eq!(apu.test_get_frame_counter_step(), 0, "Should start at step 0");
+    assert_eq!(apu.test_get_frame_counter_cycle(), 0, "Should start at cycle 0");
+
+    // Run for just under step 1 threshold (3729 APU cycles = 7458 CPU cycles)
+    // APU runs at half CPU speed, so 7456 CPU cycles = 3728 APU cycles
+    let _ = apu.run(0, 7456);
+    assert_eq!(apu.test_get_frame_counter_step(), 0, "Should still be at step 0 before threshold");
+
+    // Run 4 more CPU cycles to reach/pass threshold (3730 APU cycles total)
+    let _ = apu.run(7456, 4);
+    assert_eq!(apu.test_get_frame_counter_step(), 1, "Should advance to step 1 after threshold");
+}
+
+// ============================================================================
 // APU tick/run tests
 // ============================================================================
 
