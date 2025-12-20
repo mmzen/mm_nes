@@ -1272,3 +1272,109 @@ fn test_odd_frame_without_rendering_has_same_dots() {
         dots_odd_frame, dots_even_frame);
 }
 
+// ============================================================================
+// CPU/PPU Phase Alignment Tests (Phase 7)
+// ============================================================================
+
+/// Test that PPU dots relationship matches CPU cycles (3 PPU dots per CPU cycle for NTSC)
+#[test]
+fn test_ppu_dots_equals_cpu_cycles_times_three() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Get initial total dots
+    let initial_dots = ppu.get_total_dots();
+
+    // Simulate running for N CPU cycles (call run() with CPU cycles)
+    // The PPU's run() method takes (start_cycle, credits) where credits is CPU cycles
+    let cpu_cycles: u32 = 1000;
+    let _ = ppu.run(0, cpu_cycles);
+
+    // Verify PPU advanced exactly 3 dots per CPU cycle
+    let final_dots = ppu.get_total_dots();
+    let dots_advanced = final_dots - initial_dots;
+
+    // For NTSC, PPU should advance exactly 3 dots per CPU cycle
+    assert_eq!(dots_advanced, (cpu_cycles * 3) as u64,
+        "PPU should advance exactly 3 dots per CPU cycle (expected {}, got {})",
+        cpu_cycles * 3, dots_advanced);
+}
+
+/// Test that alignment doesn't drift over 1000 frames
+#[test]
+fn test_no_alignment_drift_over_1000_frames() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Disable rendering to get consistent frame lengths (89342 dots per frame)
+    ppu.write_byte(0x01, 0x00).unwrap();
+
+    // Track cumulative CPU cycles and PPU dots
+    let mut total_cpu_cycles: u64 = 0;
+
+    // Run for 1000 frames
+    for frame_num in 0..1000 {
+        let initial_dots = ppu.get_total_dots();
+
+        // Advance one full frame worth of CPU cycles
+        // A frame is 262 scanlines * 341 dots = 89342 dots
+        // At 3 dots per CPU cycle, that's 89342 / 3 = 29780.67 CPU cycles per frame
+        // We'll advance by chunks and count actual dots
+        let frame_cpu_cycles: u32 = 29781; // Slightly more than one frame
+
+        let _ = ppu.run(0, frame_cpu_cycles);
+        total_cpu_cycles += frame_cpu_cycles as u64;
+
+        // Periodically check alignment (every 100 frames)
+        if (frame_num + 1) % 100 == 0 {
+            let current_dots = ppu.get_total_dots();
+            let expected_dots = total_cpu_cycles * 3;
+
+            // Allow for small variance due to frame boundary handling
+            let drift = (current_dots as i64 - expected_dots as i64).abs();
+            assert!(drift <= 3,
+                "Frame {}: PPU dots ({}) drifted from expected ({}) by {} dots",
+                frame_num + 1, current_dots, expected_dots, drift);
+        }
+    }
+
+    let final_dots = ppu.get_total_dots();
+    let expected_dots = total_cpu_cycles * 3;
+    let final_drift = (final_dots as i64 - expected_dots as i64).abs();
+
+    println!("After 1000 frames:");
+    println!("  Total CPU cycles: {}", total_cpu_cycles);
+    println!("  Total PPU dots: {}", final_dots);
+    println!("  Expected PPU dots: {}", expected_dots);
+    println!("  Drift: {} dots", final_drift);
+
+    assert!(final_drift <= 3,
+        "After 1000 frames, drift should be minimal (got {} dots)", final_drift);
+}
+
+/// Test power-on alignment: PPU starts at pre-render scanline (261), dot 0
+#[test]
+fn test_power_on_alignment() {
+    init();
+
+    let ppu = create_ppu_for_timing_tests();
+
+    // PPU should start at scanline 261 (pre-render), dot 0
+    assert_eq!(ppu.get_current_scanline(), 261,
+        "PPU should start at pre-render scanline (261)");
+    assert_eq!(ppu.get_current_dot(), 0,
+        "PPU should start at dot 0");
+
+    // Total dots should be 0 at power-on
+    assert_eq!(ppu.get_total_dots(), 0,
+        "Total dots should be 0 at power-on");
+
+    // Frame should start as even (not odd)
+    assert!(!ppu.is_frame_odd(),
+        "First frame should be even (frame_odd = false)");
+}
+

@@ -1182,6 +1182,18 @@ impl Ppu2c02 {
         }
     }
 
+    /// Test helper: get total dots executed since power-on (Phase 7)
+    #[cfg(test)]
+    pub fn get_total_dots(&self) -> u64 {
+        self.total_dots.get()
+    }
+
+    /// Test helper: get frame parity (Phase 7)
+    #[cfg(test)]
+    pub fn is_frame_odd(&self) -> bool {
+        self.frame_odd
+    }
+
     fn get_flag(&self, flag: PpuFlag) -> bool {
         match flag {
             Control(_) => (self.register.borrow_mut().control & flag.bits()) != 0,
