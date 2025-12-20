@@ -1,4 +1,4 @@
-// Authorship: Human 40% | Claude 60%
+// Authorship: Human 35% | Claude 65%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
@@ -403,6 +403,16 @@ pub struct Cpu6502 {
     cycles: u32,
     /// Cycle-stepping state machine state
     cycle_state: CpuCycleState,
+    /// NMI state latched on the penultimate cycle of the current instruction.
+    /// This is what gets checked after instruction completion.
+    latched_nmi: bool,
+    /// IRQ state latched on the penultimate cycle of the current instruction.
+    /// This is what gets checked after instruction completion.
+    latched_irq: bool,
+    /// True if the previous NMI line state was low (for edge detection during polling).
+    /// This tracks the NMI line state as seen during the last poll, separate from nmi_line_low
+    /// which tracks the actual external line state.
+    prev_nmi_line_low: bool,
 }
 
 impl Interruptible for Cpu6502 {
@@ -463,6 +473,9 @@ impl CPU for Cpu6502 {
         self.pending_nmi = false;
         self.pending_i_flag = None;
         self.cycle_state = CpuCycleState::FetchOpcode;
+        self.latched_nmi = false;
+        self.latched_irq = false;
+        self.prev_nmi_line_low = false;
         self.set_pc_indirect(RESET_VECTOR)?;
 
         Ok(())
@@ -616,6 +629,14 @@ impl CPU for Cpu6502 {
 
         match &self.cycle_state {
             CpuCycleState::FetchOpcode => {
+                // Clear latched interrupt state for the new instruction
+                self.latched_nmi = false;
+                self.latched_irq = false;
+
+                // Poll interrupts at the START of the cycle (before opcode fetch)
+                // This samples the current NMI/IRQ state
+                self.poll_interrupts();
+
                 // Cycle 1: fetch opcode only
                 let pc = self.registers.pc;
                 let opcode = self.bus.borrow().read_byte(pc)?;
@@ -649,6 +670,10 @@ impl CPU for Cpu6502 {
                 let mut state = state.clone();
                 let is_interrupt = *is_interrupt;
 
+                // Poll interrupts at the START of each cycle (before execution)
+                // The latched state from the final cycle's poll will be used for interrupt handling
+                self.poll_interrupts();
+
                 self.cycles += 1;
 
                 // Execute the appropriate action for this cycle based on addressing mode
@@ -656,8 +681,8 @@ impl CPU for Cpu6502 {
 
                 // Check if instruction is complete
                 if result.instruction_complete {
-                    // Check for interrupts after instruction completion
-                    let interrupt_cycles = self.check_and_setup_interrupt()?;
+                    // Check for interrupts using the LATCHED state from the final cycle's poll
+                    let interrupt_cycles = self.check_and_setup_interrupt_from_latch()?;
 
                     self.cycle_state = CpuCycleState::FetchOpcode;
 
@@ -2812,6 +2837,9 @@ impl Cpu6502 {
             pending_i_flag: None,
             cycles: 0,
             cycle_state: CpuCycleState::FetchOpcode,
+            latched_nmi: false,
+            latched_irq: false,
+            prev_nmi_line_low: false,
         }
     }
 
@@ -2858,6 +2886,8 @@ impl Cpu6502 {
 
     /// Check for pending interrupts and setup the cycle state machine for interrupt handling.
     /// Returns the number of cycles the interrupt will take (0 if no interrupt).
+    /// NOTE: This uses the CURRENT interrupt state, not the latched state.
+    /// For cycle-accurate emulation, use check_and_setup_interrupt_from_latch() instead.
     fn check_and_setup_interrupt(&mut self) -> Result<u32, CpuError> {
         if self.pending_nmi {
             self.pending_nmi = false;
@@ -2869,6 +2899,58 @@ impl Cpu6502 {
         } else if self.is_asserted_irq()? && !self.registers.get_status(StatusFlag::InterruptDisable) {
             self.irq()?;
             Ok(Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES)
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Poll interrupt lines and update the latched state.
+    /// This should be called at the START of each CPU cycle.
+    ///
+    /// NMI edge detection: NMI is edge-sensitive (falling edge). We detect when
+    /// the NMI line transitions from high to low. Once detected, pending_nmi
+    /// stays true until serviced, but we only latch it if it was pending at poll time.
+    ///
+    /// IRQ level detection: IRQ is level-sensitive. We simply sample the current
+    /// state of the IRQ line and the I flag.
+    fn poll_interrupts(&mut self) {
+        // NMI: Latch if pending_nmi is currently set
+        // Note: pending_nmi is set by signal_nmi() on the falling edge
+        // The poll just samples whether it's currently pending
+        if self.pending_nmi {
+            self.latched_nmi = true;
+        }
+
+        // IRQ: Latch if IRQ line is asserted AND I flag is clear
+        // Note: is_asserted_irq() returns Ok(true) if any IRQ source is active
+        if let Ok(irq_asserted) = self.is_asserted_irq() {
+            if irq_asserted && !self.registers.get_status(StatusFlag::InterruptDisable) {
+                self.latched_irq = true;
+            }
+        }
+    }
+
+    /// Check for pending interrupts using the LATCHED state from polling.
+    /// This implements cycle-accurate interrupt timing where interrupts are
+    /// polled during instruction execution, and the result is used after completion.
+    /// Returns the number of cycles the interrupt will take (0 if no interrupt).
+    fn check_and_setup_interrupt_from_latch(&mut self) -> Result<u32, CpuError> {
+        // NMI has priority over IRQ
+        if self.latched_nmi {
+            // Clear pending_nmi since we're servicing it
+            self.pending_nmi = false;
+            self.nmi()?;
+            Ok(Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES)
+        } else if self.latched_irq {
+            // Re-check the I flag - it could have been set during the instruction
+            // (e.g., SEI instruction). The latched_irq indicates IRQ was pending
+            // when polled, but the I flag state at completion determines if we service it.
+            if !self.registers.get_status(StatusFlag::InterruptDisable) {
+                self.irq()?;
+                Ok(Cpu6502::INTERRUPT_HANDLER_NUM_CYCLES)
+            } else {
+                Ok(0)
+            }
         } else {
             Ok(0)
         }

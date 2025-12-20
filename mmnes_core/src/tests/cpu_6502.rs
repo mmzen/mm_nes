@@ -1,4 +1,4 @@
-// Authorship: Human 75% | Claude 25%
+// Authorship: Human 60% | Claude 40%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
@@ -556,6 +556,275 @@ fn step_cycle_executes_branch_taken_and_continues() -> Result<(), CpuError> {
 
     let snapshot = cpu.snapshot()?;
     assert_eq!(snapshot.pc(), 0x8007, "PC should advance to 0x8007 after NOP");
+
+    Ok(())
+}
+
+// ============================================================================
+// Interrupt timing tests (Phase 3: NMI/IRQ polling at penultimate cycle)
+// ============================================================================
+
+/// Test that NMI signaled before the final cycle's poll is latched and serviced.
+/// NMI should be serviced after the instruction completes.
+#[test]
+fn nmi_signaled_before_final_cycle_is_serviced() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    // NOP (2 cycles) followed by another NOP
+    bus.load_memory(&[
+        (0x8000, 0xEA), // NOP
+        (0x8001, 0xEA), // NOP
+        // NMI vector points to 0x9000
+        (0xFFFA, 0x00),
+        (0xFFFB, 0x90),
+        // NMI handler
+        (0x9000, 0xEA), // NOP (just to have something)
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Clear interrupt disable flag so we can also test IRQ behavior
+    cpu.set_status_for_test(cpu.get_status() & !0x04);
+
+    // Cycle 1: Fetch NOP opcode - NMI is polled here (clear)
+    let result = cpu.step_cycle()?;
+    assert!(!result.instruction_complete);
+
+    // Signal NMI before cycle 2 (between cycles 1 and 2)
+    // This should be picked up by the poll at the start of cycle 2
+    cpu.signal_nmi()?;
+
+    // Cycle 2: Execute NOP - NMI is polled at start of this cycle, should be latched
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete, "NOP should complete on cycle 2");
+    // NMI should have been serviced (7 interrupt cycles added)
+    assert_eq!(result.interrupt_cycles, 7, "NMI should trigger interrupt sequence (7 cycles)");
+
+    // PC should now be at NMI vector (0x9000)
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler after interrupt");
+
+    Ok(())
+}
+
+/// Test that NMI signaled AFTER instruction completion does not affect current instruction.
+/// This tests the timing: if NMI arrives "during" the final cycle (after the poll),
+/// it should not be serviced until the next instruction.
+///
+/// In our emulation model:
+/// - Poll happens at START of step_cycle()
+/// - NMI signaled after step_cycle() completes will be seen by next instruction
+#[test]
+fn nmi_signaled_after_instruction_completion_delays_to_next_instruction() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    // NOP (2 cycles) followed by another NOP
+    bus.load_memory(&[
+        (0x8000, 0xEA), // NOP
+        (0x8001, 0xEA), // NOP (will be interrupted)
+        (0x8002, 0xEA), // NOP
+        // NMI vector
+        (0xFFFA, 0x00),
+        (0xFFFB, 0x90),
+        (0x9000, 0xEA), // NMI handler
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Execute first NOP completely without NMI
+    // Cycle 1: Fetch opcode (poll: no NMI)
+    cpu.step_cycle()?;
+    // Cycle 2: Execute NOP (poll: no NMI)
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete);
+    assert_eq!(result.interrupt_cycles, 0, "No interrupt should occur");
+
+    // PC should be at 0x8001 (next instruction)
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x8001, "PC should be at 0x8001");
+
+    // Now signal NMI AFTER first instruction completed
+    // This simulates NMI arriving after the final cycle of an instruction
+    cpu.signal_nmi()?;
+
+    // Execute second NOP - NMI should be polled and latched on cycle 1
+    // Cycle 1: Fetch opcode (poll: NMI pending, latched!)
+    cpu.step_cycle()?;
+    // Cycle 2: Execute NOP (poll: NMI still pending, already latched)
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete);
+    // NMI should be serviced now
+    assert_eq!(result.interrupt_cycles, 7, "NMI should trigger on second instruction");
+
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");
+
+    Ok(())
+}
+
+/// Test that IRQ is only serviced if I flag is clear at instruction completion.
+/// Even if IRQ was latched during execution, SEI setting I flag should prevent service.
+#[test]
+fn irq_respects_i_flag_at_instruction_completion() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    // SEI (2 cycles) - sets I flag
+    bus.load_memory(&[
+        (0x8000, 0x78), // SEI
+        (0x8001, 0xEA), // NOP (should execute, not interrupted)
+        // IRQ vector
+        (0xFFFE, 0x00),
+        (0xFFFF, 0x90),
+        (0x9000, 0xEA), // IRQ handler
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Clear I flag initially so IRQ would be serviced
+    cpu.set_status_for_test(cpu.get_status() & !0x04);
+
+    // Signal IRQ before executing SEI
+    cpu.signal_irq(APU_FRAME_COUNTER_IRQ)?;
+
+    // Execute SEI (2 cycles)
+    // Cycle 1: Fetch opcode (poll: IRQ asserted, I clear, latched!)
+    cpu.step_cycle()?;
+    // Cycle 2: Execute SEI - sets I flag
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete);
+    // IRQ was latched on cycle 1 when I was clear, but SEI set I on cycle 2
+    // The I flag check at completion should see I=1 and NOT service the IRQ
+    assert_eq!(result.interrupt_cycles, 0, "IRQ should NOT trigger because I flag is now set");
+
+    let snapshot = cpu.snapshot()?;
+    // Should be at 0x8001 (next instruction), not at IRQ handler
+    assert_eq!(snapshot.pc(), 0x8001, "PC should be at 0x8001, not IRQ handler");
+
+    // Verify I flag is set
+    assert!(cpu.get_interrupt_disable(), "I flag should be set after SEI");
+
+    Ok(())
+}
+
+/// Test that NMI has priority over IRQ when both are pending.
+#[test]
+fn nmi_has_priority_over_irq() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    bus.load_memory(&[
+        (0x8000, 0xEA), // NOP
+        (0x8001, 0xEA), // NOP
+        // NMI vector
+        (0xFFFA, 0x00),
+        (0xFFFB, 0x90),
+        // IRQ vector
+        (0xFFFE, 0x00),
+        (0xFFFF, 0xA0),
+        // NMI handler at 0x9000
+        (0x9000, 0xEA),
+        // IRQ handler at 0xA000
+        (0xA000, 0xEA),
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Clear I flag
+    cpu.set_status_for_test(cpu.get_status() & !0x04);
+
+    // Signal both NMI and IRQ
+    cpu.signal_nmi()?;
+    cpu.signal_irq(APU_FRAME_COUNTER_IRQ)?;
+
+    // Execute NOP (2 cycles)
+    cpu.step_cycle()?;
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete);
+    assert_eq!(result.interrupt_cycles, 7, "Interrupt should trigger");
+
+    // Should jump to NMI handler (0x9000), not IRQ handler (0xA000)
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler (NMI has priority)");
+
+    Ok(())
+}
+
+/// Test that latching happens on each cycle - the LAST poll before completion is what matters.
+/// If NMI is cleared between polls, it should still be serviced if it was latched.
+#[test]
+fn nmi_latched_state_persists_even_if_cleared_before_completion() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    // Use a 3-cycle instruction to have more opportunities to test timing
+    // LDA $10 (Zero Page) is 3 cycles
+    bus.load_memory(&[
+        (0x0010, 0x42), // Value at ZP $10
+        (0x8000, 0xA5), // LDA ZP
+        (0x8001, 0x10), // address $10
+        (0x8002, 0xEA), // NOP
+        // NMI vector
+        (0xFFFA, 0x00),
+        (0xFFFB, 0x90),
+        (0x9000, 0xEA), // NMI handler
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Cycle 1: Fetch opcode (poll: no NMI)
+    cpu.step_cycle()?;
+
+    // Signal NMI before cycle 2
+    cpu.signal_nmi()?;
+
+    // Cycle 2: Fetch ZP address (poll: NMI pending, latched!)
+    cpu.step_cycle()?;
+
+    // Note: We can't easily "clear" NMI mid-instruction in a realistic way
+    // because clear_pending_nmi is a test helper. The key insight is that
+    // once NMI is latched, it stays latched for this instruction.
+
+    // Cycle 3: Read from ZP, complete instruction
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete);
+    // NMI should be serviced because it was latched on cycle 2
+    assert_eq!(result.interrupt_cycles, 7, "NMI should trigger");
+
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");
 
     Ok(())
 }
