@@ -1,4 +1,4 @@
-// Authorship: Human 20% | Claude 80%
+// Authorship: Human 18% | Claude 82%
 use std::fmt;
 use std::cell::RefCell;
 use std::fmt::{Debug, Display, Formatter};
@@ -6,7 +6,7 @@ use std::rc::Rc;
 use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
-use crate::cpu::{BusOperation, CPU, CpuCycleResult, CpuError, Interruptible};
+use crate::cpu::{BusOperation, CPU, CpuBusIntent, CpuCycleResult, CpuError, Interruptible};
 use crate::cpu_debugger::CpuSnapshot;
 use crate::memory::{MemoryError};
 
@@ -359,6 +359,13 @@ struct InstructionState {
     branch_target: u16,
 }
 
+/// Type of hardware interrupt being serviced
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InterruptType {
+    Nmi,
+    Irq,
+}
+
 /// State of the CPU cycle-stepping state machine.
 /// Tracks where we are in the execution of the current instruction.
 #[derive(Debug, Clone)]
@@ -377,6 +384,23 @@ enum CpuCycleState {
         state: InstructionState,
         /// True if this is an interrupt sequence (NMI/IRQ), not a regular instruction
         is_interrupt: bool,
+    },
+    /// CPU is executing a hardware interrupt sequence (NMI or IRQ).
+    /// This is separate from BRK which is a software interrupt instruction.
+    /// The interrupt sequence takes 7 cycles:
+    /// - Cycle 1-2: Internal operations / dummy reads
+    /// - Cycle 3: Push PCH to stack
+    /// - Cycle 4: Push PCL to stack
+    /// - Cycle 5: Push P to stack (without B flag)
+    /// - Cycle 6: Read interrupt vector low byte
+    /// - Cycle 7: Read interrupt vector high byte, jump to handler
+    InterruptSequence {
+        /// Type of interrupt being serviced
+        interrupt_type: InterruptType,
+        /// Current cycle within interrupt sequence (1-7)
+        cycle: u8,
+        /// Intermediate state for vector address
+        state: InstructionState,
     },
     /// CPU is halted, waiting for DMA to complete.
     Halted {
@@ -621,19 +645,25 @@ impl CPU for Cpu6502 {
                 self.cycles += 1;
 
                 // Execute the appropriate action for this cycle based on addressing mode
-                let mut result = self.execute_cycle(opcode, instruction, cycle, &mut state, is_interrupt)?;
+                let result = self.execute_cycle(opcode, instruction, cycle, &mut state, is_interrupt)?;
 
                 // Check if instruction is complete
                 if result.instruction_complete {
                     // Check for interrupts using the LATCHED state from the final cycle's poll
-                    let interrupt_cycles = self.check_and_setup_interrupt_from_latch()?;
-
-                    self.cycle_state = CpuCycleState::FetchOpcode;
-
-                    // If an interrupt occurred, add its cycles and report to caller
-                    if interrupt_cycles > 0 {
-                        self.cycles += interrupt_cycles;
-                        result.interrupt_cycles = interrupt_cycles;
+                    // Instead of batching cycles, transition to InterruptSequence state
+                    if let Some(int_type) = self.check_interrupt_from_latch() {
+                        // Clear pending_nmi if we're servicing NMI
+                        if int_type == InterruptType::Nmi {
+                            self.pending_nmi = false;
+                        }
+                        // Transition to interrupt sequence state
+                        self.cycle_state = CpuCycleState::InterruptSequence {
+                            interrupt_type: int_type,
+                            cycle: 1,
+                            state: InstructionState::default(),
+                        };
+                    } else {
+                        self.cycle_state = CpuCycleState::FetchOpcode;
                     }
                 } else {
                     // Continue to next cycle
@@ -649,6 +679,35 @@ impl CPU for Cpu6502 {
                 Ok(result)
             }
 
+            CpuCycleState::InterruptSequence { interrupt_type, cycle, state } => {
+                let interrupt_type = *interrupt_type;
+                let cycle = *cycle;
+                let mut state = state.clone();
+
+                // Poll interrupts at the START of each cycle
+                // NMI can hijack an IRQ sequence if it arrives during cycles 1-4
+                self.poll_interrupts();
+
+                self.cycles += 1;
+
+                // Execute one cycle of the interrupt sequence
+                let result = self.execute_interrupt_cycle(interrupt_type, cycle, &mut state)?;
+
+                if result.instruction_complete {
+                    // Interrupt sequence complete, go to next instruction
+                    self.cycle_state = CpuCycleState::FetchOpcode;
+                } else {
+                    // Continue to next cycle of interrupt sequence
+                    self.cycle_state = CpuCycleState::InterruptSequence {
+                        interrupt_type,
+                        cycle: cycle + 1,
+                        state,
+                    };
+                }
+
+                Ok(result)
+            }
+
             CpuCycleState::Halted { .. } => {
                 // Already handled above
                 unreachable!()
@@ -657,13 +716,14 @@ impl CPU for Cpu6502 {
     }
 
     fn is_mid_instruction(&self) -> bool {
-        matches!(self.cycle_state, CpuCycleState::Executing { .. })
+        matches!(self.cycle_state, CpuCycleState::Executing { .. } | CpuCycleState::InterruptSequence { .. })
     }
 
     fn get_instruction_cycle(&self) -> Option<u8> {
         match &self.cycle_state {
             CpuCycleState::FetchOpcode => Some(0),
             CpuCycleState::Executing { cycle, .. } => Some(*cycle as u8),
+            CpuCycleState::InterruptSequence { cycle, .. } => Some(*cycle as u8),
             CpuCycleState::Halted { .. } => None,
         }
     }
@@ -671,6 +731,8 @@ impl CPU for Cpu6502 {
     fn get_current_opcode(&self) -> Option<u8> {
         match &self.cycle_state {
             CpuCycleState::Executing { opcode, .. } => Some(*opcode),
+            // During interrupt sequence, there's no opcode (hardware interrupt)
+            CpuCycleState::InterruptSequence { .. } => None,
             _ => None,
         }
     }
@@ -688,9 +750,359 @@ impl CPU for Cpu6502 {
     fn get_cycles(&self) -> u32 {
         self.cycles
     }
+
+    fn get_pending_bus_operation(&self) -> CpuBusIntent {
+        self.compute_pending_bus_intent()
+    }
 }
 
 impl Cpu6502 {
+    /// Compute the bus intent for the next cycle based on current state.
+    /// This is used by DMA to know whether to halt the CPU (can only halt on read cycles).
+    fn compute_pending_bus_intent(&self) -> CpuBusIntent {
+        match &self.cycle_state {
+            CpuCycleState::FetchOpcode => {
+                // Will fetch opcode from PC
+                CpuBusIntent {
+                    op: BusOperation::Read,
+                    address: Some(self.registers.pc),
+                    is_write: false,
+                }
+            }
+
+            CpuCycleState::Executing { opcode, instruction, cycle, state, .. } => {
+                // Determine bus intent based on addressing mode and cycle
+                self.compute_executing_bus_intent(*opcode, instruction, *cycle, state)
+            }
+
+            CpuCycleState::InterruptSequence { cycle, .. } => {
+                // Interrupt sequence: cycles 1-2 read, 3-5 write, 6-7 read
+                match cycle {
+                    1 | 2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(self.registers.pc),
+                        is_write: false,
+                    },
+                    3 | 4 | 5 => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(STACK_BASE_ADDRESS + self.registers.sp as u16),
+                        is_write: true,
+                    },
+                    6 | 7 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: None, // Vector address depends on interrupt type
+                        is_write: false,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            CpuCycleState::Halted { .. } => {
+                // Halted - no bus operation (or repeated read, handled separately)
+                CpuBusIntent::default()
+            }
+        }
+    }
+
+    /// Compute bus intent for an executing instruction.
+    /// This is complex because it depends on addressing mode and cycle.
+    fn compute_executing_bus_intent(
+        &self,
+        _opcode: u8,
+        instruction: &'static Instruction,
+        cycle: u8,
+        state: &InstructionState,
+    ) -> CpuBusIntent {
+        use AddressingMode::*;
+
+        let pc = self.registers.pc;
+
+        // Check if this is a store instruction (STA, STX, STY, SAX, SHA, SHX, SHY)
+        let is_store = matches!(
+            instruction.opcode,
+            OpCode::STA | OpCode::STX | OpCode::STY | OpCode::SAX |
+            OpCode::SHA | OpCode::SHX | OpCode::SHY
+        );
+
+        // Check if this is an RMW instruction (ASL, LSR, ROL, ROR, INC, DEC, etc.)
+        let is_rmw = matches!(
+            instruction.opcode,
+            OpCode::ASL | OpCode::LSR | OpCode::ROL | OpCode::ROR |
+            OpCode::INC | OpCode::DEC | OpCode::DCP | OpCode::ISB |
+            OpCode::SLO | OpCode::SRE | OpCode::RLA | OpCode::RRA
+        ) && !matches!(instruction.addressing_mode, Accumulator | Implicit);
+
+        match instruction.addressing_mode {
+            Implicit | Accumulator => {
+                // 2-cycle implicit: cycle 1 is dummy read
+                CpuBusIntent {
+                    op: BusOperation::Read,
+                    address: Some(pc.wrapping_add(1)),
+                    is_write: false,
+                }
+            }
+
+            Immediate => {
+                // Cycle 1: read operand
+                CpuBusIntent {
+                    op: BusOperation::Read,
+                    address: Some(pc.wrapping_add(1)),
+                    is_write: false,
+                }
+            }
+
+            ZeroPage => {
+                match cycle {
+                    1 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 if is_store => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.operand_lo as u16),
+                        is_write: true,
+                    },
+                    2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo as u16),
+                        is_write: false,
+                    },
+                    3 if is_rmw => CpuBusIntent {
+                        // RMW: write back original value
+                        op: BusOperation::Write,
+                        address: Some(state.operand_lo as u16),
+                        is_write: true,
+                    },
+                    4 if is_rmw => CpuBusIntent {
+                        // RMW: write modified value
+                        op: BusOperation::Write,
+                        address: Some(state.operand_lo as u16),
+                        is_write: true,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            ZeroPageIndexedX | ZeroPageIndexedY => {
+                match cycle {
+                    1 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 => CpuBusIntent {
+                        // Dummy read from unindexed address
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo as u16),
+                        is_write: false,
+                    },
+                    3 if is_store => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    3 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    4 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    5 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            Absolute => {
+                match cycle {
+                    1 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(2)),
+                        is_write: false,
+                    },
+                    3 if is_store => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    3 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    4 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    5 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            AbsoluteIndexedX | AbsoluteIndexedY => {
+                // Complex: may have page crossing penalty
+                match cycle {
+                    1 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(2)),
+                        is_write: false,
+                    },
+                    3 => CpuBusIntent {
+                        // Dummy read from uncarried address or real read
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    4 if is_store => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    4 if is_rmw => CpuBusIntent {
+                        // Page cross fix read
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    4 => CpuBusIntent {
+                        // Page cross fix read or completion
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    5 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    6 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            IndirectIndexedX => {
+                // (ZP,X): complex indirect addressing
+                match cycle {
+                    1..=4 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: None, // Complex to compute
+                        is_write: false,
+                    },
+                    5 if is_store => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    5 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    6 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    7 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            IndirectIndexedY => {
+                // (ZP),Y: complex indirect addressing
+                match cycle {
+                    1..=3 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: None, // Complex to compute
+                        is_write: false,
+                    },
+                    4 if is_store => CpuBusIntent {
+                        // Dummy read then store
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    4 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    5 if is_store => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    5 => CpuBusIntent {
+                        // Page cross fix or RMW read
+                        op: BusOperation::Read,
+                        address: Some(state.effective_addr),
+                        is_write: false,
+                    },
+                    6 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    7 if is_rmw => CpuBusIntent {
+                        op: BusOperation::Write,
+                        address: Some(state.effective_addr),
+                        is_write: true,
+                    },
+                    _ => CpuBusIntent::default(),
+                }
+            }
+
+            Relative => {
+                // Branch instructions
+                CpuBusIntent {
+                    op: BusOperation::Read,
+                    address: Some(pc.wrapping_add(1)),
+                    is_write: false,
+                }
+            }
+
+            Indirect => {
+                // JMP (indirect) - all reads
+                CpuBusIntent {
+                    op: BusOperation::Read,
+                    address: None,
+                    is_write: false,
+                }
+            }
+        }
+    }
+
     /// Execute a single cycle of an instruction.
     /// Returns the CpuCycleResult describing what happened this cycle.
     /// Updates `state` with any intermediate values computed.
@@ -3080,9 +3492,179 @@ impl Cpu6502 {
     }
 
     /// Check for pending interrupts using the LATCHED state from polling.
+    /// Returns the type of interrupt to service, or None if no interrupt pending.
+    /// This does NOT execute the interrupt - it just determines which one (if any) should run.
+    fn check_interrupt_from_latch(&self) -> Option<InterruptType> {
+        // NMI has priority over IRQ
+        if self.latched_nmi {
+            Some(InterruptType::Nmi)
+        } else if self.latched_irq {
+            // Re-check the I flag - it could have been set during the instruction
+            // (e.g., SEI instruction). The latched_irq indicates IRQ was pending
+            // when polled, but the I flag state at completion determines if we service it.
+            if !self.registers.get_status(StatusFlag::InterruptDisable) {
+                Some(InterruptType::Irq)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Execute one cycle of a hardware interrupt sequence (NMI or IRQ).
+    ///
+    /// The interrupt sequence takes 7 cycles:
+    /// - Cycle 1: Internal operation (read from PC)
+    /// - Cycle 2: Internal operation (read from PC)
+    /// - Cycle 3: Push PCH to stack
+    /// - Cycle 4: Push PCL to stack
+    /// - Cycle 5: Push P to stack (B flag clear for hardware interrupts)
+    /// - Cycle 6: Read interrupt vector low byte, set I flag
+    /// - Cycle 7: Read interrupt vector high byte, jump to handler
+    fn execute_interrupt_cycle(
+        &mut self,
+        interrupt_type: InterruptType,
+        cycle: u8,
+        state: &mut InstructionState,
+    ) -> Result<CpuCycleResult, CpuError> {
+        let pc = self.registers.pc;
+
+        // Determine vector address based on interrupt type
+        // Note: NMI can hijack IRQ if it arrives during cycles 1-4
+        let vector = match interrupt_type {
+            InterruptType::Nmi => NMI_VECTOR,
+            InterruptType::Irq => {
+                // Check if NMI arrived during the sequence (NMI hijack)
+                if self.pending_nmi && cycle <= 4 {
+                    self.pending_nmi = false;
+                    NMI_VECTOR
+                } else {
+                    IRQ_VECTOR
+                }
+            }
+        };
+
+        match cycle {
+            1 => {
+                // Internal operation - dummy read from current PC
+                let data = self.bus.borrow().read_byte(pc)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(pc),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Interrupt: internal op (read PC)",
+                    ..Default::default()
+                })
+            }
+            2 => {
+                // Internal operation - dummy read from current PC
+                let data = self.bus.borrow().read_byte(pc)?;
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(pc),
+                    data: Some(data),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Interrupt: internal op (read PC)",
+                    ..Default::default()
+                })
+            }
+            3 => {
+                // Push PCH to stack
+                let pch = (pc >> 8) as u8;
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, pch)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(pch),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Interrupt: push PCH",
+                    ..Default::default()
+                })
+            }
+            4 => {
+                // Push PCL to stack
+                let pcl = pc as u8;
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, pcl)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(pcl),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Interrupt: push PCL",
+                    ..Default::default()
+                })
+            }
+            5 => {
+                // Push P to stack (B flag clear for hardware interrupts, unused set)
+                let p = (self.registers.p & !StatusFlag::BreakCommand.bits()) | StatusFlag::Unused.bits();
+                let stack_addr = STACK_BASE_ADDRESS + self.registers.sp as u16;
+                self.bus.borrow_mut().write_byte(stack_addr, p)?;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+
+                Ok(CpuCycleResult {
+                    memory_write: true,
+                    address: Some(stack_addr),
+                    data: Some(p),
+                    bus_op: BusOperation::Write,
+                    cycle_description: "Interrupt: push P",
+                    ..Default::default()
+                })
+            }
+            6 => {
+                // Read interrupt vector low byte
+                let vector_lo = self.bus.borrow().read_byte(vector)?;
+                state.operand_lo = vector_lo;
+
+                // Set interrupt disable flag
+                self.registers.set_status(StatusFlag::InterruptDisable, true);
+
+                Ok(CpuCycleResult {
+                    memory_read: true,
+                    address: Some(vector),
+                    data: Some(vector_lo),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Interrupt: read vector low",
+                    ..Default::default()
+                })
+            }
+            7 => {
+                // Read interrupt vector high byte
+                let vector_hi = self.bus.borrow().read_byte(vector.wrapping_add(1))?;
+                let new_pc = ((vector_hi as u16) << 8) | state.operand_lo as u16;
+
+                self.registers.set_pc(new_pc);
+                self.registers.is_pc_dirty = false;
+
+                Ok(CpuCycleResult {
+                    instruction_complete: true,
+                    memory_read: true,
+                    address: Some(vector.wrapping_add(1)),
+                    data: Some(vector_hi),
+                    bus_op: BusOperation::Read,
+                    cycle_description: "Interrupt: read vector high, jump",
+                    ..Default::default()
+                })
+            }
+            _ => Err(CpuError::Unimplemented(format!("Interrupt cycle {} unexpected", cycle)))
+        }
+    }
+
+    /// Check for pending interrupts using the LATCHED state from polling.
     /// This implements cycle-accurate interrupt timing where interrupts are
     /// polled during instruction execution, and the result is used after completion.
     /// Returns the number of cycles the interrupt will take (0 if no interrupt).
+    #[deprecated(note = "Use check_interrupt_from_latch() + InterruptSequence state instead")]
+    #[allow(dead_code)]
     fn check_and_setup_interrupt_from_latch(&mut self) -> Result<u32, CpuError> {
         // NMI has priority over IRQ
         if self.latched_nmi {

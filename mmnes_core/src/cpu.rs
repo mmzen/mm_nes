@@ -1,4 +1,4 @@
-// Authorship: Human 70% | Claude 30%
+// Authorship: Human 65% | Claude 35%
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
@@ -24,6 +24,19 @@ pub enum BusOperation {
     Write,
 }
 
+/// Intent for the bus operation the CPU will perform on the NEXT call to step_cycle().
+/// This allows the DMA controller to know whether the CPU is about to read or write
+/// before actually executing the cycle.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CpuBusIntent {
+    /// The type of bus operation that will be performed
+    pub op: BusOperation,
+    /// The address that will be accessed (if known)
+    pub address: Option<u16>,
+    /// True if the CPU is about to perform a write (convenience method)
+    pub is_write: bool,
+}
+
 /// Result of executing a single CPU cycle.
 /// Provides information about what happened during the cycle for synchronization purposes.
 #[derive(Debug, Clone, Default)]
@@ -44,10 +57,6 @@ pub struct CpuCycleResult {
     pub bus_op: BusOperation,
     /// Description of what this cycle did (for debugging).
     pub cycle_description: &'static str,
-    /// Number of extra cycles consumed by interrupt handling (0 if no interrupt).
-    /// When an interrupt fires after instruction completion, this contains the
-    /// interrupt handler cycles (typically 7) that the PPU/APU must account for.
-    pub interrupt_cycles: u32,
 }
 
 pub trait CPU: Interruptible + Debug {
@@ -82,6 +91,13 @@ pub trait CPU: Interruptible + Debug {
 
     /// Get the current total cycle count.
     fn get_cycles(&self) -> u32;
+
+    /// Get the intended bus operation for the NEXT call to step_cycle().
+    /// This allows the DMA controller to know whether the CPU will read or write
+    /// before actually executing the cycle, which is critical for DMA halt timing.
+    ///
+    /// DMA can only halt the CPU on a read cycle - writes must complete.
+    fn get_pending_bus_operation(&self) -> CpuBusIntent;
 
     fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError>;
     fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
@@ -160,6 +176,7 @@ mock! {
         fn is_halted(&self) -> bool;
         fn halt_cycles(&mut self, cycles: u32);
         fn get_cycles(&self) -> u32;
+        fn get_pending_bus_operation(&self) -> CpuBusIntent;
     }
 
     impl Interruptible for CpuStub {

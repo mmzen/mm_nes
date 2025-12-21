@@ -1,4 +1,4 @@
-// Authorship: Human 60% | Claude 40%
+// Authorship: Human 55% | Claude 45%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
@@ -16,6 +16,20 @@ fn create_cpu() -> Cpu6502 {
     let bus = create_bus();
     let cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
     cpu
+}
+
+/// Helper to execute the 7-cycle interrupt sequence after instruction completion.
+/// Interrupt sequences now execute one cycle at a time instead of batching.
+fn run_interrupt_sequence(cpu: &mut Cpu6502) -> Result<(), CpuError> {
+    for i in 1..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(result.instruction_complete, "Interrupt sequence should complete on cycle 7");
+        } else {
+            assert!(!result.instruction_complete, "Interrupt sequence cycle {} should not be complete", i);
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -604,8 +618,11 @@ fn nmi_signaled_before_final_cycle_is_serviced() -> Result<(), CpuError> {
     // Cycle 2: Execute NOP - NMI is polled at start of this cycle, should be latched
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete, "NOP should complete on cycle 2");
-    // NMI should have been serviced (7 interrupt cycles added)
-    assert_eq!(result.interrupt_cycles, 7, "NMI should trigger interrupt sequence (7 cycles)");
+
+    // After instruction completion, CPU transitions to InterruptSequence state
+    // Execute the 7-cycle interrupt sequence
+    assert!(cpu.is_mid_instruction(), "CPU should be in interrupt sequence");
+    run_interrupt_sequence(&mut cpu)?;
 
     // PC should now be at NMI vector (0x9000)
     let snapshot = cpu.snapshot()?;
@@ -651,7 +668,9 @@ fn nmi_signaled_after_instruction_completion_delays_to_next_instruction() -> Res
     // Cycle 2: Execute NOP (poll: no NMI)
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete);
-    assert_eq!(result.interrupt_cycles, 0, "No interrupt should occur");
+
+    // No interrupt should trigger - CPU should go to FetchOpcode, not InterruptSequence
+    assert!(!cpu.is_mid_instruction(), "No interrupt should occur");
 
     // PC should be at 0x8001 (next instruction)
     let snapshot = cpu.snapshot()?;
@@ -667,8 +686,10 @@ fn nmi_signaled_after_instruction_completion_delays_to_next_instruction() -> Res
     // Cycle 2: Execute NOP (poll: NMI still pending, already latched)
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete);
-    // NMI should be serviced now
-    assert_eq!(result.interrupt_cycles, 7, "NMI should trigger on second instruction");
+
+    // NMI should be serviced now - CPU transitions to InterruptSequence
+    assert!(cpu.is_mid_instruction(), "CPU should be in interrupt sequence");
+    run_interrupt_sequence(&mut cpu)?;
 
     let snapshot = cpu.snapshot()?;
     assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");
@@ -715,7 +736,8 @@ fn irq_respects_i_flag_at_instruction_completion() -> Result<(), CpuError> {
     assert!(result.instruction_complete);
     // IRQ was latched on cycle 1 when I was clear, but SEI set I on cycle 2
     // The I flag check at completion should see I=1 and NOT service the IRQ
-    assert_eq!(result.interrupt_cycles, 0, "IRQ should NOT trigger because I flag is now set");
+    // CPU should NOT be in interrupt sequence
+    assert!(!cpu.is_mid_instruction(), "IRQ should NOT trigger because I flag is now set");
 
     let snapshot = cpu.snapshot()?;
     // Should be at 0x8001 (next instruction), not at IRQ handler
@@ -767,7 +789,10 @@ fn nmi_has_priority_over_irq() -> Result<(), CpuError> {
     cpu.step_cycle()?;
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete);
-    assert_eq!(result.interrupt_cycles, 7, "Interrupt should trigger");
+
+    // Interrupt should trigger - CPU enters InterruptSequence
+    assert!(cpu.is_mid_instruction(), "Interrupt should trigger");
+    run_interrupt_sequence(&mut cpu)?;
 
     // Should jump to NMI handler (0x9000), not IRQ handler (0xA000)
     let snapshot = cpu.snapshot()?;
@@ -821,7 +846,8 @@ fn nmi_latched_state_persists_even_if_cleared_before_completion() -> Result<(), 
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete);
     // NMI should be serviced because it was latched on cycle 2
-    assert_eq!(result.interrupt_cycles, 7, "NMI should trigger");
+    assert!(cpu.is_mid_instruction(), "NMI should trigger");
+    run_interrupt_sequence(&mut cpu)?;
 
     let snapshot = cpu.snapshot()?;
     assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");

@@ -1,4 +1,5 @@
 // Authorship: Human 0% | Claude 100%
+// Updated: Made DMC DMA event-driven - no pre-calculation of cycles, dynamically checks CPU bus intent
 // Updated: Fixed OAM DMA alignment logic (1 idle for even, 2 for odd), added comprehensive tests
 // Updated: Added DMC DMA bus conflict behavior - halt cycles read from CPU's conflict address
 // Updated: Fixed DMC+OAM DMA interleaving - halt cycles run alongside OAM, only get cycle has priority
@@ -122,6 +123,9 @@ pub struct DmcDmaState {
     /// Address the CPU was accessing when DMC DMA started (for bus conflict reads)
     /// During halt cycles, reads from this address cause side effects
     pub conflict_address: Option<u16>,
+    /// Tracks if CPU was writing when DMC DMA started (for halt cycle count)
+    /// True = CPU was writing, need to wait longer before read
+    pub cpu_was_writing: bool,
 }
 
 /// DMA Controller managing OAM and DMC DMA operations
@@ -242,7 +246,47 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         };
     }
 
-    /// Start a DMC DMA fetch from the specified address.
+    /// Request a DMC DMA fetch from the specified address (event-driven).
+    ///
+    /// This is the preferred method - it doesn't pre-calculate cycles.
+    /// The DMA controller dynamically determines timing based on CPU bus state each cycle.
+    ///
+    /// DMC DMA sequence:
+    /// - Halt phase: Waits until CPU is not writing (reads from conflict address)
+    /// - Read phase: Fetches sample from DMC address
+    ///
+    /// # Arguments
+    /// * `address` - The address to fetch the sample byte from
+    /// * `cpu_is_writing` - True if CPU is currently performing a write (cannot halt immediately)
+    /// * `conflict_address` - The address the CPU was reading from (for halt cycle side effects)
+    pub fn request_dmc_dma(&mut self, address: u16, cpu_is_writing: bool, conflict_address: Option<u16>) {
+        // DMC DMA starts in Halt phase if CPU is writing, otherwise can proceed faster
+        // The exact number of halt cycles depends on dynamic state each cycle
+        let initial_phase = if cpu_is_writing {
+            // CPU is writing - start in halt, need to wait for write to complete
+            // We use Halt(3) as a maximum but will transition based on actual bus state
+            DmcDmaPhase::Halt(3)
+        } else if self.oam_dma.active && !self.oam_dma.read_phase {
+            // OAM DMA is on write phase - need to wait for it
+            DmcDmaPhase::Halt(1)
+        } else if self.oam_dma.active && self.oam_dma.read_phase {
+            // OAM DMA is on read phase - can steal immediately after
+            DmcDmaPhase::Read
+        } else {
+            // CPU is reading - need minimal halt cycles
+            DmcDmaPhase::Halt(2)
+        };
+
+        self.dmc_dma = DmcDmaState {
+            active: true,
+            address,
+            phase: initial_phase,
+            conflict_address,
+            cpu_was_writing: cpu_is_writing,
+        };
+    }
+
+    /// Start a DMC DMA fetch from the specified address (legacy interface).
     ///
     /// DMC DMA uses a state machine with phases:
     /// - Halt cycles: 0-3 cycles depending on CPU state, reads from conflict address
@@ -260,6 +304,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// * `address` - The address to fetch the sample byte from
     /// * `cycles` - Number of cycles to steal (1-4), determines initial phase
     /// * `conflict_address` - The address the CPU was reading from (for halt cycle side effects)
+    #[deprecated(note = "Use request_dmc_dma for event-driven DMA")]
     pub fn start_dmc_dma(&mut self, address: u16, cycles: u8, conflict_address: Option<u16>) {
         // Clamp to valid range (1-4 cycles)
         let cycles = cycles.clamp(1, 4);
@@ -280,6 +325,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             address,
             phase: initial_phase,
             conflict_address,
+            cpu_was_writing: cycles >= 4,
         };
     }
 
@@ -295,6 +341,8 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// - 3 cycles: CPU is reading (halt, halt, get)
     /// - 2 cycles: During OAM DMA write phase (halt, get)
     /// - 1 cycle:  During OAM DMA read phase or CPU already halted (get only)
+    #[deprecated(note = "Use request_dmc_dma for event-driven DMA - no pre-calculation needed")]
+    #[allow(dead_code)]
     pub fn calculate_dmc_dma_cycles(
         cpu_is_writing: bool,
         cpu_is_halted: bool,
@@ -493,14 +541,25 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             }
 
             DmcDmaPhase::Dummy => {
-                // Dummy cycle - no bus activity
+                // Dummy cycle - CPU continues to re-read from halted address
+                // This causes side effects for special registers
+                if let Some(halted_addr) = self.halted_read_address {
+                    let _ = self.bus.borrow().read_byte(halted_addr)?;
+                    result.address_accessed = Some(halted_addr);
+                    result.read_occurred = true;
+                }
                 // Transition to align or read based on APU phase
-                // For now, go straight to read (alignment handled by caller)
                 self.dmc_dma.phase = DmcDmaPhase::Read;
             }
 
             DmcDmaPhase::Align => {
-                // Alignment cycle - no bus activity
+                // Alignment cycle - CPU continues to re-read from halted address
+                // This causes side effects for special registers
+                if let Some(halted_addr) = self.halted_read_address {
+                    let _ = self.bus.borrow().read_byte(halted_addr)?;
+                    result.address_accessed = Some(halted_addr);
+                    result.read_occurred = true;
+                }
                 // Transition to read
                 self.dmc_dma.phase = DmcDmaPhase::Read;
             }

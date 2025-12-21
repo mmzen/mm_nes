@@ -1,4 +1,4 @@
-// Authorship: Human 35% | Claude 65%
+// Authorship: Human 32% | Claude 68%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -155,6 +155,14 @@ impl NesConsole {
     /// Execute a single master cycle (one CPU cycle).
     /// This is the cycle-accurate stepping method that advances all components together.
     ///
+    /// The correct order of operations is:
+    /// 1. Query CPU bus intent for this cycle (before execution)
+    /// 2. Query APU for DMC DMA needs from its CURRENT state (before tick)
+    /// 3. Check OAM DMA trigger
+    /// 4. Decide bus master (CPU / OAM DMA / DMC DMA)
+    /// 5. Execute bus operation for the selected master
+    /// 6. Advance all components (APU, PPU)
+    ///
     /// Returns:
     /// - `CpuCycleResult`: Information about what the CPU did this cycle
     /// - `Option<NesFrame>`: A completed frame if PPU finished rendering
@@ -163,77 +171,58 @@ impl NesConsole {
         let mut out_frame: Option<NesFrame> = None;
         let mut out_samples: Option<NesSamples> = None;
 
-        // Check if OAM DMA was triggered this cycle
-        // The DmaController tracks APU phase internally for alignment
-        if let Some(page) = self.dma_start_page.get() {
+        // ============================================================
+        // STEP 1: QUERY STATE BEFORE ANY COMPONENT ADVANCES
+        // ============================================================
+
+        // Query CPU bus intent for this cycle - is it about to read or write?
+        // This is critical: DMA can only halt CPU on a READ cycle, not write.
+        let cpu_bus_intent = self.cpu.borrow().get_pending_bus_operation();
+        let cpu_is_writing = cpu_bus_intent.is_write;
+
+        // Query APU for DMC DMA needs from its CURRENT state (BEFORE ticking APU)
+        let dmc_dma_request = if !self.dma_controller.is_dmc_dma_active() && self.pending_dmc_dma.is_none() {
+            self.apu.borrow().needs_dmc_dma()
+        } else {
+            None
+        };
+
+        // Check if OAM DMA was triggered (from write to $4014 last cycle)
+        let oam_dma_start = self.dma_start_page.get();
+        if oam_dma_start.is_some() {
             self.dma_start_page.set(None);
-            // Pass the CPU's last read address for repeated reads during idle cycles
+        }
+
+        // ============================================================
+        // STEP 2: DECIDE BUS MASTER AND START DMA IF NEEDED
+        // ============================================================
+
+        // Start OAM DMA if triggered
+        if let Some(page) = oam_dma_start {
             self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
             self.dma_controller.start_oam_dma(page);
         }
 
-        // STEP 1: Advance APU FIRST (before CPU) to detect DMC DMA needs
-        // This is critical: APU must run first so that when DMC timer fires and
-        // requests DMA, we can start DMA on THIS cycle, halting the CPU before
-        // it reads from open bus registers. If APU ran after CPU, the CPU would
-        // read old data bus values before DMA could update them.
-        let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
-        if let Some(samples) = apu_samples {
-            if let Some(existing) = out_samples.as_mut() {
-                existing.append(samples);
-            } else {
-                out_samples = Some(samples);
-            }
-        }
-        self.apu_counter.current = apu_cycles;
-
-        // STEP 2: Check if DMC DMA is needed IMMEDIATELY after APU runs
-        // Start DMA on THIS cycle (not next) so CPU is halted before its read
-        if !self.dma_controller.is_dmc_dma_active() && self.pending_dmc_dma.is_none() {
-            if let Some(dmc_address) = self.apu.borrow().needs_dmc_dma() {
-                // Start DMC DMA immediately on THIS cycle
-                let cpu_is_writing = self.cpu.borrow().is_mid_instruction();
-                let oam_dma_active = self.dma_controller.is_oam_dma_active();
-                let oam_dma_on_read = self.dma_controller.is_oam_dma_on_read();
-
-                let cycles = DmaController::<dyn Bus, dyn DmaDevice>::calculate_dmc_dma_cycles(
-                    cpu_is_writing,
-                    false, // CPU not halted yet
-                    oam_dma_active,
-                    oam_dma_on_read,
-                );
-
-                // Pass the CPU's last read address for halt cycle reads
-                self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
-                self.dma_controller.start_dmc_dma(dmc_address, cycles, self.last_cpu_read_address);
-            }
+        // Start DMC DMA if APU requested it (event-driven - no pre-calculation)
+        if let Some(dmc_address) = dmc_dma_request {
+            self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
+            self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, self.last_cpu_read_address);
         }
 
-        // STEP 3: Handle any pending DMC DMA from previous cycle
+        // Handle any pending DMC DMA from previous cycle
         if let Some((dmc_address, countdown)) = self.pending_dmc_dma.take() {
             if countdown == 0 {
-                // Countdown reached 0 - start DMA now
-                let cpu_is_writing = self.cpu.borrow().is_mid_instruction();
-                let oam_dma_active = self.dma_controller.is_oam_dma_active();
-                let oam_dma_on_read = self.dma_controller.is_oam_dma_on_read();
-
-                let cycles = DmaController::<dyn Bus, dyn DmaDevice>::calculate_dmc_dma_cycles(
-                    cpu_is_writing,
-                    false, // CPU not halted yet
-                    oam_dma_active,
-                    oam_dma_on_read,
-                );
-
-                // Pass the CPU's last read address for halt cycle reads
                 self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
-                self.dma_controller.start_dmc_dma(dmc_address, cycles, self.last_cpu_read_address);
+                self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, self.last_cpu_read_address);
             } else {
-                // Still counting down - put it back with decremented countdown
                 self.pending_dmc_dma = Some((dmc_address, countdown - 1));
             }
         }
 
-        // STEP 4: Execute one cycle: either DMA (OAM or DMC) or CPU
+        // ============================================================
+        // STEP 3: EXECUTE BUS OPERATION FOR THE SELECTED MASTER
+        // ============================================================
+
         let cpu_result = if self.dma_controller.is_active() {
             // DMA is active - step the DMA controller, CPU is halted
             let dma_result = self.dma_controller.step_cycle()
@@ -258,7 +247,6 @@ impl NesConsole {
             let result = self.cpu.borrow_mut().step_cycle()?;
 
             // Track the CPU's last read address for DMA repeated reads
-            // Only update if the CPU performed a read this cycle
             if result.memory_read {
                 self.last_cpu_read_address = result.address;
             }
@@ -266,29 +254,34 @@ impl NesConsole {
             result
         };
 
-        // Calculate total CPU cycles this step (1 base + any interrupt cycles)
-        let total_cpu_cycles = 1 + cpu_result.interrupt_cycles;
+        // ============================================================
+        // STEP 4: ADVANCE ALL COMPONENTS (AFTER BUS OPERATION)
+        // ============================================================
 
         // Update cycle counters
-        self.cpu_counter.current += total_cpu_cycles;
-        self.master_cycles += total_cpu_cycles as u64;
+        self.cpu_counter.current += 1;
+        self.master_cycles += 1;
 
         // Toggle APU phase (GET/PUT alternates every CPU cycle)
-        // This is used for DMA alignment - reads must occur on GET phases
-        // Phase changes once per cycle, so after N cycles it changes by (N mod 2)
-        for _ in 0..total_cpu_cycles {
-            self.dma_controller.toggle_apu_phase();
-        }
+        self.dma_controller.toggle_apu_phase();
 
-        // Also update legacy cpu_cycle_odd for backward compatibility
-        // (maps GET to even/false, PUT to odd/true)
-        if total_cpu_cycles % 2 == 1 {
-            let new_parity = !self.cpu_cycle_odd.get();
-            self.cpu_cycle_odd.set(new_parity);
-        }
+        // Legacy cpu_cycle_odd for backward compatibility
+        let new_parity = !self.cpu_cycle_odd.get();
+        self.cpu_cycle_odd.set(new_parity);
 
-        // STEP 5: Advance PPU
-        let (new_ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, total_cpu_cycles)?;
+        // Advance APU (AFTER the bus operation, not before)
+        let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
+        if let Some(samples) = apu_samples {
+            if let Some(existing) = out_samples.as_mut() {
+                existing.append(samples);
+            } else {
+                out_samples = Some(samples);
+            }
+        }
+        self.apu_counter.current = apu_cycles;
+
+        // Advance PPU (exactly 3 dots per CPU cycle for NTSC)
+        let (new_ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, 1)?;
         if let Some(frame) = ppu_frame {
             out_frame = Some(frame);
         }

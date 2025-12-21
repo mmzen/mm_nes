@@ -18,7 +18,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 - Interrupts: **Latched polling** - NMI/IRQ sampled at start of each cycle, used at instruction completion
 - **NEW**: GET/PUT APU phase tracking for DMA alignment + CPU repeated reads during DMA idle cycles
 
-**Current focus**: None - Core DMA complete, awaiting next task
+**Current focus**: DMA Feedback implementation complete (all 5 phases)
 
 **AccuracyCoin Score**: 90/131 (target: 120+/131)
 
@@ -200,6 +200,35 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ## Session Log
 
+### Session: December 21, 2025 (session 27)
+- **DMA Feedback Implementation** - addressing architectural issues from `requirements/DMA_feedback.md`
+- **Phase 1 Complete**: Eliminated interrupt_cycles batching
+  - Removed `interrupt_cycles` field from `CpuCycleResult`
+  - Added `InterruptType` enum and `CpuCycleState::InterruptSequence` state
+  - Added `execute_interrupt_cycle()` method - 7-cycle interrupt sequence one cycle at a time
+  - Interrupt sequences now execute through `step_master_cycle()` like regular instructions
+  - Updated 6 tests to use `run_interrupt_sequence()` helper
+- **Phase 2 Complete**: Added per-cycle bus intent to CPU
+  - Added `CpuBusIntent` struct with `op`, `address`, `is_write` fields
+  - Added `get_pending_bus_operation()` method to CPU trait
+  - Implemented `compute_pending_bus_intent()` and `compute_executing_bus_intent()` in Cpu6502
+  - DMA can now query if CPU is about to READ or WRITE before halting
+- **Phase 3 Complete**: Reordered step_master_cycle - bus decision FIRST
+  - Query CPU bus intent BEFORE any component advances
+  - Query APU for DMC DMA from CURRENT state (before tick)
+  - APU now advances AFTER bus operation, not before (fixes time-travel/peeking issue)
+  - Replaced `is_mid_instruction()` with proper `get_pending_bus_operation().is_write` check
+- **Phase 4 Complete**: Event-driven DMC DMA
+  - Added `request_dmc_dma()` method - no pre-calculation of cycles needed
+  - Deprecated `calculate_dmc_dma_cycles()` and legacy `start_dmc_dma(cycles)`
+  - DMC DMA now dynamically determines timing based on CPU bus state each cycle
+- **Phase 5 Complete**: Proper repeated reads during DMA
+  - Fixed DMC DMA Dummy and Align cycles to perform repeated reads from halted address
+  - All DMA idle/wait cycles now properly re-execute CPU's halted read (causes side effects)
+  - Affects $2002 (VBlank clear), $2007 (VRAM increment), $4016/$4017 (controller clock)
+- **All 5 phases complete** - DMA feedback implementation done
+- All 314 tests pass
+
 ### Session: December 21, 2025 (session 26)
 - **DMA.md requirement** - implementing cycle-accurate DMA (Core phases 1-3)
 - **Phase 1 Complete**: GET/PUT APU phase tracking
@@ -324,6 +353,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | Dec 21, 2025 | ~74% | ~26% | DMA Phases 1-2: GET/PUT phase, CPU repeated reads |
 | Dec 21, 2025 | ~73% | ~27% | DMA Phase 3: DMC DMA state machine - Core DMA complete |
 | Dec 21, 2025 | ~72% | ~28% | APU dead code removal (internal DMC DMA, Bus type param) |
+| Dec 21, 2025 | ~70% | ~30% | DMA Feedback: all 5 phases complete (interrupt, bus intent, scheduler, event-driven, repeated reads) |
 
 ---
 
