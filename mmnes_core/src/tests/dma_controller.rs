@@ -2,11 +2,12 @@
 //! Tests for DmaController
 //!
 //! Tests OAM DMA (513/514 cycles) and DMC DMA (1-4 cycles) cycle-accurate behavior.
+//! Also tests GET/PUT APU phase tracking for DMA alignment.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
-use crate::dma_controller::DmaController;
+use crate::dma_controller::{ApuPhase, DmaController};
 use crate::dma_device::MockDmaDeviceStub;
 use crate::tests::init;
 
@@ -95,19 +96,20 @@ fn test_calculate_dmc_dma_cycles_cpu_halted() {
 }
 
 #[test]
-fn test_oam_dma_cycles_even_start() {
+fn test_oam_dma_cycles_get_phase_start() {
     init();
-    let controller = create_controller();
-    // Starting on even cycle: 513 cycles
+    let mut controller = create_controller();
+    controller.set_apu_phase(ApuPhase::Get);
+    // Starting on GET phase: 513 cycles (1 idle + 512 transfer)
     assert_eq!(controller.oam_dma_cycles(), 513);
 }
 
 #[test]
-fn test_oam_dma_cycles_odd_start() {
+fn test_oam_dma_cycles_put_phase_start() {
     init();
     let mut controller = create_controller();
-    controller.set_cpu_cycle_odd(true);
-    // Starting on odd cycle: 514 cycles
+    controller.set_apu_phase(ApuPhase::Put);
+    // Starting on PUT phase: 514 cycles (2 idle + 512 transfer)
     assert_eq!(controller.oam_dma_cycles(), 514);
 }
 
@@ -124,10 +126,10 @@ fn test_reset_clears_dma_state() {
 }
 
 #[test]
-fn test_oam_dma_completes_in_513_cycles_even_start() {
+fn test_oam_dma_completes_in_513_cycles_get_phase_start() {
     init();
     let mut controller = create_controller();
-    controller.set_cpu_cycle_odd(false);
+    controller.set_apu_phase(ApuPhase::Get);
     controller.start_oam_dma(0x02);
 
     let mut total_cycles = 0;
@@ -151,16 +153,16 @@ fn test_oam_dma_completes_in_513_cycles_even_start() {
         }
     }
 
-    assert_eq!(total_cycles, 513, "OAM DMA should take 513 cycles on even start");
+    assert_eq!(total_cycles, 513, "OAM DMA should take 513 cycles when started on GET phase");
     assert_eq!(read_count, 256, "Should have 256 reads");
     assert_eq!(write_count, 256, "Should have 256 writes");
 }
 
 #[test]
-fn test_oam_dma_completes_in_514_cycles_odd_start() {
+fn test_oam_dma_completes_in_514_cycles_put_phase_start() {
     init();
     let mut controller = create_controller();
-    controller.set_cpu_cycle_odd(true);
+    controller.set_apu_phase(ApuPhase::Put);
     controller.start_oam_dma(0x02);
 
     let mut total_cycles = 0;
@@ -175,19 +177,19 @@ fn test_oam_dma_completes_in_514_cycles_odd_start() {
         }
     }
 
-    assert_eq!(total_cycles, 514, "OAM DMA should take 514 cycles on odd start");
+    assert_eq!(total_cycles, 514, "OAM DMA should take 514 cycles when started on PUT phase");
 }
 
 #[test]
 fn test_oam_dma_reads_from_correct_addresses() {
     init();
     let mut controller = create_controller();
-    controller.set_cpu_cycle_odd(false); // Even start
+    controller.set_apu_phase(ApuPhase::Get); // GET phase start
 
     // Start DMA from page 0x02 (addresses 0x0200-0x02FF)
     controller.start_oam_dma(0x02);
 
-    // Cycle 0: First idle cycle (even start has only 1 idle)
+    // Cycle 0: First idle cycle (GET start has only 1 idle)
     let result = controller.step_cycle().unwrap();
     assert!(!result.read_occurred && !result.write_occurred, "Idle cycle");
 
@@ -210,10 +212,10 @@ fn test_oam_dma_reads_from_correct_addresses() {
 fn test_oam_dma_alternates_read_write() {
     init();
     let mut controller = create_controller();
-    controller.set_cpu_cycle_odd(false); // Even start
+    controller.set_apu_phase(ApuPhase::Get); // GET phase start
     controller.start_oam_dma(0x00);
 
-    // Skip the 1 idle cycle for even start
+    // Skip the 1 idle cycle for GET phase start
     let result = controller.step_cycle().unwrap();
     assert!(!result.read_occurred && !result.write_occurred, "Should be idle cycle");
 
@@ -231,21 +233,21 @@ fn test_oam_dma_alternates_read_write() {
 }
 
 #[test]
-fn test_oam_dma_odd_start_has_two_idle_cycles() {
+fn test_oam_dma_put_phase_start_has_two_idle_cycles() {
     init();
     let mut controller = create_controller();
-    controller.set_cpu_cycle_odd(true); // Odd start
+    controller.set_apu_phase(ApuPhase::Put); // PUT phase start
     controller.start_oam_dma(0x00);
 
     // First idle cycle
     let result = controller.step_cycle().unwrap();
     assert!(!result.read_occurred && !result.write_occurred, "First idle cycle");
 
-    // Second idle cycle (only on odd start)
+    // Second idle cycle (only on PUT phase start - aligns to GET)
     let result = controller.step_cycle().unwrap();
     assert!(!result.read_occurred && !result.write_occurred, "Second idle cycle");
 
-    // Now the first read
+    // Now the first read (occurs on GET phase)
     let result = controller.step_cycle().unwrap();
     assert!(result.read_occurred, "Third cycle should be first read");
 }
@@ -297,4 +299,194 @@ fn test_dmc_dma_without_conflict_address_has_idle_halt_cycles() {
     assert!(result.read_occurred, "Final cycle should perform read");
     assert_eq!(result.address_accessed, Some(0xC000), "Final cycle should read from DMC address");
     assert!(result.dmc_dma_complete.is_some(), "Final cycle should complete DMA");
+}
+
+// ============================================================================
+// GET/PUT APU Phase Tests
+// ============================================================================
+
+#[test]
+fn test_apu_phase_toggle() {
+    init();
+    let mut controller = create_controller();
+
+    // Start at GET
+    controller.set_apu_phase(ApuPhase::Get);
+    assert_eq!(controller.get_apu_phase(), ApuPhase::Get);
+
+    // Toggle to PUT
+    controller.toggle_apu_phase();
+    assert_eq!(controller.get_apu_phase(), ApuPhase::Put);
+
+    // Toggle back to GET
+    controller.toggle_apu_phase();
+    assert_eq!(controller.get_apu_phase(), ApuPhase::Get);
+}
+
+#[test]
+fn test_apu_phase_is_get_is_put() {
+    init();
+
+    assert!(ApuPhase::Get.is_get());
+    assert!(!ApuPhase::Get.is_put());
+
+    assert!(!ApuPhase::Put.is_get());
+    assert!(ApuPhase::Put.is_put());
+}
+
+#[test]
+fn test_apu_phase_preserved_across_reset() {
+    init();
+    let mut controller = create_controller();
+
+    // Set phase to PUT
+    controller.set_apu_phase(ApuPhase::Put);
+    assert_eq!(controller.get_apu_phase(), ApuPhase::Put);
+
+    // Start some DMA
+    controller.start_oam_dma(0x02);
+    assert!(controller.is_active());
+
+    // Reset
+    controller.reset();
+
+    // DMA should be cleared
+    assert!(!controller.is_active());
+
+    // But APU phase should be preserved (only randomized on power-on)
+    assert_eq!(controller.get_apu_phase(), ApuPhase::Put);
+}
+
+#[test]
+fn test_oam_dma_uses_current_apu_phase_for_alignment() {
+    init();
+    let mut controller = create_controller();
+
+    // Test GET phase start
+    controller.set_apu_phase(ApuPhase::Get);
+    controller.start_oam_dma(0x02);
+
+    let mut cycles_get = 0;
+    while controller.is_active() {
+        let _ = controller.step_cycle().unwrap();
+        cycles_get += 1;
+        if cycles_get > 600 { panic!("Too many cycles"); }
+    }
+    assert_eq!(cycles_get, 513, "GET phase start should take 513 cycles");
+
+    // Test PUT phase start
+    controller.set_apu_phase(ApuPhase::Put);
+    controller.start_oam_dma(0x02);
+
+    let mut cycles_put = 0;
+    while controller.is_active() {
+        let _ = controller.step_cycle().unwrap();
+        cycles_put += 1;
+        if cycles_put > 600 { panic!("Too many cycles"); }
+    }
+    assert_eq!(cycles_put, 514, "PUT phase start should take 514 cycles");
+}
+
+#[test]
+fn test_halted_read_address_tracking() {
+    init();
+    let mut controller = create_controller();
+
+    // Initially no halted address
+    assert!(controller.get_halted_read_address().is_none());
+
+    // Set halted address
+    controller.set_halted_read_address(Some(0x2002));
+    assert_eq!(controller.get_halted_read_address(), Some(0x2002));
+
+    // Reset should clear it
+    controller.reset();
+    assert!(controller.get_halted_read_address().is_none());
+}
+
+#[test]
+fn test_oam_dma_idle_cycle_performs_repeated_read() {
+    init();
+    // Create a controller with a bus
+    let mut bus = MockBusStub::new();
+    bus.expect_read_byte().returning(|addr| {
+        Ok((addr & 0xFF) as u8)
+    });
+
+    let mut ppu = MockDmaDeviceStub::new();
+    ppu.expect_dma_write().returning(|_, _| Ok(()));
+
+    let mut controller = DmaController::new(
+        Rc::new(RefCell::new(bus)),
+        Rc::new(RefCell::new(ppu))
+    );
+
+    // Set the halted read address (simulating CPU was reading from $2002)
+    controller.set_halted_read_address(Some(0x2002));
+    controller.set_apu_phase(ApuPhase::Get);
+    controller.start_oam_dma(0x02);
+
+    // First cycle (idle) should read from the halted address
+    let result = controller.step_cycle().unwrap();
+    assert!(result.read_occurred, "Idle cycle should perform repeated read");
+    assert_eq!(result.address_accessed, Some(0x2002), "Should read from halted address");
+}
+
+#[test]
+fn test_oam_dma_put_phase_both_idle_cycles_perform_repeated_reads() {
+    init();
+    let mut bus = MockBusStub::new();
+    bus.expect_read_byte().returning(|addr| Ok((addr & 0xFF) as u8));
+
+    let mut ppu = MockDmaDeviceStub::new();
+    ppu.expect_dma_write().returning(|_, _| Ok(()));
+
+    let mut controller = DmaController::new(
+        Rc::new(RefCell::new(bus)),
+        Rc::new(RefCell::new(ppu))
+    );
+
+    // Set halted address and start on PUT phase (needs 2 idle cycles)
+    controller.set_halted_read_address(Some(0x4016));  // Controller read
+    controller.set_apu_phase(ApuPhase::Put);
+    controller.start_oam_dma(0x02);
+
+    // First idle cycle
+    let result1 = controller.step_cycle().unwrap();
+    assert!(result1.read_occurred, "First idle cycle should read");
+    assert_eq!(result1.address_accessed, Some(0x4016));
+
+    // Second idle cycle (PUT phase alignment)
+    let result2 = controller.step_cycle().unwrap();
+    assert!(result2.read_occurred, "Second idle cycle should read");
+    assert_eq!(result2.address_accessed, Some(0x4016));
+
+    // Third cycle should be actual DMA read
+    let result3 = controller.step_cycle().unwrap();
+    assert!(result3.read_occurred);
+    assert_eq!(result3.address_accessed, Some(0x0200), "Should read from source");
+}
+
+#[test]
+fn test_oam_dma_no_halted_address_idle_cycles_are_quiet() {
+    init();
+    let mut bus = MockBusStub::new();
+    bus.expect_read_byte().returning(|addr| Ok((addr & 0xFF) as u8));
+
+    let mut ppu = MockDmaDeviceStub::new();
+    ppu.expect_dma_write().returning(|_, _| Ok(()));
+
+    let mut controller = DmaController::new(
+        Rc::new(RefCell::new(bus)),
+        Rc::new(RefCell::new(ppu))
+    );
+
+    // No halted address set
+    controller.set_apu_phase(ApuPhase::Get);
+    controller.start_oam_dma(0x02);
+
+    // Idle cycle without halted address should not read
+    let result = controller.step_cycle().unwrap();
+    assert!(!result.read_occurred, "Idle without halted address should not read");
+    assert!(result.address_accessed.is_none());
 }

@@ -16,8 +16,9 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 - DMA: **Cycle-by-cycle OAM DMA** + **DMC DMA mid-instruction stealing** (1-4 cycles based on CPU state)
 - Scheduler: **Single-source-of-truth** via `step_master_cycle()` - no instruction-boundary fallbacks
 - Interrupts: **Latched polling** - NMI/IRQ sampled at start of each cycle, used at instruction completion
+- **NEW**: GET/PUT APU phase tracking for DMA alignment + CPU repeated reads during DMA idle cycles
 
-**Current focus**: None (Convergence Phase on hold)
+**Current focus**: None - Core DMA complete, awaiting next task
 
 **AccuracyCoin Score**: 90/131 (target: 120+/131)
 
@@ -73,6 +74,32 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 ---
 
 ## On Hold
+
+### DMA Implementation - Advanced Phases (requirements/DMA.md)
+
+**Status**: Deferred (December 21, 2025)
+**Core DMA (Phases 1-3)**: ✓ Complete
+**Remaining Phases**: 4-7 deferred for future work
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | ✓ Complete | GET/PUT APU phase tracking |
+| Phase 2 | ✓ Complete | CPU repeated reads during DMA |
+| Phase 3 | ✓ Complete | DMC DMA state machine |
+| Phase 4 | Deferred | DMC Load vs Reload DMA scheduling |
+| Phase 5 | Deferred | DMC DMA bugs (aborted DMA, unexpected reload) |
+| Phase 6 | Deferred | OAM decay model (row-based timing) |
+| Phase 7 | Deferred | APU register activation during DMA |
+
+**Files modified** (Core DMA):
+- `dma_controller.rs`: `ApuPhase`, `DmcDmaPhase` enums, phase tracking, repeated reads
+- `nes_console.rs`: Phase toggling, power-on randomization
+- `apu_rp2a03.rs`: Removed internal DMC DMA (now external via DmaController)
+- `tests/dma_controller.rs`: 26 tests
+
+**Plan file**: `C:\Users\mathi\.claude\plans\bubbly-greeting-tiger.md` contains full implementation details for phases 4-7.
+
+---
 
 ### Test Coverage (≥80% target)
 
@@ -173,6 +200,35 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ## Session Log
 
+### Session: December 21, 2025 (session 26)
+- **DMA.md requirement** - implementing cycle-accurate DMA (Core phases 1-3)
+- **Phase 1 Complete**: GET/PUT APU phase tracking
+  - Added `ApuPhase` enum (Get/Put) to `dma_controller.rs`
+  - Phase alternates every CPU cycle in `step_master_cycle()`
+  - Phase randomized on power-on (not reset)
+  - OAM DMA alignment uses phase (GET=513 cycles, PUT=514 cycles)
+  - Updated all tests to use `set_apu_phase()` instead of deprecated `set_cpu_cycle_odd()`
+- **Phase 2 Complete**: CPU repeated reads during DMA no-bus cycles
+  - Added `halted_read_address` tracking to DmaController
+  - NesConsole tracks CPU's last read address
+  - During DMA idle/alignment cycles, reads occur from halted address
+  - This causes side effects: $2002 VBlank clear, $2007 VRAM increment, $4016/$4017 controller clock
+  - 4 new tests for repeated read behavior
+- **Phase 3 Complete**: DMC DMA state machine
+  - Added `DmcDmaPhase` enum: Idle, Halt(u8), Dummy, Align, Read
+  - Replaced `cycles_remaining: u8` counter with explicit phase tracking
+  - Updated `step_dmc_dma()` to transition through states correctly
+  - Fixed `step_cycle()` to check phase instead of cycles_remaining
+- **Core DMA implementation complete** - All 571 tests pass
+- **APU Dead Code Removal**: Internal DMC DMA code no longer needed
+  - Removed `cond_dma_prefetch()` and `dma_read_and_update_sample_buffer_and_counter()` from DMC
+  - Removed `dmc_stall_cycles`, `external_dmc_dma` fields from APU
+  - Removed `get_dmc_stall_cycles()`, `set_external_dmc_dma()` from APU trait
+  - Removed `cycle_accurate_initialized` flag from NesConsole
+  - Removed unused `Bus` type parameter from `ApuRp2A03<T, U, V>` → `ApuRp2A03<T, U>`
+  - Removed `bus` field from DMC channel
+  - DMC DMA now fully handled externally by DmaController via `needs_dmc_dma()`/`provide_dmc_sample()`
+
 ### Session: December 21, 2025 (session 25)
 - **TESTS-STRUCTURE.md requirement** - all tests must live in `src/tests/`
 - Audited codebase: found inline tests in `ppu_dma.rs` (1 test) and `dma_controller.rs` (18 tests)
@@ -265,6 +321,9 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | Dec 20, 2025 | ~76% | ~24% | DMC DMA data bus fix (INC $4014 + IMPLIED DUMMY READ hangs) |
 | Dec 21, 2025 | ~76% | ~24% | Debug cleanup, Convergence Phase archived |
 | Dec 21, 2025 | ~75% | ~25% | Legacy code elimination, single execution path |
+| Dec 21, 2025 | ~74% | ~26% | DMA Phases 1-2: GET/PUT phase, CPU repeated reads |
+| Dec 21, 2025 | ~73% | ~27% | DMA Phase 3: DMC DMA state machine - Core DMA complete |
+| Dec 21, 2025 | ~72% | ~28% | APU dead code removal (internal DMC DMA, Bus type param) |
 
 ---
 

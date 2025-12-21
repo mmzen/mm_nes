@@ -2,6 +2,8 @@
 // Updated: Fixed OAM DMA alignment logic (1 idle for even, 2 for odd), added comprehensive tests
 // Updated: Added DMC DMA bus conflict behavior - halt cycles read from CPU's conflict address
 // Updated: Fixed DMC+OAM DMA interleaving - halt cycles run alongside OAM, only get cycle has priority
+// Updated: Added GET/PUT phase tracking for proper APU bus timing
+// Updated: Replaced DMC DMA cycles_remaining with DmcDmaPhase state machine (Halt/Dummy/Align/Read)
 //! DMA Controller for cycle-accurate OAM DMA and DMC DMA handling.
 //!
 //! This module provides a centralized DMA controller that manages both:
@@ -10,6 +12,17 @@
 //!
 //! The controller works with the CPU's cycle-stepping state machine to properly
 //! halt the CPU during DMA operations.
+//!
+//! ## GET/PUT Phase Model
+//!
+//! The APU operates on a GET/PUT phase that alternates every CPU cycle:
+//! - **GET phase**: APU samples the data bus (reads occur)
+//! - **PUT phase**: APU drives the internal address bus
+//!
+//! DMA operations must align to these phases:
+//! - OAM DMA reads must occur on GET cycles
+//! - DMC DMA's final sample read must occur on a GET cycle
+//! - If the next cycle would be PUT when a read is needed, an alignment cycle is inserted
 
 use std::cell::RefCell;
 use std::fmt::Debug;
@@ -17,6 +30,42 @@ use std::rc::Rc;
 use crate::bus::Bus;
 use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
+
+/// APU bus phase - alternates every CPU cycle
+///
+/// The GET/PUT model describes the APU's relationship to the CPU bus:
+/// - GET: APU samples the data bus (external reads visible to APU)
+/// - PUT: APU drives internal address bus (writes/internal operations)
+///
+/// DMA operations align to these phases for correct timing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ApuPhase {
+    /// APU samples data bus - reads occur on this phase
+    #[default]
+    Get,
+    /// APU drives internal address bus - writes/internal ops
+    Put,
+}
+
+impl ApuPhase {
+    /// Toggle to the opposite phase
+    pub fn toggle(&self) -> ApuPhase {
+        match self {
+            ApuPhase::Get => ApuPhase::Put,
+            ApuPhase::Put => ApuPhase::Get,
+        }
+    }
+
+    /// Returns true if this is a GET phase (read phase)
+    pub fn is_get(&self) -> bool {
+        matches!(self, ApuPhase::Get)
+    }
+
+    /// Returns true if this is a PUT phase
+    pub fn is_put(&self) -> bool {
+        matches!(self, ApuPhase::Put)
+    }
+}
 
 /// State of OAM DMA transfer
 #[derive(Debug, Clone, Default)]
@@ -33,8 +82,32 @@ pub struct OamDmaState {
     pub read_phase: bool,
     /// The value read during the read phase
     pub read_value: u8,
-    /// Whether we started on an odd CPU cycle (affects alignment)
-    pub started_on_odd: bool,
+    /// APU phase when OAM DMA started (affects alignment)
+    /// If started on PUT, need extra alignment cycle to reach GET for first read
+    pub started_on_phase: ApuPhase,
+}
+
+/// Phase of DMC DMA operation
+///
+/// DMC DMA follows a specific sequence depending on CPU state:
+/// - Halt: Wait for CPU to be ready (reads from conflict address)
+/// - Dummy: Dummy cycle after halt
+/// - Align: Optional alignment if next cycle isn't GET
+/// - Read: Actual sample fetch from DMC address
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DmcDmaPhase {
+    /// Idle - no DMC DMA in progress
+    #[default]
+    Idle,
+    /// Halt cycle(s) - reading from conflict address, waiting for CPU
+    /// Contains count of remaining halt cycles (1-3)
+    Halt(u8),
+    /// Dummy cycle after halt
+    Dummy,
+    /// Alignment cycle (if next cycle isn't GET phase)
+    Align,
+    /// Final read cycle - fetch sample from DMC address
+    Read,
 }
 
 /// State of DMC DMA fetch
@@ -44,8 +117,8 @@ pub struct DmcDmaState {
     pub active: bool,
     /// Address to fetch the DMC sample from
     pub address: u16,
-    /// Cycles remaining for this DMC DMA
-    pub cycles_remaining: u8,
+    /// Current phase of DMC DMA operation
+    pub phase: DmcDmaPhase,
     /// Address the CPU was accessing when DMC DMA started (for bus conflict reads)
     /// During halt cycles, reads from this address cause side effects
     pub conflict_address: Option<u16>,
@@ -62,8 +135,16 @@ pub struct DmaController<B: Bus + ?Sized, D: DmaDevice + ?Sized> {
     bus: Rc<RefCell<B>>,
     /// Reference to the PPU for OAM writes
     ppu: Rc<RefCell<D>>,
-    /// Tracks whether current CPU cycle is odd (for OAM DMA alignment)
-    cpu_cycle_odd: bool,
+    /// Current APU phase (GET/PUT) - alternates every CPU cycle
+    /// Used for DMA alignment decisions
+    apu_phase: ApuPhase,
+    /// Address the CPU was reading from when halted
+    /// During DMA no-bus cycles, the external bus shows repeated reads from this address.
+    /// This is important because reading certain addresses causes side effects:
+    /// - $2002: Clears VBlank flag
+    /// - $2007: Increments VRAM address
+    /// - $4016/$4017: Clocks controller shift register
+    halted_read_address: Option<u16>,
 }
 
 /// Result of a DMA controller cycle step
@@ -91,15 +172,49 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             dmc_dma: DmcDmaState::default(),
             bus,
             ppu,
-            cpu_cycle_odd: false,
+            apu_phase: ApuPhase::default(),
+            halted_read_address: None,
         }
     }
 
     /// Reset the DMA controller state
+    /// Note: APU phase is NOT reset here - it persists across reset (only randomized on power-on)
     pub fn reset(&mut self) {
         self.oam_dma = OamDmaState::default();
         self.dmc_dma = DmcDmaState::default();
-        self.cpu_cycle_odd = false;
+        self.halted_read_address = None;
+        // Don't reset apu_phase - only power_on should randomize it
+    }
+
+    /// Set the address the CPU was reading from when halted
+    ///
+    /// During DMA no-bus cycles, the external bus shows repeated reads from this address.
+    /// This causes side effects for certain registers:
+    /// - $2002: Clears VBlank flag
+    /// - $2007: Increments VRAM address
+    /// - $4016/$4017: Clocks controller shift register
+    pub fn set_halted_read_address(&mut self, address: Option<u16>) {
+        self.halted_read_address = address;
+    }
+
+    /// Get the current halted read address
+    pub fn get_halted_read_address(&self) -> Option<u16> {
+        self.halted_read_address
+    }
+
+    /// Set the APU phase directly (used during power-on randomization)
+    pub fn set_apu_phase(&mut self, phase: ApuPhase) {
+        self.apu_phase = phase;
+    }
+
+    /// Get the current APU phase
+    pub fn get_apu_phase(&self) -> ApuPhase {
+        self.apu_phase
+    }
+
+    /// Toggle the APU phase (called every CPU cycle)
+    pub fn toggle_apu_phase(&mut self) {
+        self.apu_phase = self.apu_phase.toggle();
     }
 
     /// Check if any DMA is currently active
@@ -108,6 +223,13 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     }
 
     /// Start an OAM DMA transfer from the specified page
+    ///
+    /// OAM DMA alignment depends on the current APU phase:
+    /// - If started on GET: 513 cycles (1 idle + 512 transfer)
+    /// - If started on PUT: 514 cycles (2 idle + 512 transfer)
+    ///
+    /// The extra idle cycle when starting on PUT ensures the first read
+    /// occurs on a GET phase.
     pub fn start_oam_dma(&mut self, page: u8) {
         self.oam_dma = OamDmaState {
             active: true,
@@ -116,29 +238,47 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             cycle: 0,
             read_phase: true,
             read_value: 0,
-            started_on_odd: self.cpu_cycle_odd,
+            started_on_phase: self.apu_phase,
         };
     }
 
     /// Start a DMC DMA fetch from the specified address.
     ///
-    /// The cycle count depends on the CPU's current bus activity:
-    /// - 4 cycles if CPU is writing (cannot interrupt mid-write)
-    /// - 3 cycles if CPU is reading
-    /// - 2 cycles if OAM DMA is in progress
-    /// - 1 cycle if CPU is already halted
+    /// DMC DMA uses a state machine with phases:
+    /// - Halt cycles: 0-3 cycles depending on CPU state, reads from conflict address
+    /// - Dummy cycle: Always present after halt
+    /// - Align cycle: Present if current phase is PUT (need to align to GET for read)
+    /// - Read cycle: Final cycle, fetches sample from DMC address
+    ///
+    /// Total cycle counts:
+    /// - 4 cycles if CPU is writing (halt(3) → read)
+    /// - 3 cycles if CPU is reading (halt(2) → read)
+    /// - 2 cycles if OAM DMA write phase (halt(1) → read)
+    /// - 1 cycle if OAM DMA read phase or CPU halted (read only)
     ///
     /// # Arguments
     /// * `address` - The address to fetch the sample byte from
-    /// * `cycles` - Number of cycles to steal (1-4), determined by caller based on CPU state
+    /// * `cycles` - Number of cycles to steal (1-4), determines initial phase
     /// * `conflict_address` - The address the CPU was reading from (for halt cycle side effects)
     pub fn start_dmc_dma(&mut self, address: u16, cycles: u8, conflict_address: Option<u16>) {
         // Clamp to valid range (1-4 cycles)
         let cycles = cycles.clamp(1, 4);
+
+        // Determine initial phase based on cycle count
+        // cycles=1: Read only (no halt)
+        // cycles=2: Halt(1) → Read
+        // cycles=3: Halt(2) → Read
+        // cycles=4: Halt(3) → Read
+        let initial_phase = if cycles == 1 {
+            DmcDmaPhase::Read
+        } else {
+            DmcDmaPhase::Halt(cycles - 1)
+        };
+
         self.dmc_dma = DmcDmaState {
             active: true,
             address,
-            cycles_remaining: cycles,
+            phase: initial_phase,
             conflict_address,
         };
     }
@@ -187,14 +327,11 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         self.oam_dma.active && self.oam_dma.read_phase
     }
 
-    /// Update the CPU cycle parity tracking
+    /// Update the CPU cycle parity tracking (legacy compatibility)
+    /// Maps odd=true to PUT phase, odd=false to GET phase
+    #[deprecated(note = "Use set_apu_phase instead")]
     pub fn set_cpu_cycle_odd(&mut self, odd: bool) {
-        self.cpu_cycle_odd = odd;
-    }
-
-    /// Toggle the CPU cycle parity
-    pub fn toggle_cpu_cycle_parity(&mut self) {
-        self.cpu_cycle_odd = !self.cpu_cycle_odd;
+        self.apu_phase = if odd { ApuPhase::Put } else { ApuPhase::Get };
     }
 
     /// Execute one cycle of DMA.
@@ -208,8 +345,8 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     pub fn step_cycle(&mut self) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
 
-        // Check if DMC DMA is on its final "get" cycle (cycles_remaining == 1)
-        let dmc_on_get_cycle = self.dmc_dma.active && self.dmc_dma.cycles_remaining == 1;
+        // Check if DMC DMA is on its final "read" cycle
+        let dmc_on_get_cycle = self.dmc_dma.active && self.dmc_dma.phase == DmcDmaPhase::Read;
 
         if dmc_on_get_cycle {
             // DMC get cycle takes exclusive priority - OAM DMA pauses
@@ -243,21 +380,41 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
 
     /// Execute one cycle of OAM DMA
     ///
-    /// OAM DMA timing (from NESDev):
-    /// - 513 cycles on even CPU cycle start: 1 idle + 512 transfer (256 reads + 256 writes)
-    /// - 514 cycles on odd CPU cycle start: 2 idle + 512 transfer
+    /// OAM DMA timing based on GET/PUT phase:
+    /// - 513 cycles when started on GET: 1 idle + 512 transfer (256 reads + 256 writes)
+    /// - 514 cycles when started on PUT: 2 idle + 512 transfer
+    ///
+    /// The alignment ensures reads always occur on GET phases.
+    ///
+    /// During idle/alignment cycles, the CPU's halted read address is read repeatedly,
+    /// causing side effects for certain registers ($2002, $2007, $4016/$4017).
     fn step_oam_dma(&mut self) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
 
         // Cycle 0: First idle/alignment cycle (always present)
+        // During this cycle, perform a repeated read from the CPU's halted address
         if self.oam_dma.cycle == 0 {
             self.oam_dma.cycle = 1;
+            // Perform repeated read from halted address (causes side effects)
+            if let Some(halted_addr) = self.halted_read_address {
+                let _ = self.bus.borrow().read_byte(halted_addr)?;
+                result.address_accessed = Some(halted_addr);
+                result.read_occurred = true;
+            }
             return Ok(result);
         }
 
-        // Cycle 1: Second idle cycle (only if started on odd CPU cycle)
-        if self.oam_dma.cycle == 1 && self.oam_dma.started_on_odd {
+        // Cycle 1: Second idle cycle (only if started on PUT phase)
+        // This aligns the first read to a GET phase
+        // Also performs a repeated read from the CPU's halted address
+        if self.oam_dma.cycle == 1 && self.oam_dma.started_on_phase.is_put() {
             self.oam_dma.cycle = 2;
+            // Perform repeated read from halted address (causes side effects)
+            if let Some(halted_addr) = self.halted_read_address {
+                let _ = self.bus.borrow().read_byte(halted_addr)?;
+                result.address_accessed = Some(halted_addr);
+                result.read_occurred = true;
+            }
             return Ok(result);
         }
 
@@ -296,49 +453,85 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         Ok(result)
     }
 
-    /// Execute one cycle of DMC DMA
+    /// Execute one cycle of DMC DMA using state machine
     ///
-    /// During DMC DMA, the CPU is halted by pulling RDY low. The sequence is:
-    /// - Halt cycles (all but last): Read from CPU's conflict address (causes side effects)
-    /// - Final cycle: Read from DMC sample address
+    /// DMC DMA phases:
+    /// - Halt(n): n halt cycles remaining, reads from conflict address (causes side effects)
+    /// - Dummy: Dummy cycle (no bus activity) - currently not used in simple model
+    /// - Align: Alignment cycle (no bus activity) - currently not used in simple model
+    /// - Read: Final cycle, fetches sample from DMC address
     ///
-    /// The conflict reads are important because they affect special registers:
+    /// The conflict reads during halt cycles are important because they affect special registers:
     /// - $2007: Increments PPU VRAM address
     /// - $4015: Clears APU frame counter interrupt flag
     /// - $4016/$4017: Clocks controller shift register
     fn step_dmc_dma(&mut self) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
 
-        self.dmc_dma.cycles_remaining -= 1;
+        match self.dmc_dma.phase {
+            DmcDmaPhase::Idle => {
+                // Should not happen - DMA is marked active but no phase
+                self.dmc_dma.active = false;
+            }
 
-        if self.dmc_dma.cycles_remaining == 0 {
-            // Final cycle: Perform the actual DMC sample read
-            let address = self.dmc_dma.address;
-            let value = self.bus.borrow().read_byte(address)?;
+            DmcDmaPhase::Halt(remaining) => {
+                // Halt cycle: Read from CPU's conflict address (causes side effects)
+                if let Some(conflict_addr) = self.dmc_dma.conflict_address {
+                    let _ = self.bus.borrow().read_byte(conflict_addr)?;
+                    result.address_accessed = Some(conflict_addr);
+                    result.read_occurred = true;
+                }
+                // Else no bus activity this cycle (idle halt)
 
-            result.address_accessed = Some(address);
-            result.read_occurred = true;
-            result.dmc_dma_complete = Some(value);
+                // Transition to next state
+                if remaining > 1 {
+                    self.dmc_dma.phase = DmcDmaPhase::Halt(remaining - 1);
+                } else {
+                    // Last halt cycle done, go to read
+                    self.dmc_dma.phase = DmcDmaPhase::Read;
+                }
+            }
 
-            self.dmc_dma.active = false;
-        } else if let Some(conflict_addr) = self.dmc_dma.conflict_address {
-            // Halt cycle: Read from CPU's conflict address (causes side effects)
-            // This is the "bus conflict" behavior where the CPU's read keeps happening
-            let _ = self.bus.borrow().read_byte(conflict_addr)?;
+            DmcDmaPhase::Dummy => {
+                // Dummy cycle - no bus activity
+                // Transition to align or read based on APU phase
+                // For now, go straight to read (alignment handled by caller)
+                self.dmc_dma.phase = DmcDmaPhase::Read;
+            }
 
-            result.address_accessed = Some(conflict_addr);
-            result.read_occurred = true;
+            DmcDmaPhase::Align => {
+                // Alignment cycle - no bus activity
+                // Transition to read
+                self.dmc_dma.phase = DmcDmaPhase::Read;
+            }
+
+            DmcDmaPhase::Read => {
+                // Final cycle: Perform the actual DMC sample read
+                let address = self.dmc_dma.address;
+                let value = self.bus.borrow().read_byte(address)?;
+
+                result.address_accessed = Some(address);
+                result.read_occurred = true;
+                result.dmc_dma_complete = Some(value);
+
+                // DMA complete - reset state
+                self.dmc_dma.active = false;
+                self.dmc_dma.phase = DmcDmaPhase::Idle;
+            }
         }
-        // If no conflict address, this is an idle halt cycle (no bus activity)
 
         Ok(result)
     }
 
     /// Get the total cycles an OAM DMA will take (for pre-calculation)
+    ///
+    /// Based on current APU phase:
+    /// - GET phase: 513 cycles (1 idle + 512 transfer)
+    /// - PUT phase: 514 cycles (2 idle + 512 transfer)
     pub fn oam_dma_cycles(&self) -> u16 {
         // 512 cycles for 256 bytes (read + write each)
-        // Plus 1-2 alignment cycles depending on odd/even start
-        if self.cpu_cycle_odd { 514 } else { 513 }
+        // Plus 1-2 alignment cycles depending on GET/PUT start
+        if self.apu_phase.is_put() { 514 } else { 513 }
     }
 
     /// Check if OAM DMA is active

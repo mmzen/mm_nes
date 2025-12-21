@@ -80,22 +80,14 @@ pub trait APU: Configurable {
     /// Returns an optional sample if one was generated this cycle.
     fn step_cycle(&mut self) -> Result<Option<f32>, ApuError>;
 
-    /// Returns the number of CPU cycles stolen by DMC DMA since last call.
-    /// The DMC channel needs to fetch sample bytes from memory, which steals CPU cycles.
-    /// This method returns accumulated stall cycles and clears the internal counter.
-    fn get_dmc_stall_cycles(&mut self) -> u32;
-
     /// Check if DMC DMA is needed (sample buffer empty and bytes remaining).
     /// Returns the address to fetch from if DMA is needed, None otherwise.
+    /// The scheduler should call this after each APU cycle to check for DMA requests.
     fn needs_dmc_dma(&self) -> Option<u16>;
 
     /// Provide the DMC with a fetched sample byte (called after DMC DMA completes).
+    /// The scheduler calls this after performing the DMA read via the DmaController.
     fn provide_dmc_sample(&mut self, value: u8) -> Result<(), ApuError>;
-
-    /// Enable or disable external DMC DMA handling.
-    /// When enabled, the APU will NOT do internal DMA prefetch.
-    /// Instead, the scheduler should use needs_dmc_dma() and provide_dmc_sample().
-    fn set_external_dmc_dma(&mut self, enabled: bool);
 
     /// Debug: Get DMC timer period (for timing analysis).
     fn debug_get_dmc_timer_period(&self) -> u16;

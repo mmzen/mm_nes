@@ -1,4 +1,6 @@
-// Authorship: Human 65% | Claude 35%
+// Authorship: Human 60% | Claude 40%
+// Updated: Removed dead internal DMC DMA code (cond_dma_prefetch, dma_read_and_update_sample_buffer_and_counter)
+// Updated: Removed unused Bus type parameter and bus field from DMC channel
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -6,7 +8,6 @@ use std::rc::Rc;
 use log::{info, trace};
 use crate::apu::{ApuError, APU};
 use crate::apu::ApuType::RP2A03;
-use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::config_spec::{ConfigSpec, Configurable};
 use crate::cpu::CPU;
@@ -467,7 +468,7 @@ enum Reload {
 }
 
 #[derive(Debug)]
-struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
+struct Dmc<U: CPU + ?Sized> {
     enabled: bool,
     irq_enable: bool,
     timer_period: u16,
@@ -484,10 +485,9 @@ struct Dmc<U: CPU + ?Sized, V: Bus + ?Sized> {
     silenced: bool,
     irq_pending: bool,
     cpu: Rc<RefCell<U>>,
-    bus: Rc<RefCell<V>>
 }
 
-impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
+impl<U: CPU + ?Sized> Channel for Dmc<U> {
     fn reset(&mut self) {
         self.enabled = false;
         self.irq_enable = false;
@@ -521,7 +521,7 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
     }
 }
 
-impl<U: CPU + ?Sized, V: Bus + ?Sized> IrqSource<U> for Dmc<U, V> {
+impl<U: CPU + ?Sized> IrqSource<U> for Dmc<U> {
     fn cpu(&self) -> *mut U {
         self.cpu.as_ptr()
     }
@@ -531,8 +531,8 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> IrqSource<U> for Dmc<U, V> {
     }
 }
 
-impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
-    fn new(cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>) -> Self {
+impl<U: CPU + ?Sized> Dmc<U> {
+    fn new(cpu: Rc<RefCell<U>>) -> Self {
         Dmc {
             enabled: false,
             irq_enable: false,
@@ -552,40 +552,13 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             silenced: false,
             irq_pending: false,
             cpu,
-            bus
         }
-    }
-
-    fn dma_read_and_update_sample_buffer_and_counter(&mut self) -> Result<u8, MemoryError> {
-        match self.current_address {
-            Some(addr) => {
-                self.sample_buffer = Some(self.bus.borrow().read_byte(addr)?);
-                self.bytes_remaining -= 1;
-                self.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
-            },
-            None => {
-                return Err(MemoryError::IllegalState("dmc dma current address is not set".to_string()))
-            }
-        }
-
-        Ok(0)
     }
 
     fn reload_sample_window(&mut self) {
         self.current_address = Some(self.sample_address);
         self.bytes_remaining = self.sample_length;
         self.irq_pending = false;
-    }
-
-    /// Conditionally performs DMA prefetch if sample buffer is empty and bytes remain.
-    /// Returns true if a DMA fetch occurred (which steals CPU cycles).
-    fn cond_dma_prefetch(&mut self) -> Result<bool, ApuError> {
-        if self.bytes_remaining > 0 && self.sample_buffer.is_none() {
-            self.dma_read_and_update_sample_buffer_and_counter()?;
-            Ok(true) // DMA occurred
-        } else {
-            Ok(false) // No DMA needed
-        }
     }
 
     fn refill_or_underflow(&mut self) -> Result<(), ApuError> {
@@ -694,32 +667,27 @@ impl<U: CPU + ?Sized> FrameCounter<U> {
 }
 
 #[derive(Debug)]
-pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> {
+pub struct ApuRp2A03<T: SoundPlayback, U: CPU + ?Sized> {
     pulse1: Pulse,
     pulse2: Pulse,
     noise: Noise,
     triangle: Triangle,
-    dmc: Dmc<U, V>,
+    dmc: Dmc<U>,
     frame_counter: FrameCounter<U>,
     config: ConfigSpec,
     frame_events_4: [u32; 4],
     frame_events_5: [u32; 5],
     sound_player: T,
     apu_cycles_acc: f64,
-    // DMC DMA cycle stealing - tracks cycles stolen from CPU during sample fetches
-    dmc_stall_cycles: u32,
     // Tracks odd/even CPU cycle state for APU clocking (APU runs at half CPU speed)
     // true = next CPU cycle is odd, false = next CPU cycle is even
     // APU channels (except triangle/DMC) only tick on even CPU cycles
     cpu_cycle_odd: bool,
     // Shared data bus for open bus behavior on write-only registers
     data_bus: Rc<Cell<u8>>,
-    // When true, DMC DMA is handled externally via needs_dmc_dma()/provide_dmc_sample()
-    // When false (default), DMC DMA is handled internally via cond_dma_prefetch()
-    external_dmc_dma: bool,
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03<T, U, V> {
+impl<T: SoundPlayback, U: CPU + ?Sized> BusDevice for ApuRp2A03<T, U> {
     fn get_name(&self) -> String {
         APU_NAME.to_string()
     }
@@ -733,7 +701,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> BusDevice for ApuRp2A03
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, U, V> {
+impl<T: SoundPlayback, U: CPU + ?Sized> Memory for ApuRp2A03<T, U> {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
         info!("initializing APU");
         self.reset().map_err(|e|
@@ -802,14 +770,14 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, 
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> Configurable for ApuRp2A03<T, U, V> {
+impl<T: SoundPlayback, U: CPU + ?Sized> Configurable for ApuRp2A03<T, U> {
     fn set_config(&mut self, config: ConfigSpec) {
         self.config = config;
         self.recompute_timing();
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
+impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
 
     fn recompute_timing(&mut self) {
         // Frame counter timing uses exact hardware cycle counts for cycle-accurate emulation.
@@ -858,35 +826,25 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
         }
     }
 
-    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, bus: Rc<RefCell<V>>, config: ConfigSpec, data_bus: Rc<Cell<u8>>) -> ApuRp2A03<T, U, V> {
+    pub fn new(sound_player: T, cpu: Rc<RefCell<U>>, config: ConfigSpec, data_bus: Rc<Cell<u8>>) -> ApuRp2A03<T, U> {
         let mut apu = ApuRp2A03 {
             pulse1: Pulse::new(),
             pulse2: Pulse::new(),
             noise: Noise::new(),
             triangle: Triangle::new(),
-            dmc: Dmc::new(cpu.clone(), bus.clone()),
+            dmc: Dmc::new(cpu.clone()),
             frame_counter: FrameCounter::new(cpu.clone()),
             config,
             frame_events_4: [0; 4],
             frame_events_5: [0; 5],
             sound_player,
             apu_cycles_acc: 0.0,
-            dmc_stall_cycles: 0,
             cpu_cycle_odd: false,
             data_bus,
-            external_dmc_dma: false,
         };
 
         apu.recompute_timing();
         apu
-    }
-
-    /// Enable external DMC DMA handling.
-    /// When enabled, the APU will NOT do internal DMA prefetch.
-    /// Instead, call needs_dmc_dma() to check if DMA is needed,
-    /// and provide_dmc_sample() to deliver the sample.
-    pub fn set_external_dmc_dma(&mut self, enabled: bool) {
-        self.external_dmc_dma = enabled;
     }
 
     /// Returns open bus value for write-only registers
@@ -1263,15 +1221,8 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             return Ok(())
         }
 
-        // DMA prefetch - steals CPU cycles when it occurs
-        // Only do internal prefetch if external DMC DMA is disabled
-        // When external_dmc_dma is true, the scheduler handles DMA via needs_dmc_dma()/provide_dmc_sample()
-        if !self.external_dmc_dma {
-            let dma_occurred = self.dmc.cond_dma_prefetch()?;
-            if dma_occurred {
-                self.dmc_stall_cycles += 4;
-            }
-        }
+        // DMC DMA is handled externally by the scheduler via needs_dmc_dma()/provide_dmc_sample()
+        // The scheduler checks needs_dmc_dma() after each APU run cycle
 
         // DMC timer: check for 0, do work, then reload or decrement
         // Note: This gives period+1 cycles per bit (55 instead of 54 for rate $F)
@@ -1423,7 +1374,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
     }
 }
 
-impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U, V> {
+impl<T: SoundPlayback, U: CPU + ?Sized> APU for ApuRp2A03<T, U> {
     fn reset(&mut self) -> Result<(), ApuError> {
         info!("resetting APU");
         self.pulse1.reset();
@@ -1434,7 +1385,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         self.frame_counter.reset();
         self.apu_cycles_acc = 0f64;
         self.sound_player.clear();
-        self.dmc_stall_cycles = 0;
         // APU clocks on even CPU cycles (2, 4, 6...), not odd (1, 3, 5...).
         // First CPU cycle is cycle 1 (odd), so we initialize to true to skip clocking.
         self.cpu_cycle_odd = true;
@@ -1500,12 +1450,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         Ok((start_cycle + credits, samples))
     }
 
-    fn get_dmc_stall_cycles(&mut self) -> u32 {
-        let cycles = self.dmc_stall_cycles;
-        self.dmc_stall_cycles = 0;
-        cycles
-    }
-
     fn step_cycle(&mut self) -> Result<Option<f32>, ApuError> {
         // DMC and triangle channels are clocked at the CPU clock rate
         self.clock_dmc_timer()?;
@@ -1562,10 +1506,6 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         Ok(())
     }
 
-    fn set_external_dmc_dma(&mut self, enabled: bool) {
-        self.external_dmc_dma = enabled;
-    }
-
     fn debug_get_dmc_timer_period(&self) -> u16 {
         self.dmc.timer_period
     }
@@ -1584,7 +1524,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
 // ============================================================================
 
 #[cfg(test)]
-impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
+impl<T: SoundPlayback, U: CPU + ?Sized> ApuRp2A03<T, U> {
     /// Get pulse 1 duty cycle (0-3)
     pub fn test_get_pulse1_duty_cycle(&self) -> usize {
         self.pulse1.duty_cycle
