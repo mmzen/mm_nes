@@ -1,4 +1,4 @@
-// Authorship: Human 85% | Claude 15%
+// Authorship: Human 90% | Claude 10%
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::rc::Rc;

@@ -96,4 +96,13 @@ pub trait APU: Configurable {
     /// When enabled, the APU will NOT do internal DMA prefetch.
     /// Instead, the scheduler should use needs_dmc_dma() and provide_dmc_sample().
     fn set_external_dmc_dma(&mut self, enabled: bool);
+
+    /// Debug: Get DMC timer period (for timing analysis).
+    fn debug_get_dmc_timer_period(&self) -> u16;
+
+    /// Debug: Get DMC bits remaining (for timing analysis).
+    fn debug_get_dmc_bits_remaining(&self) -> u8;
+
+    /// Debug: Get DMC timer counter (for timing analysis).
+    fn debug_get_dmc_timer_counter(&self) -> u16;
 }

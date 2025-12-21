@@ -270,3 +270,61 @@ fn read_is_routed_to_right_device() {
 
     assert_eq!(result, Ok(expected_value));
 }
+
+#[test]
+fn data_bus_is_shared_with_external_reference() {
+    // This test verifies that the data_bus returned by get_data_bus() is the same
+    // Cell that NESBus uses internally. This is critical for DMC DMA + open bus behavior.
+    init();
+
+    let nes_bus = create_nes_bus();
+    let data_bus = nes_bus.get_data_bus();
+
+    // Initially data_bus should be 0
+    assert_eq!(data_bus.get(), 0);
+
+    // Set data_bus externally (simulating DMA setting it to 0x00)
+    data_bus.set(0x42);
+
+    // Read from unmapped address - should return data_bus value
+    let result = nes_bus.read_byte(0x5000);  // Unmapped address
+
+    assert_eq!(result, Ok(0x42), "Open bus should return data_bus value");
+
+    // After read, data_bus should still be 0x42 (open bus returns same value)
+    assert_eq!(data_bus.get(), 0x42);
+}
+
+#[test]
+fn read_from_prg_rom_area_updates_data_bus() {
+    // Simulates DMC DMA reading from PRG ROM and verifying data_bus is updated
+    init();
+
+    let prg_value = 0x00;  // DMC sample value (often 0x00 for silence)
+
+    // Create a mock PRG ROM device at $8000-$BFFF
+    let prg_device = create_bus_device_with_expectations(
+        16384, (0x8000, 0xBFFF), 0x0000, RequestType::Read, RequestData::Byte(prg_value));
+    let prg_device = Rc::new(RefCell::new(prg_device));
+
+    let mut nes_bus = create_nes_bus();
+    nes_bus.add_device(prg_device.clone()).expect("failed to add PRG ROM");
+
+    let data_bus = nes_bus.get_data_bus();
+
+    // Set data_bus to a different value first (simulating CPU fetch of $40)
+    data_bus.set(0x40);
+    assert_eq!(data_bus.get(), 0x40);
+
+    // Read from PRG ROM (simulating DMC DMA) - should update data_bus to 0x00
+    let result = nes_bus.read_byte(0x8000);
+    assert_eq!(result, Ok(prg_value));
+
+    // Verify data_bus was updated by the PRG ROM read
+    assert_eq!(data_bus.get(), prg_value, "data_bus should be updated by PRG ROM read");
+
+    // Now read from unmapped address (simulating open bus read from $4000)
+    // Should return the data_bus value (0x00)
+    let open_bus_result = nes_bus.read_byte(0x5000);  // Unmapped address
+    assert_eq!(open_bus_result, Ok(prg_value), "Open bus should return updated data_bus");
+}

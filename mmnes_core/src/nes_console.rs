@@ -92,6 +92,11 @@ pub struct NesConsole {
     dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
     /// Flag to track if cycle-accurate mode has been initialized
     cycle_accurate_initialized: bool,
+    /// Pending DMC DMA address (delayed by 2 cycles for proper timing)
+    /// When APU detects DMA is needed, we set this with countdown=1
+    /// Countdown decrements each cycle, DMA starts when countdown reaches 0
+    /// This ensures DMA happens AFTER the current CPU cycle completes its memory access
+    pending_dmc_dma: Option<(u16, u8)>,  // (address, countdown)
 }
 
 impl Configurable for NesConsole {
@@ -162,6 +167,7 @@ impl NesConsole {
             master_cycles: 0,
             dma_controller,
             cycle_accurate_initialized: false,
+            pending_dmc_dma: None,
         };
 
         console.set_config(config);
@@ -233,11 +239,9 @@ impl NesConsole {
     pub fn step_master_cycle(&mut self) -> Result<(CpuCycleResult, Option<NesFrame>, Option<NesSamples>), NesConsoleError> {
         // Initialize cycle-accurate mode settings on first call
         if !self.cycle_accurate_initialized {
-            // NOTE: We do NOT enable external DMC DMA handling for now.
-            // The APU handles DMC DMA internally with approximate timing.
-            // Enabling external DMC DMA requires precise cycle-accurate handling
-            // that we haven't fully implemented yet.
-            // self.apu.borrow_mut().set_external_dmc_dma(true);
+            // Enable external DMC DMA handling - the DmaController will handle DMC sample fetches
+            // This ensures DMC DMA reads update the shared data bus correctly
+            self.apu.borrow_mut().set_external_dmc_dma(true);
             self.cycle_accurate_initialized = true;
         }
 
@@ -251,14 +255,74 @@ impl NesConsole {
             self.dma_controller.start_oam_dma(page);
         }
 
-        // NOTE: DMC DMA is handled internally by the APU for now.
-        // External DMC DMA handling (for cycle-accurate timing) is not yet fully implemented.
+        // STEP 1: Advance APU FIRST (before CPU) to detect DMC DMA needs
+        // This is critical: APU must run first so that when DMC timer fires and
+        // requests DMA, we can start DMA on THIS cycle, halting the CPU before
+        // it reads from open bus registers. If APU ran after CPU, the CPU would
+        // read old data bus values before DMA could update them.
+        let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
+        if let Some(samples) = apu_samples {
+            if let Some(existing) = out_samples.as_mut() {
+                existing.append(samples);
+            } else {
+                out_samples = Some(samples);
+            }
+        }
+        self.apu_counter.current = apu_cycles;
 
-        // Execute one cycle: either DMA (OAM only) or CPU
+        // STEP 2: Check if DMC DMA is needed IMMEDIATELY after APU runs
+        // Start DMA on THIS cycle (not next) so CPU is halted before its read
+        if !self.dma_controller.is_dmc_dma_active() && self.pending_dmc_dma.is_none() {
+            if let Some(dmc_address) = self.apu.borrow().needs_dmc_dma() {
+                // Start DMC DMA immediately on THIS cycle
+                let cpu_is_writing = self.cpu.borrow().is_mid_instruction();
+                let oam_dma_active = self.dma_controller.is_oam_dma_active();
+                let oam_dma_on_read = self.dma_controller.is_oam_dma_on_read();
+
+                let cycles = DmaController::<dyn Bus, dyn DmaDevice>::calculate_dmc_dma_cycles(
+                    cpu_is_writing,
+                    false, // CPU not halted yet
+                    oam_dma_active,
+                    oam_dma_on_read,
+                );
+
+                self.dma_controller.start_dmc_dma(dmc_address, cycles, None);
+            }
+        }
+
+        // STEP 3: Handle any pending DMC DMA from previous cycle
+        if let Some((dmc_address, countdown)) = self.pending_dmc_dma.take() {
+            if countdown == 0 {
+                // Countdown reached 0 - start DMA now
+                let cpu_is_writing = self.cpu.borrow().is_mid_instruction();
+                let oam_dma_active = self.dma_controller.is_oam_dma_active();
+                let oam_dma_on_read = self.dma_controller.is_oam_dma_on_read();
+
+                let cycles = DmaController::<dyn Bus, dyn DmaDevice>::calculate_dmc_dma_cycles(
+                    cpu_is_writing,
+                    false, // CPU not halted yet
+                    oam_dma_active,
+                    oam_dma_on_read,
+                );
+
+                self.dma_controller.start_dmc_dma(dmc_address, cycles, None);
+            } else {
+                // Still counting down - put it back with decremented countdown
+                self.pending_dmc_dma = Some((dmc_address, countdown - 1));
+            }
+        }
+
+        // STEP 4: Execute one cycle: either DMA (OAM or DMC) or CPU
         let cpu_result = if self.dma_controller.is_active() {
-            // OAM DMA is active - step the DMA controller, CPU is halted
+            // DMA is active - step the DMA controller, CPU is halted
             let dma_result = self.dma_controller.step_cycle()
                 .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
+
+            // If DMC DMA completed, provide the sample to the APU
+            if let Some(sample) = dma_result.dmc_dma_complete {
+                self.apu.borrow_mut().provide_dmc_sample(sample)
+                    .map_err(|e| NesConsoleError::InternalError(format!("APU error: {}", e)))?;
+            }
 
             CpuCycleResult {
                 halted: true,
@@ -289,20 +353,12 @@ impl NesConsole {
         }
         self.dma_controller.set_cpu_cycle_odd(self.cpu_cycle_odd.get());
 
-        // Advance PPU using the same run() method as instruction-level mode
-        // This converts CPU cycles to PPU dots internally
+        // STEP 5: Advance PPU
         let (new_ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, total_cpu_cycles)?;
         if let Some(frame) = ppu_frame {
             out_frame = Some(frame);
         }
         self.ppu_counter.current = new_ppu_cycles;
-
-        // Advance APU by total CPU cycles
-        let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, total_cpu_cycles)?;
-        if let Some(samples) = apu_samples {
-            out_samples = Some(samples);
-        }
-        self.apu_counter.current = apu_cycles;
 
         Ok((cpu_result, out_frame, out_samples))
     }
@@ -422,6 +478,7 @@ impl NesConsole {
         self.cpu_cycle_odd.set(false);
         self.master_cycles = 0;
         self.dma_controller.reset();
+        self.pending_dmc_dma = None;
     }
 
     /// Synchronize PPU internal dot position with the CPU's initial cycle offset.
@@ -860,6 +917,7 @@ impl NesConsoleBuilder {
         // Create DmaController with bus and PPU (as DmaDevice)
         let ppu_dma_device = self.ppu_dma_device.take()
             .ok_or(NesConsoleError::BuilderError("ppu_dma_device missing".to_string()))?;
+
         let dma_controller = DmaController::new(bus, ppu_dma_device);
 
         let console = NesConsole::new(

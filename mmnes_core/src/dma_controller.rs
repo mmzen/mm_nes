@@ -1,6 +1,7 @@
 // Authorship: Human 0% | Claude 100%
 // Updated: Fixed OAM DMA alignment logic (1 idle for even, 2 for odd), added comprehensive tests
 // Updated: Added DMC DMA bus conflict behavior - halt cycles read from CPU's conflict address
+// Updated: Fixed DMC+OAM DMA interleaving - halt cycles run alongside OAM, only get cycle has priority
 //! DMA Controller for cycle-accurate OAM DMA and DMC DMA handling.
 //!
 //! This module provides a centralized DMA controller that manages both:
@@ -198,13 +199,41 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
 
     /// Execute one cycle of DMA.
     /// Returns information about what happened during this cycle.
+    ///
+    /// When both DMC and OAM DMA are active, they interleave:
+    /// - DMC halt cycles: OAM DMA continues (both can run in parallel)
+    /// - DMC get cycle (final): DMC takes priority, OAM DMA waits
+    ///
+    /// See: https://www.nesdev.org/wiki/DMA#DMC_DMA_during_OAM_DMA
     pub fn step_cycle(&mut self) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
 
-        // DMC DMA has priority over OAM DMA if both are active
-        if self.dmc_dma.active {
+        // Check if DMC DMA is on its final "get" cycle (cycles_remaining == 1)
+        let dmc_on_get_cycle = self.dmc_dma.active && self.dmc_dma.cycles_remaining == 1;
+
+        if dmc_on_get_cycle {
+            // DMC get cycle takes exclusive priority - OAM DMA pauses
+            result = self.step_dmc_dma()?;
+        } else if self.dmc_dma.active && self.oam_dma.active {
+            // DMC halt cycle + OAM DMA: both can run
+            // Step DMC halt cycle (may do conflict read)
+            let dmc_result = self.step_dmc_dma()?;
+            // Step OAM DMA
+            let oam_result = self.step_oam_dma()?;
+            // Merge results - prefer OAM DMA address/read/write info since that's the "real" bus activity
+            result = DmaStepResult {
+                cpu_halted: true,
+                oam_dma_complete: oam_result.oam_dma_complete,
+                dmc_dma_complete: dmc_result.dmc_dma_complete,
+                address_accessed: oam_result.address_accessed.or(dmc_result.address_accessed),
+                read_occurred: oam_result.read_occurred || dmc_result.read_occurred,
+                write_occurred: oam_result.write_occurred,
+            };
+        } else if self.dmc_dma.active {
+            // DMC DMA only (halt cycles when no OAM DMA)
             result = self.step_dmc_dma()?;
         } else if self.oam_dma.active {
+            // OAM DMA only
             result = self.step_oam_dma()?;
         }
 

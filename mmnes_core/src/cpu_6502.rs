@@ -720,6 +720,21 @@ impl CPU for Cpu6502 {
         matches!(self.cycle_state, CpuCycleState::Executing { .. })
     }
 
+    fn get_instruction_cycle(&self) -> Option<u8> {
+        match &self.cycle_state {
+            CpuCycleState::FetchOpcode => Some(0),
+            CpuCycleState::Executing { cycle, .. } => Some(*cycle as u8),
+            CpuCycleState::Halted { .. } => None,
+        }
+    }
+
+    fn get_current_opcode(&self) -> Option<u8> {
+        match &self.cycle_state {
+            CpuCycleState::Executing { opcode, .. } => Some(*opcode),
+            _ => None,
+        }
+    }
+
     fn is_halted(&self) -> bool {
         matches!(self.cycle_state, CpuCycleState::Halted { .. })
     }

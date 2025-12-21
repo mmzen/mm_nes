@@ -69,6 +69,14 @@ pub trait CPU: Interruptible + Debug {
     /// Check if the CPU is currently mid-instruction (has pending cycles to complete).
     fn is_mid_instruction(&self) -> bool;
 
+    /// Get the current instruction cycle number (0 = fetch opcode, 1+ = executing).
+    /// Returns None if not in an executing state.
+    fn get_instruction_cycle(&self) -> Option<u8>;
+
+    /// Get the current opcode being executed (for debugging).
+    /// Returns None if not executing an instruction.
+    fn get_current_opcode(&self) -> Option<u8>;
+
     /// Check if the CPU is currently halted (e.g., waiting for DMA to complete).
     fn is_halted(&self) -> bool;
 
@@ -164,6 +172,8 @@ mock! {
         fn step_instruction(&mut self) -> Result<u32, CpuError>;
         fn step_cycle(&mut self) -> Result<CpuCycleResult, CpuError>;
         fn is_mid_instruction(&self) -> bool;
+        fn get_instruction_cycle(&self) -> Option<u8>;
+        fn get_current_opcode(&self) -> Option<u8>;
         fn is_halted(&self) -> bool;
         fn halt_cycles(&mut self, cycles: u32);
         fn get_cycles(&self) -> u32;

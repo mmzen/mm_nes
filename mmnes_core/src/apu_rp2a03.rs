@@ -1,4 +1,4 @@
-// Authorship: Human 60% | Claude 40%
+// Authorship: Human 65% | Claude 35%
 use std::cell::{Cell, RefCell};
 use std::cmp::PartialEq;
 use std::fmt::Debug;
@@ -495,9 +495,11 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Channel for Dmc<U, V> {
         self.timer_counter = 0;
         self.reload = Reload::None;
         self.output_level = 0;
-        self.sample_address = 0;
+        // Default sample_address when $4012 = 0: 0xC000 | (0 << 6) = 0xC000
+        self.sample_address = 0xC000;
         self.current_address = None;
-        self.sample_length = 0;
+        // Default sample_length when $4013 = 0: (0 << 4) | 0x01 = 1
+        self.sample_length = 1;
         self.sample_buffer = None;
         self.bytes_remaining = 0;
         self.shift_register = 0;
@@ -538,9 +540,11 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             timer_counter: 0,
             reload: Reload::None,
             output_level: 0,
-            sample_address: 0,
+            // Default sample_address when $4012 = 0: 0xC000 | (0 << 6) = 0xC000
+            sample_address: 0xC000,
             current_address: None,
-            sample_length: 0,
+            // Default sample_length when $4013 = 0: (0 << 4) | 0x01 = 1
+            sample_length: 1,
             sample_buffer: None,
             bytes_remaining: 0,
             shift_register: 0,
@@ -589,7 +593,6 @@ impl<U: CPU + ?Sized, V: Bus + ?Sized> Dmc<U, V> {
             if let Some(sample_buffer) = self.sample_buffer.take() {
                 self.shift_register = sample_buffer;
                 self.bits_remaining = 8;
-
                 self.silenced = false;
             } else {
                 self.silenced = true;
@@ -744,7 +747,7 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus+ ?Sized> Memory for ApuRp2A03<T, 
             0x15 => self.read_channels_status()?,
             // All other APU registers ($4000-$4013, $4017) are write-only
             // Reading them returns open bus (the current data bus value)
-            _ => self.read_open_bus(),
+            _ => self.read_open_bus()
         };
 
         Ok(value)
@@ -1270,6 +1273,9 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> ApuRp2A03<T, U, V> {
             }
         }
 
+        // DMC timer: check for 0, do work, then reload or decrement
+        // Note: This gives period+1 cycles per bit (55 instead of 54 for rate $F)
+        // but matches common emulator behavior
         if self.dmc.timer_counter == 0 {
             self.dmc.refill_or_underflow()?;
 
@@ -1548,11 +1554,28 @@ impl<T: SoundPlayback, U: CPU + ?Sized, V: Bus + ?Sized> APU for ApuRp2A03<T, U,
         if let Some(addr) = self.dmc.current_address {
             self.dmc.current_address = if addr == 0xFFFF { Some(0x8000) } else { Some(addr + 1) };
         }
+        // If bytes_remaining became 0 and loop is enabled, reload sample window immediately
+        // This ensures the next DMA request (when sample_buffer empties) will have bytes_remaining > 0
+        if self.dmc.bytes_remaining == 0 && self.dmc.reload == Reload::Loop {
+            self.dmc.reload_sample_window();
+        }
         Ok(())
     }
 
     fn set_external_dmc_dma(&mut self, enabled: bool) {
         self.external_dmc_dma = enabled;
+    }
+
+    fn debug_get_dmc_timer_period(&self) -> u16 {
+        self.dmc.timer_period
+    }
+
+    fn debug_get_dmc_bits_remaining(&self) -> u8 {
+        self.dmc.bits_remaining
+    }
+
+    fn debug_get_dmc_timer_counter(&self) -> u16 {
+        self.dmc.timer_counter
     }
 }
 
