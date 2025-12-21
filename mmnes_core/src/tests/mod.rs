@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use log::LevelFilter;
 use simplelog::{Config, TestLogger};
 use std::sync::Once;
@@ -20,6 +20,9 @@ mod cartridge;
 mod memory_ciram;
 mod ines_loader;
 mod singlestep;
+mod standard_controller;
+mod error_display;
+mod dma_controller;
 
 static START: Once = Once::new();
 

@@ -26,7 +26,7 @@ enum State {
 
 #[derive(Debug)]
 pub struct StandardController<T: Input> {
-    input: T,
+    pub(crate) input: T,
     state: RefCell<State>,
     control_states: [u8; CONTROLLER_NUM_BUTTONS],
     control_index: RefCell<usize>,

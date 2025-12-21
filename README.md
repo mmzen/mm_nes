@@ -172,6 +172,36 @@ cargo run -p mmnes_frontend
 
 ---
 
+## Test Coverage
+
+We use `cargo-llvm-cov` for code coverage measurement on `mmnes_core`.
+
+### Running Coverage
+
+```bash
+# Summary report (console output)
+cargo llvm-cov -p mmnes_core --summary-only
+
+# HTML report (opens in browser)
+cargo llvm-cov -p mmnes_core --html
+# Report generated at: target/llvm-cov/html/index.html
+
+# LCOV format (for CI integration)
+cargo llvm-cov -p mmnes_core --lcov --output-path lcov.info
+```
+
+### Coverage Target
+
+**Target**: ≥80% line coverage on `mmnes_core`
+
+The test suite includes:
+- Unit tests for CPU instructions, PPU registers, APU channels
+- Integration tests for cycle-accurate DMA timing
+- Bus-trace tests validating per-cycle memory operations
+- SingleStepTests framework (2.56M CPU instruction tests)
+
+---
+
 ## Code Quality Metrics
 
 We track code quality KPIs (complexity, coverage, authorship) at each commit. The dashboard below shows trends across the last 10 commits, including Claude's growing contribution to the codebase.

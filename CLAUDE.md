@@ -82,10 +82,23 @@ The bus device registration order matters (see `nes_front_end.rs:create_emulator
 
 ### Testing
 
+**Test Location Rules** (enforced by CI):
+- All tests MUST live under `src/tests/` directory
+- **No `#[test]` functions** in production source files
+- **No `mod tests` blocks** in production source files
+- `#[cfg(test)]` helpers in production code are allowed for test-only accessors
+
+**Test Structure**:
 - Unit tests in each crate under `src/tests/`
 - CPU instruction tests: `mmnes_core/src/tests/cpu_instructions.rs`
+- DMA controller tests: `mmnes_core/src/tests/dma_controller.rs`
 - SingleStepTests suite: `mmnes_core/src/tests/singlestep/` - comprehensive CPU verification
 - Test data files in `tests/data/`
+
+**Allowed test-only helpers in production code**:
+- Read-only accessors for internal state (e.g., `get_*_for_test()`)
+- Must be guarded by `#[cfg(test)]`
+- Must not alter runtime behavior or create alternate execution paths
 
 ### Feature Flags
 

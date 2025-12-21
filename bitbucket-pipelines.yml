@@ -6,6 +6,24 @@ options:
 pipelines:
   default:
     - step:
+        name: Enforce Test Structure
+        script:
+          # Check that no #[test] or mod tests blocks exist in production source files
+          # Production files are in mmnes_core/src/ but NOT in mmnes_core/src/tests/
+          - |
+            echo "Checking for inline tests in production source files..."
+            # Find #[test] in production files (exclude tests/ directory)
+            if find mmnes_core/src -path mmnes_core/src/tests -prune -o -name '*.rs' -print | xargs grep -l '#\[test\]' 2>/dev/null; then
+              echo "ERROR: Found #[test] in production source files. Tests must live in src/tests/"
+              exit 1
+            fi
+            # Find 'mod tests' blocks in production files (exclude tests/ directory and lib.rs which has 'pub mod tests;')
+            if find mmnes_core/src -path mmnes_core/src/tests -prune -o -name '*.rs' ! -name 'lib.rs' -print | xargs grep -l 'mod tests' 2>/dev/null; then
+              echo "ERROR: Found 'mod tests' block in production source files. Tests must live in src/tests/"
+              exit 1
+            fi
+            echo "Test structure check passed!"
+    - step:
         caches:
           - cargo-home
           - cargo-target
@@ -27,6 +45,21 @@ pipelines:
 
   branches:
     main:
+      - step:
+          name: Enforce Test Structure
+          script:
+            # Check that no #[test] or mod tests blocks exist in production source files
+            - |
+              echo "Checking for inline tests in production source files..."
+              if find mmnes_core/src -path mmnes_core/src/tests -prune -o -name '*.rs' -print | xargs grep -l '#\[test\]' 2>/dev/null; then
+                echo "ERROR: Found #[test] in production source files. Tests must live in src/tests/"
+                exit 1
+              fi
+              if find mmnes_core/src -path mmnes_core/src/tests -prune -o -name '*.rs' ! -name 'lib.rs' -print | xargs grep -l 'mod tests' 2>/dev/null; then
+                echo "ERROR: Found 'mod tests' block in production source files. Tests must live in src/tests/"
+                exit 1
+              fi
+              echo "Test structure check passed!"
       - step:
           caches:
             - cargo-home

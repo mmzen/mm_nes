@@ -1,4 +1,4 @@
-// Authorship: Human 40% | Claude 60%
+// Authorship: Human 45% | Claude 55%
 //! PPU DMA register ($4014) - signals OAM DMA start to the scheduler.
 //!
 //! Writing to $4014 initiates an OAM DMA transfer. In cycle-accurate mode,
@@ -100,28 +100,5 @@ impl PpuDma {
             last_transfer_addr: 0,
             dma_start_page,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dma_signal_on_write() {
-        let dma_signal = Rc::new(Cell::new(None));
-        let mut ppu_dma = PpuDma::new_with_dma_signal(dma_signal.clone());
-
-        ppu_dma.initialize().unwrap();
-
-        // Initially no DMA signaled
-        assert_eq!(dma_signal.get(), None);
-
-        // Write to $4014 signals DMA with source page
-        ppu_dma.write_byte(0x00, 0x02).unwrap();
-        assert_eq!(dma_signal.get(), Some(0x02));
-
-        // Reading returns last written value
-        assert_eq!(ppu_dma.read_byte(0x00).unwrap(), 0x02);
     }
 }
