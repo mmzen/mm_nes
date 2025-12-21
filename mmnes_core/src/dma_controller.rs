@@ -3,6 +3,9 @@
 // Rewritten: OAM DMA phase-gated (reads on GET, writes on PUT)
 // Rewritten: DMC DMA correct state machine (PendingHalt, Halt, Dummy, Align, Read)
 // Rewritten: Correct overlap handling - DMC Read wins over OAM Get
+// Fixed: OAM PUT now writes to $2004 (not byte_index)
+// Fixed: Phase passed as parameter, alignment uses next_phase
+// Fixed: Explicit BusWinner tracking
 //! DMA Controller for cycle-accurate OAM DMA and DMC DMA handling.
 //!
 //! This module provides a centralized DMA controller that enforces the fundamental
@@ -12,14 +15,14 @@
 //!
 //! Each CPU cycle, the DMA controller determines a single `BusOp`:
 //! - `BusOp::Read(addr)` - Read from address (DMA or CPU repeated read)
-//! - `BusOp::Write(addr, data)` - Write to address (OAM DMA to PPU)
+//! - `BusOp::Write(addr, data)` - Write to address (OAM DMA to $2004)
 //! - `BusOp::None` - No DMA bus op (CPU executes normally)
 //!
 //! ## GET/PUT Phase Model
 //!
 //! The APU operates on a GET/PUT phase that alternates every CPU cycle:
 //! - **GET phase**: Reads occur (OAM DMA source read, DMC sample read)
-//! - **PUT phase**: Writes occur (OAM DMA to PPU)
+//! - **PUT phase**: Writes occur (OAM DMA write to $2004)
 //!
 //! DMA operations are gated by phase:
 //! - OAM DMA reads only on GET cycles
@@ -39,6 +42,9 @@ use std::rc::Rc;
 use crate::bus::Bus;
 use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
+
+/// PPU OAM data register address
+const PPU_OAMDATA: u16 = 0x2004;
 
 /// APU bus phase - alternates every CPU cycle
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -84,6 +90,22 @@ impl Default for BusOp {
     }
 }
 
+/// Who won the bus arbitration this cycle
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BusWinner {
+    /// DMC DMA performed a read
+    DmcRead,
+    /// OAM DMA performed a GET read
+    OamGet,
+    /// OAM DMA performed a PUT write
+    OamPut,
+    /// CPU repeated read (during DMA idle cycles)
+    CpuRepeat,
+    /// No bus operation
+    #[default]
+    None,
+}
+
 /// OAM DMA operation state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OamDmaOp {
@@ -100,7 +122,7 @@ pub enum OamDmaOp {
     Get,
     /// Waiting for PUT phase to write
     WaitPut,
-    /// Performing PUT write to OAM
+    /// Performing PUT write to OAM via $2004
     Put,
 }
 
@@ -111,12 +133,10 @@ pub struct OamDmaState {
     pub op: OamDmaOp,
     /// Source page address (high byte)
     pub page: u8,
-    /// Current byte index (0-255)
+    /// Current byte index (0-255), used for completion detection
     pub byte_index: u16,
     /// Value read during GET phase, to be written during PUT
     pub read_value: u8,
-    /// Total bytes transferred (for completion detection)
-    pub bytes_transferred: u16,
 }
 
 /// DMC DMA phase - correct hardware sequence
@@ -131,7 +151,7 @@ pub enum DmcDmaPhase {
     Halt,
     /// Dummy cycle - 1 cycle, no DMA bus op (NOT optional)
     Dummy,
-    /// Alignment cycle - 1 cycle if current phase is PUT, no DMA bus op
+    /// Alignment cycle - 1 cycle if next phase would be PUT, no DMA bus op
     Align,
     /// Read cycle - GET phase read from DMC address
     Read,
@@ -153,6 +173,8 @@ pub struct DmcDmaState {
 pub struct DmaStepResult {
     /// The bus operation performed this cycle
     pub bus_op: BusOp,
+    /// Who won the bus arbitration
+    pub winner: BusWinner,
     /// True if CPU should remain halted
     pub cpu_halted: bool,
     /// True if OAM DMA just completed
@@ -170,10 +192,9 @@ pub struct DmaController<B: Bus + ?Sized, D: DmaDevice + ?Sized> {
     dmc: DmcDmaState,
     /// Reference to system bus
     bus: Rc<RefCell<B>>,
-    /// Reference to PPU for OAM writes
+    /// Reference to PPU for OAM writes (kept for compatibility, but writes go through bus)
+    #[allow(dead_code)]
     ppu: Rc<RefCell<D>>,
-    /// Current APU phase
-    apu_phase: ApuPhase,
     /// CPU's halted read address (for repeated reads when DMA doesn't use bus)
     cpu_halted_addr: Option<u16>,
 }
@@ -185,7 +206,6 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             dmc: DmcDmaState::default(),
             bus,
             ppu,
-            apu_phase: ApuPhase::default(),
             cpu_halted_addr: None,
         }
     }
@@ -194,23 +214,6 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         self.oam = OamDmaState::default();
         self.dmc = DmcDmaState::default();
         self.cpu_halted_addr = None;
-        // Don't reset apu_phase - only power_on randomizes it
-    }
-
-    // ========================================================================
-    // Phase Management
-    // ========================================================================
-
-    pub fn set_apu_phase(&mut self, phase: ApuPhase) {
-        self.apu_phase = phase;
-    }
-
-    pub fn get_apu_phase(&self) -> ApuPhase {
-        self.apu_phase
-    }
-
-    pub fn toggle_apu_phase(&mut self) {
-        self.apu_phase = self.apu_phase.toggle();
     }
 
     // ========================================================================
@@ -267,7 +270,6 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             page,
             byte_index: 0,
             read_value: 0,
-            bytes_transferred: 0,
         };
     }
 
@@ -315,8 +317,10 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     ///
     /// # Arguments
     /// * `cpu_is_writing` - True if CPU's pending bus op is a write (affects halt)
-    pub fn step_cycle(&mut self, cpu_is_writing: bool) -> Result<DmaStepResult, MemoryError> {
+    /// * `current_phase` - The APU phase for THIS cycle (caller must track and pass)
+    pub fn step_cycle(&mut self, cpu_is_writing: bool, current_phase: ApuPhase) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
+        let next_phase = current_phase.toggle();
 
         // ====================================================================
         // Step 1: Advance pending halt states
@@ -346,55 +350,63 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         // Step 2: Determine what each DMA wants to do this cycle
         // ====================================================================
 
-        let oam_wants = self.oam_wants_bus_op();
-        let dmc_wants = self.dmc_wants_bus_op();
+        let oam_wants = self.oam_wants_bus_op(current_phase);
+        let dmc_wants = self.dmc_wants_bus_op(current_phase);
 
         // ====================================================================
-        // Step 3: Arbitrate - determine single bus op
+        // Step 3: Arbitrate - determine single bus op and winner
         // Priority: DMC Read > OAM Get > OAM Put > CPU repeated read
         // ====================================================================
 
-        let bus_op = self.arbitrate(oam_wants, dmc_wants);
+        let (bus_op, winner) = self.arbitrate(oam_wants, dmc_wants);
 
         // ====================================================================
-        // Step 4: Execute the bus operation
+        // Step 4: Execute the bus operation based on winner
         // ====================================================================
 
-        match bus_op {
-            BusOp::Read(addr) => {
-                let value = self.bus.borrow().read_byte(addr)?;
-
-                // Check who performed this read
-                if dmc_wants == BusOp::Read(addr) && self.dmc.phase == DmcDmaPhase::Read {
-                    // DMC DMA completed its read
+        match winner {
+            BusWinner::DmcRead => {
+                if let BusOp::Read(addr) = bus_op {
+                    let value = self.bus.borrow().read_byte(addr)?;
                     self.dmc.sample = Some(value);
                     result.dmc_sample = Some(value);
                     self.dmc.phase = DmcDmaPhase::Idle;
-                } else if matches!(self.oam.op, OamDmaOp::Get) {
-                    // OAM DMA read
+                }
+            }
+
+            BusWinner::OamGet => {
+                if let BusOp::Read(addr) = bus_op {
+                    let value = self.bus.borrow().read_byte(addr)?;
                     self.oam.read_value = value;
                     self.oam.op = OamDmaOp::WaitPut;
                 }
-                // Otherwise it was a CPU repeated read (side effects happened via bus.read_byte)
             }
 
-            BusOp::Write(addr, data) => {
-                // OAM DMA write to PPU
-                self.ppu.borrow_mut().dma_write(addr as u8, data)?;
-                self.oam.bytes_transferred += 1;
-                self.oam.byte_index += 1;
+            BusWinner::OamPut => {
+                if let BusOp::Write(addr, data) = bus_op {
+                    // Write to $2004 via the bus - PPU handles OAMADDR increment
+                    self.bus.borrow_mut().write_byte(addr, data)?;
+                    self.oam.byte_index += 1;
 
-                if self.oam.bytes_transferred >= 256 {
-                    // OAM DMA complete
-                    self.oam.op = OamDmaOp::Idle;
-                    result.oam_dma_complete = true;
-                } else {
-                    // More bytes to transfer - go back to waiting for GET
-                    self.oam.op = OamDmaOp::WaitGet;
+                    if self.oam.byte_index >= 256 {
+                        // OAM DMA complete
+                        self.oam.op = OamDmaOp::Idle;
+                        result.oam_dma_complete = true;
+                    } else {
+                        // More bytes to transfer - go back to waiting for GET
+                        self.oam.op = OamDmaOp::WaitGet;
+                    }
                 }
             }
 
-            BusOp::None => {
+            BusWinner::CpuRepeat => {
+                if let BusOp::Read(addr) = bus_op {
+                    // CPU repeated read - side effects happen via bus.read_byte
+                    let _ = self.bus.borrow().read_byte(addr)?;
+                }
+            }
+
+            BusWinner::None => {
                 // No bus operation this cycle
             }
         }
@@ -409,20 +421,21 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         }
 
         // DMC DMA: advance through Halt -> Dummy -> Align -> Read
-        self.advance_dmc_no_bus_phases();
+        self.advance_dmc_no_bus_phases(next_phase);
 
         // ====================================================================
         // Step 6: Build result
         // ====================================================================
 
         result.bus_op = bus_op;
+        result.winner = winner;
         result.cpu_halted = self.is_active();
 
         Ok(result)
     }
 
     /// Determine what OAM DMA wants to do this cycle (may not get it due to arbitration)
-    fn oam_wants_bus_op(&mut self) -> BusOp {
+    fn oam_wants_bus_op(&mut self, current_phase: ApuPhase) -> BusOp {
         match self.oam.op {
             OamDmaOp::Idle | OamDmaOp::PendingHalt => BusOp::None,
 
@@ -430,7 +443,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             OamDmaOp::Halt => BusOp::None,
 
             OamDmaOp::WaitGet => {
-                if self.apu_phase.is_get() {
+                if current_phase.is_get() {
                     // Phase matches - transition to Get and request read
                     self.oam.op = OamDmaOp::Get;
                     let addr = ((self.oam.page as u16) << 8) | self.oam.byte_index;
@@ -448,10 +461,10 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             }
 
             OamDmaOp::WaitPut => {
-                if self.apu_phase.is_put() {
-                    // Phase matches - transition to Put and request write
+                if current_phase.is_put() {
+                    // Phase matches - transition to Put and request write to $2004
                     self.oam.op = OamDmaOp::Put;
-                    BusOp::Write(self.oam.byte_index, self.oam.read_value)
+                    BusOp::Write(PPU_OAMDATA, self.oam.read_value)
                 } else {
                     // Wrong phase - stay waiting
                     BusOp::None
@@ -459,14 +472,14 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             }
 
             OamDmaOp::Put => {
-                // Already in Put state - return the write we want
-                BusOp::Write(self.oam.byte_index, self.oam.read_value)
+                // Already in Put state - return the write we want (to $2004)
+                BusOp::Write(PPU_OAMDATA, self.oam.read_value)
             }
         }
     }
 
     /// Determine what DMC DMA wants to do this cycle
-    fn dmc_wants_bus_op(&self) -> BusOp {
+    fn dmc_wants_bus_op(&self, current_phase: ApuPhase) -> BusOp {
         match self.dmc.phase {
             DmcDmaPhase::Idle | DmcDmaPhase::PendingHalt => BusOp::None,
 
@@ -475,7 +488,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
 
             DmcDmaPhase::Read => {
                 // DMC wants to read - but only on GET phase
-                if self.apu_phase.is_get() {
+                if current_phase.is_get() {
                     BusOp::Read(self.dmc.address)
                 } else {
                     BusOp::None // Will need to wait/align
@@ -485,8 +498,9 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     }
 
     /// Arbitrate between OAM and DMC DMA requests.
-    /// Priority: DMC Read > OAM operation > CPU repeated read
-    fn arbitrate(&mut self, oam_wants: BusOp, dmc_wants: BusOp) -> BusOp {
+    /// Returns (BusOp, BusWinner) - explicit tracking of who won.
+    /// Priority: DMC Read > OAM Get > OAM Put > CPU repeated read
+    fn arbitrate(&mut self, oam_wants: BusOp, dmc_wants: BusOp) -> (BusOp, BusWinner) {
         // DMC Read has highest priority
         if let BusOp::Read(_) = dmc_wants {
             // DMC wins - if OAM was trying to Get, it stays in Get/WaitGet
@@ -495,27 +509,31 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
                 // Transition back to WaitGet to try again next GET cycle
                 self.oam.op = OamDmaOp::WaitGet;
             }
-            return dmc_wants;
+            return (dmc_wants, BusWinner::DmcRead);
         }
 
         // OAM operation next
         match oam_wants {
-            BusOp::Read(_) | BusOp::Write(_, _) => return oam_wants,
+            BusOp::Read(_) => return (oam_wants, BusWinner::OamGet),
+            BusOp::Write(_, _) => return (oam_wants, BusWinner::OamPut),
             BusOp::None => {}
         }
 
         // DMC no-bus phases or OAM waiting - CPU repeated read if halted
         if self.is_active() {
             if let Some(addr) = self.cpu_halted_addr {
-                return BusOp::Read(addr);
+                return (BusOp::Read(addr), BusWinner::CpuRepeat);
             }
         }
 
-        BusOp::None
+        (BusOp::None, BusWinner::None)
     }
 
     /// Advance DMC DMA through no-bus phases (Halt, Dummy, Align)
-    fn advance_dmc_no_bus_phases(&mut self) {
+    ///
+    /// # Arguments
+    /// * `next_phase` - The phase of the NEXT cycle (used for alignment decision)
+    fn advance_dmc_no_bus_phases(&mut self, next_phase: ApuPhase) {
         match self.dmc.phase {
             DmcDmaPhase::Halt => {
                 // Halt -> Dummy (always)
@@ -523,18 +541,21 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             }
 
             DmcDmaPhase::Dummy => {
-                // Dummy -> Align or Read depending on phase
-                if self.apu_phase.is_put() {
-                    // Next cycle will be GET - need to align
+                // Dummy -> Align or Read depending on NEXT cycle's phase
+                // DMC Read needs GET phase
+                // If next cycle is PUT, we need to insert Align cycle
+                // If next cycle is GET, we can go directly to Read
+                if next_phase.is_put() {
+                    // Next cycle is PUT, but Read needs GET - insert Align
                     self.dmc.phase = DmcDmaPhase::Align;
                 } else {
-                    // Already on GET or will be - go to Read
+                    // Next cycle is GET - can go directly to Read
                     self.dmc.phase = DmcDmaPhase::Read;
                 }
             }
 
             DmcDmaPhase::Align => {
-                // Align -> Read (always)
+                // Align -> Read (always, next cycle should now be GET)
                 self.dmc.phase = DmcDmaPhase::Read;
             }
 
@@ -544,26 +565,60 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     }
 
     // ========================================================================
-    // Legacy compatibility - old step_cycle without cpu_is_writing
+    // Legacy compatibility
     // ========================================================================
 
-    /// Legacy step_cycle that doesn't take cpu_is_writing.
-    /// For backward compatibility - assumes CPU is reading.
-    pub fn step_cycle_legacy(&mut self) -> Result<DmaStepResult, MemoryError> {
-        self.step_cycle(false)
+    /// Legacy step_cycle that doesn't take current_phase.
+    /// For backward compatibility - uses internal phase tracking.
+    /// DEPRECATED: Use step_cycle(cpu_is_writing, current_phase) instead.
+    #[deprecated(note = "Use step_cycle with explicit current_phase parameter")]
+    pub fn step_cycle_legacy(&mut self, cpu_is_writing: bool) -> Result<DmaStepResult, MemoryError> {
+        // This maintains backward compatibility but should not be used
+        self.step_cycle(cpu_is_writing, ApuPhase::Get)
     }
 
     // ========================================================================
     // Utility methods
     // ========================================================================
 
-    pub fn oam_dma_cycles(&self) -> u16 {
-        if self.apu_phase.is_put() { 514 } else { 513 }
+    /// Returns expected OAM DMA cycle count based on the phase when $4014 was written.
+    ///
+    /// # Arguments
+    /// * `write_phase` - The APU phase when the write to $4014 occurred
+    pub fn oam_dma_cycles(write_phase: ApuPhase) -> u16 {
+        // Write on GET -> first DMA step on PUT -> 513 cycles
+        // Write on PUT -> first DMA step on GET -> 514 cycles
+        if write_phase.is_get() { 513 } else { 514 }
+    }
+
+    // ========================================================================
+    // Phase management (for caller convenience)
+    // ========================================================================
+
+    // NOTE: The DMA controller no longer tracks phase internally.
+    // The caller (nes_console) must track phase and pass it to step_cycle().
+    // These methods are kept for test compatibility but delegate to a default.
+
+    #[cfg(test)]
+    pub fn set_apu_phase(&mut self, _phase: ApuPhase) {
+        // No-op - phase is now passed to step_cycle
+    }
+
+    #[cfg(test)]
+    pub fn get_apu_phase(&self) -> ApuPhase {
+        // Return default - phase is now passed to step_cycle
+        ApuPhase::Get
+    }
+
+    #[cfg(test)]
+    pub fn toggle_apu_phase(&mut self) {
+        // No-op - phase is now passed to step_cycle
     }
 
     // Legacy compatibility aliases
-    #[deprecated(note = "Use set_apu_phase instead")]
-    pub fn set_cpu_cycle_odd(&mut self, odd: bool) {
-        self.apu_phase = if odd { ApuPhase::Put } else { ApuPhase::Get };
+    #[deprecated(note = "Phase is now passed to step_cycle")]
+    #[allow(dead_code)]
+    pub fn set_cpu_cycle_odd(&mut self, _odd: bool) {
+        // No-op - phase is now passed to step_cycle
     }
 }

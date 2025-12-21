@@ -1,4 +1,4 @@
-// Authorship: Human 30% | Claude 70%
+// Authorship: Human 28% | Claude 72%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -83,6 +83,9 @@ pub struct NesConsole {
     /// During DMA no-bus cycles, the external bus shows repeated reads from this address,
     /// causing side effects for certain registers ($2002, $2007, $4016/$4017)
     last_cpu_read_address: Option<u16>,
+    /// Current APU phase (GET/PUT alternates every CPU cycle)
+    /// Phase is passed to DMA controller as a parameter for explicit contract
+    apu_phase: ApuPhase,
 }
 
 impl Configurable for NesConsole {
@@ -130,6 +133,7 @@ impl NesConsole {
             dma_controller,
             pending_dmc_dma: None,
             last_cpu_read_address: None,
+            apu_phase: ApuPhase::default(),
         };
 
         console.set_config(config);
@@ -225,7 +229,7 @@ impl NesConsole {
 
         let cpu_result = if self.dma_controller.is_active() {
             // DMA is active - step the DMA controller, CPU is halted
-            let dma_result = self.dma_controller.step_cycle(cpu_is_writing)
+            let dma_result = self.dma_controller.step_cycle(cpu_is_writing, self.apu_phase)
                 .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
 
             // If DMC DMA completed, provide the sample to the APU
@@ -270,7 +274,7 @@ impl NesConsole {
         self.master_cycles += 1;
 
         // Toggle APU phase (GET/PUT alternates every CPU cycle)
-        self.dma_controller.toggle_apu_phase();
+        self.apu_phase = self.apu_phase.toggle();
 
         // Legacy cpu_cycle_odd for backward compatibility
         let new_parity = !self.cpu_cycle_odd.get();
@@ -406,7 +410,8 @@ impl NesConsole {
             ApuPhase::Put
         };
 
-        self.dma_controller.set_apu_phase(random_phase);
+        // Set the local phase (passed to DMA controller as parameter)
+        self.apu_phase = random_phase;
 
         // Sync legacy cpu_cycle_odd (GET = false/even, PUT = true/odd)
         self.cpu_cycle_odd.set(random_phase.is_put());

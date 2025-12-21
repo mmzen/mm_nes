@@ -71,23 +71,23 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Controller Rewrite (December 21, 2025)
+### Recently Completed: DMA Controller Code Review Round 3 (December 21, 2025)
 
-Based on feedback in `requirements/DMA_feedback_1.md`, completely rewrote the DMA controller with proper bus arbitration:
+Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical fixes:
 
-**Key changes**:
-- **Bus Arbiter Model**: Enforces exactly ONE bus operation per CPU cycle via `BusOp` enum (Read/Write/None)
-- **OAM DMA State Machine**: PendingHalt → Halt → WaitGet → Get → WaitPut → Put (phase-gated)
-- **DMC DMA State Machine**: PendingHalt → Halt → Dummy → Align → Read (correct sequence)
-- **Overlap Priority**: DMC Read > OAM Get > OAM Put > CPU repeated read
-- **No more dual bus operations**: Previous code called both `step_dmc_dma()` and `step_oam_dma()` per cycle - FIXED
+**Fixes implemented**:
+1. **OAM PUT writes to $2004**: Changed from writing to byte_index (0-255) to writing to PPU OAMDATA ($2004) via bus. PPU handles OAMADDR increment internally.
+2. **Explicit phase contract**: `step_cycle()` now takes `current_phase: ApuPhase` parameter. NesConsole tracks phase and passes it explicitly.
+3. **DMC alignment uses next_phase**: Fixed Dummy→Align/Read decision to check `next_phase.is_put()` instead of current phase (was backwards).
+4. **Explicit BusWinner tracking**: Added `BusWinner` enum (DmcRead, OamGet, OamPut, CpuRepeat, None). `arbitrate()` returns `(BusOp, BusWinner)`.
+5. **Removed redundant state**: Removed `bytes_transferred` field, now uses `byte_index >= 256` for completion.
 
 **Files modified**:
-- `dma_controller.rs`: Complete rewrite (100% Claude)
-- `nes_console.rs`: Updated to pass `cpu_is_writing` and use new `DmaStepResult.bus_op`
-- `tests/dma_controller.rs`: Rewritten for new interface (22 tests)
+- `dma_controller.rs`: All 5 fixes (100% Claude)
+- `nes_console.rs`: Added `apu_phase` field, passes to `step_cycle()`, toggles locally (72% Claude)
+- `tests/dma_controller.rs`: 23 tests updated for new interface
 
-**All 310 tests pass**
+**All 311 tests pass, frontend builds successfully**
 
 ---
 
@@ -217,6 +217,26 @@ Based on feedback in `requirements/DMA_feedback_1.md`, completely rewrote the DM
 ---
 
 ## Session Log
+
+### Session: December 21, 2025 (session 29)
+- **DMA Code Review Round 3** - implementing fixes from `requirements/DMA_code_review_2.md`
+- **Phase 1**: OAM PUT now writes to $2004 via bus (not byte_index 0-255)
+  - Changed `BusOp::Write(self.oam.byte_index, data)` to `BusOp::Write(0x2004, data)`
+  - Write executed via `bus.write_byte()` - PPU handles OAMADDR increment
+- **Phase 2**: Explicit phase contract
+  - `step_cycle()` signature changed to `step_cycle(cpu_is_writing, current_phase: ApuPhase)`
+  - Removed internal `apu_phase` field from DmaController
+  - NesConsole now tracks `apu_phase` field and passes to step_cycle
+- **Phase 3**: DMC alignment uses next_phase (was backwards!)
+  - Fixed: `if next_phase.is_put() { Align } else { Read }`
+  - Before was using current phase, leading to off-by-one errors
+- **Phase 4**: Explicit BusWinner tracking
+  - Added `BusWinner` enum: DmcRead, OamGet, OamPut, CpuRepeat, None
+  - `arbitrate()` now returns `(BusOp, BusWinner)` tuple
+  - No more fragile inference via BusOp comparison
+- **Phase 5**: Removed redundant `bytes_transferred` field
+  - Now uses `byte_index >= 256` for completion detection
+- All 311 tests pass, both core and frontend build successfully
 
 ### Session: December 21, 2025 (session 28)
 - **DMA Feedback Round 2** - complete rewrite based on `requirements/DMA_feedback_1.md`
