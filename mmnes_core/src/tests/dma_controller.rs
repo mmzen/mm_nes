@@ -618,7 +618,7 @@ fn test_dmc_delayed_halt_captures_correct_address() {
     let current_phase = ApuPhase::Get;
 
     // Cycle 1: CPU is WRITING - halt should fail
-    let result = controller.step_cycle(true, Some(0x5555), current_phase).unwrap();
+    let _result = controller.step_cycle(true, Some(0x5555), current_phase).unwrap();
     assert!(controller.is_dmc_dma_active(), "DMC DMA should still be active");
     // Address should NOT be captured yet
     assert!(controller.get_halted_read_address().is_none(),
@@ -631,4 +631,71 @@ fn test_dmc_delayed_halt_captures_correct_address() {
     // The halted address should be $7777
     assert_eq!(controller.get_halted_read_address(), Some(0x7777),
         "Halted address should be captured from successful halt cycle");
+}
+
+/// Tests that is_cpu_stalled() returns false during PendingHalt.
+///
+/// This is critical: the CPU must continue executing normally during PendingHalt.
+/// Only when the halt succeeds (transitions to Halt state) should CPU be stalled.
+#[test]
+fn test_cpu_not_stalled_during_pending_halt() {
+    init();
+    let mut controller = create_controller();
+
+    // Before any DMA: not stalled, not active
+    assert!(!controller.is_cpu_stalled(), "CPU should not be stalled when no DMA");
+    assert!(!controller.is_active(), "No DMA should be active");
+
+    // Start OAM DMA - enters PendingHalt
+    controller.start_oam_dma(0x02);
+
+    // DMA is active (PendingHalt counts as active)
+    assert!(controller.is_active(), "DMA should be active after start");
+
+    // BUT CPU should NOT be stalled during PendingHalt!
+    assert!(!controller.is_cpu_stalled(),
+        "CPU should NOT be stalled during PendingHalt - this is the critical invariant");
+
+    // Step with CPU writing - halt fails, stays in PendingHalt
+    let current_phase = ApuPhase::Get;
+    let _result = controller.step_cycle(true, Some(0x1234), current_phase).unwrap();
+
+    // Still in PendingHalt - CPU still NOT stalled
+    assert!(controller.is_active(), "DMA should still be active");
+    assert!(!controller.is_cpu_stalled(),
+        "CPU should still NOT be stalled while halt is pending (CPU was writing)");
+
+    // Step with CPU reading - halt succeeds, transitions to Halt
+    let result = controller.step_cycle(false, Some(0x5678), current_phase.toggle()).unwrap();
+
+    // NOW CPU is stalled (Halt state)
+    assert!(result.cpu_halted, "DMA result should indicate CPU halted");
+    assert!(controller.is_cpu_stalled(),
+        "CPU should NOW be stalled after halt succeeded");
+}
+
+/// Tests that is_cpu_stalled() returns false during DMC PendingHalt.
+#[test]
+fn test_cpu_not_stalled_during_dmc_pending_halt() {
+    init();
+    let mut controller = create_controller();
+
+    // Start DMC DMA - enters PendingHalt
+    controller.request_dmc_dma(0xC000, false, None);
+
+    // DMA is active
+    assert!(controller.is_active(), "DMC DMA should be active after request");
+
+    // CPU should NOT be stalled during PendingHalt
+    assert!(!controller.is_cpu_stalled(),
+        "CPU should NOT be stalled during DMC PendingHalt");
+
+    // Step with CPU reading - halt succeeds
+    let current_phase = ApuPhase::Get;
+    let result = controller.step_cycle(false, Some(0x1234), current_phase).unwrap();
+
+    // NOW CPU is stalled
+    assert!(result.cpu_halted, "DMA result should indicate CPU halted");
+    assert!(controller.is_cpu_stalled(),
+        "CPU should be stalled after DMC halt succeeded");
 }

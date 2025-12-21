@@ -257,6 +257,22 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         matches!(self.oam.op, OamDmaOp::WaitGet | OamDmaOp::Get)
     }
 
+    /// Returns true only when CPU is actually stalled by DMA.
+    ///
+    /// **Important:** `PendingHalt` does NOT stall the CPU. The CPU continues
+    /// executing normally until a read cycle allows the halt to succeed.
+    ///
+    /// CPU is stalled when:
+    /// - OAM DMA: `Halt`, `WaitGet`, `Get`, `WaitPut`, `Put`
+    /// - DMC DMA: `Halt`, `Dummy`, `Align`, `Read`
+    pub fn is_cpu_stalled(&self) -> bool {
+        let oam_stalls = matches!(self.oam.op,
+            OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::Get | OamDmaOp::WaitPut | OamDmaOp::Put);
+        let dmc_stalls = matches!(self.dmc.phase,
+            DmcDmaPhase::Halt | DmcDmaPhase::Dummy | DmcDmaPhase::Align | DmcDmaPhase::Read);
+        oam_stalls || dmc_stalls
+    }
+
     // ========================================================================
     // Start DMA Operations
     // ========================================================================

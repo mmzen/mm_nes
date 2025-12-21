@@ -229,17 +229,28 @@ impl NesConsole {
         // STEP 3: EXECUTE BUS OPERATION FOR THE SELECTED MASTER
         // ============================================================
 
-        let cpu_result = if self.dma_controller.is_active() {
-            // DMA is active - step the DMA controller, CPU is halted
-            // Pass pending_read_addr so DMA can capture it when halt succeeds
-            let dma_result = self.dma_controller.step_cycle(cpu_is_writing, pending_read_addr, self.apu_phase)
-                .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
+        // Step DMA controller if active (handles state transitions including PendingHalt → Halt)
+        // This must be called even during PendingHalt to advance the state machine.
+        let dma_result = if self.dma_controller.is_active() {
+            Some(self.dma_controller.step_cycle(cpu_is_writing, pending_read_addr, self.apu_phase)
+                .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?)
+        } else {
+            None
+        };
 
-            // If DMC DMA completed, provide the sample to the APU
-            if let Some(sample) = dma_result.dmc_sample {
+        // Handle DMC sample if DMA completed
+        if let Some(ref result) = dma_result {
+            if let Some(sample) = result.dmc_sample {
                 self.apu.borrow_mut().provide_dmc_sample(sample)
                     .map_err(|e| NesConsoleError::InternalError(format!("APU error: {}", e)))?;
             }
+        }
+
+        // CPU executes if not stalled by DMA.
+        // Important: PendingHalt does NOT stall - CPU continues until halt actually succeeds.
+        let cpu_result = if self.dma_controller.is_cpu_stalled() {
+            // CPU is stalled - DMA is bus master
+            let dma_result = dma_result.expect("DMA should have result when CPU is stalled");
 
             // Derive read/write info from bus_op
             let (memory_read, memory_write, address) = match dma_result.bus_op {
@@ -257,7 +268,7 @@ impl NesConsole {
                 ..Default::default()
             }
         } else {
-            // Normal CPU execution
+            // CPU is bus master (either no DMA or in PendingHalt)
             let result = self.cpu.borrow_mut().step_cycle()?;
 
             // Track the CPU's last read address for DMA repeated reads
