@@ -1,4 +1,4 @@
-// Authorship: Human 25% | Claude 75%
+// Authorship: Human 22% | Claude 78%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -71,11 +71,6 @@ pub struct NesConsole {
     config: ConfigSpec,
     /// Shared cell for OAM DMA start signal (page to transfer from)
     dma_start_page: Rc<Cell<Option<u8>>>,
-    /// LEGACY: Shared cell tracking CPU odd/even cycle.
-    /// This is kept for backward compatibility but is no longer used for DMA decisions.
-    /// The APU phase (apu_phase field) is now the source of truth for GET/PUT timing.
-    /// DO NOT use this for timing-critical decisions in new code.
-    cpu_cycle_odd: Rc<Cell<bool>>,
     /// Total elapsed master cycles (u64 for long-running sessions).
     /// Same semantics as cpu_counter.current - increments every cycle including DMA.
     master_cycles: u64,
@@ -115,7 +110,6 @@ impl NesConsole {
         entry_point: Option<u16>,
         config: ConfigSpec,
         dma_start_page: Rc<Cell<Option<u8>>>,
-        cpu_cycle_odd: Rc<Cell<bool>>,
         dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
     ) -> NesConsole {
         let mut console = NesConsole {
@@ -130,7 +124,6 @@ impl NesConsole {
             ppu_counter: CyclesCounter::new(CYCLE_START_SEQUENCE),
             config: config.clone(),
             dma_start_page,
-            cpu_cycle_odd,
             master_cycles: 0,
             dma_controller,
             last_cpu_read_address: None,
@@ -185,7 +178,25 @@ impl NesConsole {
         let cpu_bus_intent = self.cpu.borrow().get_pending_bus_operation();
         let cpu_is_writing = cpu_bus_intent.is_write;
 
+        // Capture the PENDING read address for this cycle (not historical last read).
+        // When DMA halts the CPU, repeated reads use the address of the read being halted,
+        // not some previous read. This is critical for $2007 VRAM increment side effects.
+        let pending_read_addr = if !cpu_is_writing {
+            cpu_bus_intent.address
+        } else {
+            // CPU is writing - fall back to last read address for repeated reads
+            self.last_cpu_read_address
+        };
+
         // Query APU for DMC DMA needs from its CURRENT state (BEFORE ticking APU)
+        //
+        // DMC SCHEDULING CONTRACT:
+        // - APU is AUTHORITATIVE for DMC timing. It returns Some(address) from needs_dmc_dma()
+        //   only when the DMC sample buffer is empty and a fetch should begin THIS cycle.
+        // - DMA controller is a DUMB EXECUTOR. It only runs the halt/dummy/align/read sequence.
+        // - The APU handles load vs reload scheduling internally - the DMA controller does not
+        //   need to know whether this is an initial load or a reload request.
+        // - This separation ensures timing logic lives in one place (APU) and is testable there.
         let dmc_dma_request = if !self.dma_controller.is_dmc_dma_active() {
             self.apu.borrow().needs_dmc_dma()
         } else {
@@ -202,16 +213,16 @@ impl NesConsole {
         // STEP 2: DECIDE BUS MASTER AND START DMA IF NEEDED
         // ============================================================
 
-        // Start OAM DMA if triggered
+        // Start OAM DMA if triggered - use pending read address for repeated reads
         if let Some(page) = oam_dma_start {
-            self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
+            self.dma_controller.set_halted_read_address(pending_read_addr);
             self.dma_controller.start_oam_dma(page);
         }
 
-        // Start DMC DMA if APU requested it (event-driven - no pre-calculation)
+        // Start DMC DMA if APU requested it - use pending read address
         if let Some(dmc_address) = dmc_dma_request {
-            self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
-            self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, self.last_cpu_read_address);
+            self.dma_controller.set_halted_read_address(pending_read_addr);
+            self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, pending_read_addr);
         }
 
         // ============================================================
@@ -267,9 +278,8 @@ impl NesConsole {
         // Toggle APU phase (GET/PUT alternates every CPU cycle)
         self.apu_phase = self.apu_phase.toggle();
 
-        // LEGACY: Toggle cpu_cycle_odd for backward compatibility only
-        // This is NOT used for DMA timing - apu_phase is the source of truth
-        self.cpu_cycle_odd.set(!self.cpu_cycle_odd.get());
+        // Note: The APU has its own internal cpu_cycle_odd for its timing.
+        // apu_phase is the source of truth for DMA timing.
 
         // Advance APU (AFTER the bus operation, not before)
         let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
@@ -420,9 +430,6 @@ impl NesConsole {
 
         // Set the local phase (passed to DMA controller as parameter)
         self.apu_phase = random_phase;
-
-        // Sync legacy cpu_cycle_odd (GET = false/even, PUT = true/odd)
-        self.cpu_cycle_odd.set(random_phase.is_put());
     }
 
     fn reset_counters(&mut self) {
@@ -434,7 +441,6 @@ impl NesConsole {
         self.dma_start_page.set(None);
         // Note: APU phase is NOT reset here - it persists across reset
         // (only randomized on power-on). The DmaController.reset() also preserves phase.
-        // cpu_cycle_odd is kept in sync with the preserved APU phase.
         self.master_cycles = 0;
         self.dma_controller.reset();
         self.last_cpu_read_address = None;
@@ -574,8 +580,6 @@ pub struct NesConsoleBuilder {
     config: ConfigSpec,
     /// Shared cell for OAM DMA start signal (page to transfer from)
     dma_start_page: Rc<Cell<Option<u8>>>,
-    /// LEGACY: Shared cell for CPU cycle parity tracking (kept for compatibility)
-    cpu_cycle_odd: Rc<Cell<bool>>,
     /// Reference to PPU as DmaDevice for DmaController
     ppu_dma_device: Option<Rc<RefCell<dyn DmaDevice>>>,
 }
@@ -599,7 +603,6 @@ impl NesConsoleBuilder {
             cartridge: None,
             config: ConfigSpec::default(),
             dma_start_page: Rc::new(Cell::new(None)),
-            cpu_cycle_odd: Rc::new(Cell::new(false)),
             ppu_dma_device: None,
         }
     }
@@ -887,7 +890,6 @@ impl NesConsoleBuilder {
             self.entry_point.take(),
             self.config,
             self.dma_start_page,
-            self.cpu_cycle_odd,
             dma_controller,
         );
 

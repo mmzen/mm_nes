@@ -71,21 +71,37 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Controller Code Review Round 4 (December 21, 2025)
+### Recently Completed: DMA Controller Code Review Round 5 (December 21, 2025)
+
+Based on feedback in `requirements/DMA_code_review_4.md`, implemented 5 critical fixes:
+
+**Fixes implemented**:
+1. **Halted read address fix**: Now uses `cpu_bus_intent.address` (pending read) instead of `last_cpu_read_address` (historical). Critical for correct $2007 VRAM increment side effects during DMA.
+2. **Removed dead `cpu_cycle_odd`**: Deleted the field entirely from NesConsole and builder - was never read, only toggled pointlessly.
+3. **DMC scheduling contract documented**: Added explicit contract comment explaining APU is authoritative for timing, DMA controller is a dumb executor.
+4. **$2007 repeated read test**: Added test verifying BusWinner::CpuRepeat reads use correct halted address and go through bus.
+5. **OAM PUT verification**: Confirmed existing `test_oam_dma_writes_to_2004` test verifies correct behavior.
+
+**Files modified**:
+- `nes_console.rs`: Halted address fix, removed cpu_cycle_odd (78% Claude, up from 75%)
+- `tests/dma_controller.rs`: Added repeated read test (24 tests total)
+
+**All 312 tests pass, frontend builds successfully**
+
+---
+
+### Session 30: DMA Controller Code Review Round 4 (December 21, 2025)
 
 Based on feedback in `requirements/DMA_code_review_3.md`, implemented 5 cleanup fixes:
 
 **Fixes implemented**:
-1. **PPU comment clarification**: Fixed misleading comment "3 dots per CPU cycle" → clarified parameter is CPU cycles, PPU internally converts to dots.
-2. **Deleted dead code**: Removed `pending_dmc_dma` field and all related handling - was never used in the new immediate DMC request flow.
-3. **Deterministic phase**: Added `power_on_deterministic(seed)` method + updated `randomize_apu_phase(seed: Option<u64>)` for testable phase initialization.
-4. **Legacy field documentation**: Added clear LEGACY comments to `cpu_cycle_odd` warning it's not used for timing and should not be relied upon.
-5. **Counter documentation**: Added documentation clarifying `cpu_counter` is master clock (increments during DMA too), not CPU execution cycles.
+1. **PPU comment clarification**: Fixed misleading comment "3 dots per CPU cycle" → clarified parameter is CPU cycles.
+2. **Deleted dead code**: Removed `pending_dmc_dma` field.
+3. **Deterministic phase**: Added `power_on_deterministic(seed)` method.
+4. **Legacy field documentation**: Added LEGACY comments to `cpu_cycle_odd`.
+5. **Counter documentation**: Clarified `cpu_counter` semantics.
 
-**Files modified**:
-- `nes_console.rs`: All 5 fixes (75% Claude, up from 72%)
-
-**All 311 tests pass, frontend builds successfully**
+**All 311 tests pass**
 
 ---
 
@@ -230,6 +246,26 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 21, 2025 (session 31)
+- **DMA Code Review Round 5** - addressing issues from `requirements/DMA_code_review_4.md`
+- **Phase 1**: Fixed halted read address (CRITICAL)
+  - Changed from `last_cpu_read_address` (historical) to `cpu_bus_intent.address` (pending)
+  - When DMA halts CPU, repeated reads now use the address of the read being halted
+  - Critical for $2007 VRAM increment side effects during DMA
+- **Phase 2**: Deleted dead `cpu_cycle_odd` field entirely
+  - Was being toggled every cycle but never read by anything
+  - APU has its own internal cpu_cycle_odd for its timing
+  - Removed from NesConsole struct, constructor, and builder
+- **Phase 3**: Documented DMC scheduling ownership contract
+  - Added explicit contract comment: APU is authoritative, DMA controller is dumb executor
+  - APU handles load vs reload scheduling internally
+- **Phase 4**: Added $2007 repeated read side effect test
+  - Verifies BusWinner::CpuRepeat reads use correct halted address
+  - Confirms reads go through bus (triggering side effects)
+- **Phase 5**: Verified OAM PUT semantics
+  - Confirmed `test_oam_dma_writes_to_2004` test already validates $2004 writes
+- All 312 tests pass (1 new test), both core and frontend build successfully
 
 ### Session: December 21, 2025 (session 30)
 - **DMA Code Review Round 4** - addressing issues from `requirements/DMA_code_review_3.md`

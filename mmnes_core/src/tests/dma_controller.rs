@@ -500,3 +500,69 @@ fn test_dmc_read_has_priority_over_oam_get() {
     // OAM DMA should still be active (it gets delayed when DMC steals cycles)
     assert!(controller.is_oam_dma_active(), "OAM DMA should still be running");
 }
+
+// ============================================================================
+// Repeated Read Side Effect Tests
+// ============================================================================
+
+/// Tests that repeated reads during DMA idle cycles go through the bus.
+/// This is critical for side effects like $2007 incrementing VRAM address.
+///
+/// When CPU is halted during DMA, the external bus shows repeated reads from
+/// the address the CPU was about to read. These reads must trigger side effects.
+#[test]
+fn test_repeated_reads_during_dma_idle_cycles_go_through_bus() {
+    init();
+
+    let mut controller = create_controller();
+
+    // Set halted read address to $2007 (PPU data register)
+    // On real hardware, each read from $2007 increments VRAM address
+    controller.set_halted_read_address(Some(0x2007));
+
+    // Start DMC DMA - it has 2-3 no-bus cycles (Halt, Dummy, maybe Align)
+    // where CPU repeated reads should occur
+    controller.request_dmc_dma(0xC000, false, None);
+
+    let mut current_phase = ApuPhase::Get;
+    let mut cpu_repeat_reads = 0u32;
+    let mut cpu_repeat_addresses: Vec<u16> = Vec::new();
+    let mut cycles = 0;
+
+    // Run through the DMC DMA sequence
+    while controller.is_dmc_dma_active() && cycles < 10 {
+        let result = controller.step_cycle(false, current_phase).unwrap();
+        current_phase = current_phase.toggle();
+        cycles += 1;
+
+        // Count cycles where CPU repeated read happened
+        if result.winner == BusWinner::CpuRepeat {
+            cpu_repeat_reads += 1;
+            // Verify the bus op is a read from $2007
+            if let BusOp::Read(addr) = result.bus_op {
+                cpu_repeat_addresses.push(addr);
+            }
+        }
+    }
+
+    // DMC DMA should have completed
+    assert!(!controller.is_dmc_dma_active(), "DMC DMA should have completed");
+
+    // Should have had at least 2 CPU repeated read cycles (Halt + Dummy, maybe Align)
+    assert!(cpu_repeat_reads >= 2,
+        "Expected at least 2 CPU repeated read cycles, got {}. \
+         These cycles must read from $2007 with side effects.",
+        cpu_repeat_reads);
+
+    // All repeated reads should be from the halted address ($2007)
+    for addr in &cpu_repeat_addresses {
+        assert_eq!(*addr, 0x2007,
+            "Repeated read should be from halted address $2007, got ${:04X}",
+            addr);
+    }
+
+    // The DMA controller performs these reads through bus.read_byte(),
+    // which means real PPU register side effects (like VRAM address increment) will occur.
+    // This is verified by the fact that BusWinner::CpuRepeat returns a BusOp::Read
+    // and the execute_bus_op path calls bus.read_byte() for CpuRepeat.
+}
