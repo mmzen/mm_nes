@@ -5,6 +5,7 @@
 //! Tests GET/PUT APU phase tracking for DMA alignment.
 //!
 //! Phase is now passed explicitly to step_cycle() - tests track phase locally.
+//! pending_read_addr is also passed - captured by DMA controller at halt.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -117,7 +118,7 @@ fn test_oam_dma_completes_in_513_cycles_get_phase_start() {
     let mut write_count = 0;
 
     while controller.is_active() {
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, None, current_phase).unwrap();
         total_cycles += 1;
 
         if is_read(&result.bus_op) {
@@ -154,7 +155,7 @@ fn test_oam_dma_completes_in_514_cycles_put_phase_start() {
     let mut total_cycles = 0;
 
     while controller.is_active() {
-        let _ = controller.step_cycle(false, current_phase).unwrap();
+        let _ = controller.step_cycle(false, None, current_phase).unwrap();
         total_cycles += 1;
 
         // Toggle phase each cycle
@@ -182,7 +183,7 @@ fn test_oam_dma_reads_from_correct_source_address() {
 
     for _ in 0..20 {
         if !controller.is_active() { break; }
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, None, current_phase).unwrap();
 
         if let BusOp::Read(addr) = result.bus_op {
             read_addresses.push(addr);
@@ -210,7 +211,7 @@ fn test_oam_dma_writes_to_2004() {
 
     for _ in 0..20 {
         if !controller.is_active() { break; }
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, None, current_phase).unwrap();
 
         if let BusOp::Write(addr, _) = result.bus_op {
             write_addresses.push(addr);
@@ -235,7 +236,7 @@ fn test_oam_dma_alternates_read_write_on_phases() {
     let mut current_phase = write_phase.toggle();
 
     // First cycle: PendingHalt -> Halt (no bus op)
-    controller.step_cycle(false, current_phase).unwrap();
+    controller.step_cycle(false, None, current_phase).unwrap();
     current_phase = current_phase.toggle();
 
     // Run through several cycles, checking pattern
@@ -244,7 +245,7 @@ fn test_oam_dma_alternates_read_write_on_phases() {
 
     for _ in 0..20 {
         if !controller.is_active() { break; }
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, None, current_phase).unwrap();
         if is_read(&result.bus_op) {
             reads += 1;
         }
@@ -267,11 +268,11 @@ fn test_oam_dma_halt_fails_on_cpu_write() {
     let current_phase = ApuPhase::Get;
 
     // First cycle with CPU writing - halt should fail, stay in PendingHalt
-    let _result = controller.step_cycle(true, current_phase).unwrap(); // cpu_is_writing = true
+    let _result = controller.step_cycle(true, None, current_phase).unwrap(); // cpu_is_writing = true
     assert!(controller.is_oam_dma_active(), "OAM DMA should still be active (PendingHalt)");
 
     // Second cycle with CPU reading - halt should succeed
-    let _result = controller.step_cycle(false, current_phase.toggle()).unwrap();
+    let _result = controller.step_cycle(false, None, current_phase.toggle()).unwrap();
     assert!(controller.is_oam_dma_active(), "OAM DMA should still be active (now in Halt/WaitGet)");
 }
 
@@ -291,7 +292,7 @@ fn test_dmc_dma_state_machine_sequence() {
     // Run until complete
     let mut cycles = 0;
     while controller.is_dmc_dma_active() && cycles < 10 {
-        controller.step_cycle(false, current_phase).unwrap();
+        controller.step_cycle(false, None, current_phase).unwrap();
         current_phase = current_phase.toggle();
         cycles += 1;
     }
@@ -309,7 +310,7 @@ fn test_dmc_dma_returns_sample() {
     let mut sample_received = false;
 
     for _ in 0..10 {
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, None, current_phase).unwrap();
         current_phase = current_phase.toggle();
 
         if result.dmc_sample.is_some() {
@@ -329,18 +330,18 @@ fn test_dmc_dma_halt_fails_on_cpu_write() {
     controller.request_dmc_dma(0xC000, false, None);
 
     // First cycle with CPU writing - halt should fail
-    controller.step_cycle(true, current_phase).unwrap();
+    controller.step_cycle(true, None, current_phase).unwrap();
     assert!(controller.is_dmc_dma_active(), "DMC DMA should still be pending");
     current_phase = current_phase.toggle();
 
     // Second cycle with CPU reading - halt should succeed
-    controller.step_cycle(false, current_phase).unwrap();
+    controller.step_cycle(false, None, current_phase).unwrap();
     current_phase = current_phase.toggle();
 
     // Continue until complete
     let mut cycles = 2;
     while controller.is_dmc_dma_active() && cycles < 10 {
-        controller.step_cycle(false, current_phase).unwrap();
+        controller.step_cycle(false, None, current_phase).unwrap();
         current_phase = current_phase.toggle();
         cycles += 1;
     }
@@ -383,7 +384,7 @@ fn test_oam_dma_uses_current_apu_phase_for_alignment() {
 
     let mut cycles_get = 0;
     while controller.is_active() {
-        let _ = controller.step_cycle(false, current_phase).unwrap();
+        let _ = controller.step_cycle(false, None, current_phase).unwrap();
         current_phase = current_phase.toggle();
         cycles_get += 1;
         if cycles_get > 600 { panic!("Too many cycles"); }
@@ -397,7 +398,7 @@ fn test_oam_dma_uses_current_apu_phase_for_alignment() {
 
     let mut cycles_put = 0;
     while controller.is_active() {
-        let _ = controller.step_cycle(false, current_phase).unwrap();
+        let _ = controller.step_cycle(false, None, current_phase).unwrap();
         current_phase = current_phase.toggle();
         cycles_put += 1;
         if cycles_put > 600 { panic!("Too many cycles"); }
@@ -437,16 +438,19 @@ fn test_cpu_repeated_read_during_dma_idle() {
         Rc::new(RefCell::new(ppu))
     );
 
-    // Set the halted read address (simulating CPU was reading from $2002)
-    controller.set_halted_read_address(Some(0x2002));
+    // Start OAM DMA - address will be captured at halt via step_cycle parameter
     controller.start_oam_dma(0x02);
 
-    // First cycle transitions from PendingHalt
-    // During cycles where DMA doesn't use the bus, CPU repeated read should occur
-    let result = controller.step_cycle(false, ApuPhase::Get).unwrap();
+    // First cycle transitions from PendingHalt - pass the pending read address
+    // The DMA controller should capture $2002 as the halted address
+    let result = controller.step_cycle(false, Some(0x2002), ApuPhase::Get).unwrap();
 
     // The result should show the CPU halted
     assert!(result.cpu_halted, "CPU should be halted");
+
+    // Verify the halted address was captured
+    assert_eq!(controller.get_halted_read_address(), Some(0x2002),
+        "Halted address should be captured from step_cycle parameter");
 }
 
 #[test]
@@ -462,7 +466,7 @@ fn test_bus_winner_tracking() {
     controller.start_oam_dma(0x02);
 
     // First cycle - halt cycle, winner should be None or CpuRepeat
-    let result = controller.step_cycle(false, ApuPhase::Put).unwrap();
+    let result = controller.step_cycle(false, None, ApuPhase::Put).unwrap();
     // During halt, no OAM bus op happens
     assert!(matches!(result.winner, BusWinner::None | BusWinner::CpuRepeat));
 }
@@ -486,7 +490,7 @@ fn test_dmc_read_has_priority_over_oam_get() {
     let mut cycles = 0;
 
     while controller.is_dmc_dma_active() && cycles < 20 {
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, None, current_phase).unwrap();
         current_phase = current_phase.toggle();
         cycles += 1;
 
@@ -516,12 +520,9 @@ fn test_repeated_reads_during_dma_idle_cycles_go_through_bus() {
 
     let mut controller = create_controller();
 
-    // Set halted read address to $2007 (PPU data register)
-    // On real hardware, each read from $2007 increments VRAM address
-    controller.set_halted_read_address(Some(0x2007));
-
     // Start DMC DMA - it has 2-3 no-bus cycles (Halt, Dummy, maybe Align)
-    // where CPU repeated reads should occur
+    // where CPU repeated reads should occur.
+    // The halted read address ($2007) will be captured at halt via step_cycle parameter.
     controller.request_dmc_dma(0xC000, false, None);
 
     let mut current_phase = ApuPhase::Get;
@@ -530,8 +531,9 @@ fn test_repeated_reads_during_dma_idle_cycles_go_through_bus() {
     let mut cycles = 0;
 
     // Run through the DMC DMA sequence
+    // Pass $2007 as the pending read address - it will be captured when halt succeeds
     while controller.is_dmc_dma_active() && cycles < 10 {
-        let result = controller.step_cycle(false, current_phase).unwrap();
+        let result = controller.step_cycle(false, Some(0x2007), current_phase).unwrap();
         current_phase = current_phase.toggle();
         cycles += 1;
 
@@ -565,4 +567,68 @@ fn test_repeated_reads_during_dma_idle_cycles_go_through_bus() {
     // which means real PPU register side effects (like VRAM address increment) will occur.
     // This is verified by the fact that BusWinner::CpuRepeat returns a BusOp::Read
     // and the execute_bus_op path calls bus.read_byte() for CpuRepeat.
+}
+
+// ============================================================================
+// Delayed Halt Tests - Critical for address capture correctness
+// ============================================================================
+
+/// Tests that when OAM DMA is triggered during a CPU write cycle, the halt is delayed
+/// and the halted read address is captured from the LATER read cycle, not the stale value.
+///
+/// This is the key test for the fix in code review round 6: the halted address must be
+/// captured AT THE MOMENT halt succeeds, not at DMA start time.
+#[test]
+fn test_delayed_halt_captures_correct_address() {
+    init();
+    let mut controller = create_controller();
+
+    // Start OAM DMA
+    controller.start_oam_dma(0x02);
+    let current_phase = ApuPhase::Get;
+
+    // Cycle 1: CPU is WRITING - halt should fail, stay in PendingHalt
+    // Pass a "stale" address ($1234) that would be wrong if captured now
+    let result = controller.step_cycle(true, Some(0x1234), current_phase).unwrap();
+    assert!(controller.is_oam_dma_active(), "OAM DMA should still be active");
+    // Address should NOT be captured yet since halt didn't succeed
+    assert!(controller.get_halted_read_address().is_none(),
+        "Halted address should not be captured during failed halt (CPU writing)");
+
+    // Cycle 2: CPU is READING from $ABCD - halt should succeed NOW
+    // This is the correct address that should be captured
+    let result = controller.step_cycle(false, Some(0xABCD), current_phase.toggle()).unwrap();
+    assert!(result.cpu_halted, "CPU should be halted now");
+
+    // The halted address should be $ABCD (the address from the successful halt cycle),
+    // NOT $1234 (the stale address from when halt was attempted but failed)
+    assert_eq!(controller.get_halted_read_address(), Some(0xABCD),
+        "Halted address should be captured from the cycle where halt succeeded ($ABCD), \
+         not the earlier cycle ($1234)");
+}
+
+/// Tests that DMC DMA also captures the correct address when halt is delayed.
+#[test]
+fn test_dmc_delayed_halt_captures_correct_address() {
+    init();
+    let mut controller = create_controller();
+
+    // Start DMC DMA
+    controller.request_dmc_dma(0xC000, true, None); // cpu_is_writing = true at request time
+    let current_phase = ApuPhase::Get;
+
+    // Cycle 1: CPU is WRITING - halt should fail
+    let result = controller.step_cycle(true, Some(0x5555), current_phase).unwrap();
+    assert!(controller.is_dmc_dma_active(), "DMC DMA should still be active");
+    // Address should NOT be captured yet
+    assert!(controller.get_halted_read_address().is_none(),
+        "Halted address should not be captured during failed halt");
+
+    // Cycle 2: CPU is READING from $7777 - halt should succeed
+    let result = controller.step_cycle(false, Some(0x7777), current_phase.toggle()).unwrap();
+    assert!(result.cpu_halted, "CPU should be halted now");
+
+    // The halted address should be $7777
+    assert_eq!(controller.get_halted_read_address(), Some(0x7777),
+        "Halted address should be captured from successful halt cycle");
 }

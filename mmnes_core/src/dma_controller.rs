@@ -276,7 +276,15 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// Request DMC DMA to fetch from specified address.
     ///
     /// DMC DMA enters PendingHalt state - will wait for CPU read cycle to halt.
+    ///
+    /// If DMC DMA is already active, this request is ignored. This allows the
+    /// APU to be authoritative about WHEN to request without the scheduler
+    /// needing to track DMA state.
     pub fn request_dmc_dma(&mut self, address: u16, _cpu_is_writing: bool, _conflict_address: Option<u16>) {
+        // Ignore duplicate requests if DMC DMA is already in progress
+        if self.is_dmc_dma_active() {
+            return;
+        }
         self.dmc = DmcDmaState {
             phase: DmcDmaPhase::PendingHalt,
             address,
@@ -317,8 +325,9 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     ///
     /// # Arguments
     /// * `cpu_is_writing` - True if CPU's pending bus op is a write (affects halt)
+    /// * `pending_read_addr` - The CPU's pending read address THIS cycle (captured at halt)
     /// * `current_phase` - The APU phase for THIS cycle (caller must track and pass)
-    pub fn step_cycle(&mut self, cpu_is_writing: bool, current_phase: ApuPhase) -> Result<DmaStepResult, MemoryError> {
+    pub fn step_cycle(&mut self, cpu_is_writing: bool, pending_read_addr: Option<u16>, current_phase: ApuPhase) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
         let next_phase = current_phase.toggle();
 
@@ -328,9 +337,13 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
 
         // OAM DMA: PendingHalt -> Halt (only if CPU is not writing)
         // The Halt state represents the halt cycle itself - 1 cycle with no bus op
+        // CRITICAL: Capture the pending read address AT THE MOMENT halt succeeds,
+        // not earlier. This ensures correct address for repeated reads.
         if self.oam.op == OamDmaOp::PendingHalt {
             if !cpu_is_writing {
                 // Halt succeeds - enter the halt cycle
+                // Capture the pending read address NOW (the read being halted)
+                self.cpu_halted_addr = pending_read_addr;
                 self.oam.op = OamDmaOp::Halt;
             }
             // If CPU is writing, stay in PendingHalt (halt attempt fails)
@@ -341,6 +354,10 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             let cpu_already_halted = matches!(self.oam.op, OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::Get | OamDmaOp::WaitPut | OamDmaOp::Put);
             if !cpu_is_writing || cpu_already_halted {
                 // Halt succeeds
+                // Only capture address if not already captured by OAM halt
+                if self.cpu_halted_addr.is_none() {
+                    self.cpu_halted_addr = pending_read_addr;
+                }
                 self.dmc.phase = DmcDmaPhase::Halt;
             }
             // If CPU is writing and not already halted, stay in PendingHalt
@@ -568,13 +585,13 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     // Legacy compatibility
     // ========================================================================
 
-    /// Legacy step_cycle that doesn't take current_phase.
-    /// For backward compatibility - uses internal phase tracking.
-    /// DEPRECATED: Use step_cycle(cpu_is_writing, current_phase) instead.
-    #[deprecated(note = "Use step_cycle with explicit current_phase parameter")]
+    /// Legacy step_cycle that doesn't take current_phase or pending_read_addr.
+    /// For backward compatibility - uses defaults.
+    /// DEPRECATED: Use step_cycle(cpu_is_writing, pending_read_addr, current_phase) instead.
+    #[deprecated(note = "Use step_cycle with explicit parameters")]
     pub fn step_cycle_legacy(&mut self, cpu_is_writing: bool) -> Result<DmaStepResult, MemoryError> {
         // This maintains backward compatibility but should not be used
-        self.step_cycle(cpu_is_writing, ApuPhase::Get)
+        self.step_cycle(cpu_is_writing, None, ApuPhase::Get)
     }
 
     // ========================================================================

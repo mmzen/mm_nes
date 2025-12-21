@@ -1,4 +1,4 @@
-// Authorship: Human 22% | Claude 78%
+// Authorship: Human 20% | Claude 80%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -197,11 +197,10 @@ impl NesConsole {
         // - The APU handles load vs reload scheduling internally - the DMA controller does not
         //   need to know whether this is an initial load or a reload request.
         // - This separation ensures timing logic lives in one place (APU) and is testable there.
-        let dmc_dma_request = if !self.dma_controller.is_dmc_dma_active() {
-            self.apu.borrow().needs_dmc_dma()
-        } else {
-            None
-        };
+        //
+        // NOTE: We let APU be fully authoritative - the DMA controller will ignore duplicate
+        // requests if it's already processing a DMC fetch. No guard needed here.
+        let dmc_dma_request = self.apu.borrow().needs_dmc_dma();
 
         // Check if OAM DMA was triggered (from write to $4014 last cycle)
         let oam_dma_start = self.dma_start_page.get();
@@ -213,15 +212,16 @@ impl NesConsole {
         // STEP 2: DECIDE BUS MASTER AND START DMA IF NEEDED
         // ============================================================
 
-        // Start OAM DMA if triggered - use pending read address for repeated reads
+        // Start OAM DMA if triggered
+        // NOTE: We do NOT set the halted read address here - it will be captured
+        // by the DMA controller when halt actually succeeds (PendingHalt → Halt)
         if let Some(page) = oam_dma_start {
-            self.dma_controller.set_halted_read_address(pending_read_addr);
             self.dma_controller.start_oam_dma(page);
         }
 
-        // Start DMC DMA if APU requested it - use pending read address
+        // Start DMC DMA if APU requested it
+        // NOTE: Same as above - address captured at halt, not at request time
         if let Some(dmc_address) = dmc_dma_request {
-            self.dma_controller.set_halted_read_address(pending_read_addr);
             self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, pending_read_addr);
         }
 
@@ -231,7 +231,8 @@ impl NesConsole {
 
         let cpu_result = if self.dma_controller.is_active() {
             // DMA is active - step the DMA controller, CPU is halted
-            let dma_result = self.dma_controller.step_cycle(cpu_is_writing, self.apu_phase)
+            // Pass pending_read_addr so DMA can capture it when halt succeeds
+            let dma_result = self.dma_controller.step_cycle(cpu_is_writing, pending_read_addr, self.apu_phase)
                 .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
 
             // If DMC DMA completed, provide the sample to the APU
@@ -688,14 +689,14 @@ impl NesConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
-    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, _bus: Rc<RefCell<dyn Bus>>, _ppu: Rc<RefCell<dyn DmaDevice>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
+    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, _bus: Rc<RefCell<dyn Bus>>, _ppu: Rc<RefCell<dyn DmaDevice>>, data_bus: Rc<Cell<u8>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
         debug!("creating ppu dma {:?}", ppu_dma_type);
 
         let ppu_dma = match ppu_dma_type {
             PpuDmaType::NESPPUDMA => {
                 // PpuDma now just signals OAM DMA start via shared cell,
                 // actual transfer is handled by DmaController in the scheduler
-                PpuDma::new_with_dma_signal(self.dma_start_page.clone())
+                PpuDma::new_with_dma_signal(self.dma_start_page.clone(), data_bus)
             },
         };
 
@@ -704,7 +705,7 @@ impl NesConsoleBuilder {
 
     fn build_ppu_device(&mut self, ppu_type: &PpuType, chr_rom: Rc<RefCell<dyn BusDevice>>,
                         mirroring: Rc<RefCell<PpuNameTableMirroring>>, bus: Rc<RefCell<dyn Bus>>,
-                        cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NesConsoleError> {
+                        cpu: Rc<RefCell<dyn CPU>>, config: ConfigSpec, data_bus: Rc<Cell<u8>>) -> Result<(Rc<RefCell<dyn BusDevice>>, Rc<RefCell<dyn BusDevice>>), NesConsoleError> {
         debug!("creating ppu {:?}", ppu_type);
 
         let result = match ppu_type {
@@ -714,7 +715,7 @@ impl NesConsoleBuilder {
         };
 
         let ppu = Rc::new(RefCell::new(result));
-        let dma = self.build_ppu_dma(&PpuDmaType::NESPPUDMA, bus.clone(), ppu.clone())?;
+        let dma = self.build_ppu_dma(&PpuDmaType::NESPPUDMA, bus.clone(), ppu.clone(), data_bus)?;
 
         ppu.borrow_mut().initialize()?;
         dma.borrow_mut().initialize()?;
@@ -815,7 +816,7 @@ impl NesConsoleBuilder {
                     .map(|cartridge| cartridge.borrow().get_mirroring())
                     .ok_or(NesConsoleError::BuilderError("ppu mirroring not set".to_string()))?;
 
-                let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu, self.config.clone())?;
+                let (ppu, dma) = self.build_ppu_device(ppu_type, chr_rom, mirroring, bus.clone(), cpu, self.config.clone(), data_bus.clone())?;
 
                 bus.borrow_mut().add_device(ppu)?;
                 bus.borrow_mut().add_device(dma)?;

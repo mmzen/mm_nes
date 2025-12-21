@@ -82,7 +82,19 @@ pub trait APU: Configurable {
 
     /// Check if DMC DMA is needed (sample buffer empty and bytes remaining).
     /// Returns the address to fetch from if DMA is needed, None otherwise.
-    /// The scheduler should call this after each APU cycle to check for DMA requests.
+    ///
+    /// # DMC SCHEDULING CONTRACT
+    ///
+    /// This method is the authoritative source for DMC DMA timing:
+    /// - **Pure query**: Does NOT advance APU state (read-only)
+    /// - **Call timing**: Must be called BEFORE `run()` or `step_cycle()` for the cycle
+    /// - **State reference**: Computed from APU state as of the START of current CPU cycle
+    /// - **Return value**: The DMC sample address for the Read bus op that will occur
+    ///   after the DMA controller's halt/dummy/align phases complete
+    ///
+    /// The DMA controller is a "dumb executor" - it only runs the DMA sequence.
+    /// This method decides WHEN a DMA fetch should begin; the DMA controller
+    /// handles HOW it executes.
     fn needs_dmc_dma(&self) -> Option<u16>;
 
     /// Provide the DMC with a fetched sample byte (called after DMC DMA completes).

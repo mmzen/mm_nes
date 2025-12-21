@@ -11,9 +11,9 @@ Claude's contribution has grown to ~16% of the codebase.
 
 The experiment aims to validate that LLMs can produce production-quality emulator code under human supervision.
 
-| <img height="50%" src="docs\mmnes_screenshot8.png" width="50%" heigth="50%"/> | <img height="50%" src="docs\accuracy_coin_result2.png" width="50%"  heigth="50%"/> |
-|------------------------------------------------------------------------------|-----------------------------------------------------------------------|
-| <div align="center">_Punch-Out!_</div>                                       | <div align="center">_AccuracyCoins_</div>                             |
+| <img height="50%" src="docs\mmnes_screenshot8.png" width="50%" heigth="50%"/> | <img height="50%" src="docs\accuracy_coin_result3.png" width="50%"  heigth="50%"/> |
+|------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| <div align="center">_Punch-Out!_</div>                                       | <div align="center">_AccuracyCoins_</div>                                          |
 
 ## Key Update
 ### Division of Labor
@@ -103,9 +103,9 @@ This project is a personal work-in-progress **still under active development**.
 We track emulator correctness with **AccuracyCoin**, a single-ROM test suite for NES (CPU/PPU/APU timing, unofficial opcodes, DMA interactions, sprite 0 hit, etc.).
 _[AccuracyCoin by 100thCoin](https://github.com/100thCoin/AccuracyCoin)_
 
-**Current score:** `90 / 131`
+**Current score:** `91 / 131`
 
-![AccuracyCoin results on mm_nes](docs/accuracy_coin_result2.png)
+![AccuracyCoin results on mm_nes](docs/accuracy_coin_result3.png)
 
 ### SingleStepTests
 

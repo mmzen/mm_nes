@@ -71,22 +71,38 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Controller Code Review Round 5 (December 21, 2025)
+### Recently Completed: DMA Controller Code Review Round 6 (December 21, 2025)
 
-Based on feedback in `requirements/DMA_code_review_4.md`, implemented 5 critical fixes:
+Based on feedback in `requirements/DMA_code_review_5.md`, implemented the critical "freeze address at halt" fix:
 
 **Fixes implemented**:
-1. **Halted read address fix**: Now uses `cpu_bus_intent.address` (pending read) instead of `last_cpu_read_address` (historical). Critical for correct $2007 VRAM increment side effects during DMA.
-2. **Removed dead `cpu_cycle_odd`**: Deleted the field entirely from NesConsole and builder - was never read, only toggled pointlessly.
-3. **DMC scheduling contract documented**: Added explicit contract comment explaining APU is authoritative for timing, DMA controller is a dumb executor.
-4. **$2007 repeated read test**: Added test verifying BusWinner::CpuRepeat reads use correct halted address and go through bus.
-5. **OAM PUT verification**: Confirmed existing `test_oam_dma_writes_to_2004` test verifies correct behavior.
+1. **Halted address captured at halt transition** (CRITICAL): Changed from freezing address at DMA start to capturing it when `PendingHalt → Halt` actually succeeds. `step_cycle()` now takes `pending_read_addr` parameter. This fixes the case where DMA is triggered during CPU write cycle and halt is delayed.
+2. **Delayed halt tests**: Added 2 new tests verifying correct address is captured when halt is delayed by CPU write cycle (not the stale address from earlier).
+3. **DMC scheduling contract documented**: Added explicit contract in APU trait for `needs_dmc_dma()` - pure query, called before tick, APU is authoritative.
+4. **Duplicate rejection moved to DMA controller**: Removed `!is_dmc_dma_active()` guard from NesConsole. DMA controller now ignores duplicate requests internally. APU is fully authoritative.
 
 **Files modified**:
-- `nes_console.rs`: Halted address fix, removed cpu_cycle_odd (78% Claude, up from 75%)
-- `tests/dma_controller.rs`: Added repeated read test (24 tests total)
+- `dma_controller.rs`: New `step_cycle` signature with `pending_read_addr`, capture at halt, duplicate rejection
+- `nes_console.rs`: Pass pending_read_addr, removed guards (80% Claude, up from 78%)
+- `apu.rs`: Documented DMC scheduling contract
+- `tests/dma_controller.rs`: Added 2 delayed halt tests, updated all step_cycle calls (26 tests total)
 
-**All 312 tests pass, frontend builds successfully**
+**All 314 tests pass, frontend builds successfully**
+
+---
+
+### Session 31: DMA Controller Code Review Round 5 (December 21, 2025)
+
+Based on feedback in `requirements/DMA_code_review_4.md`:
+
+**Fixes implemented**:
+1. Halted address uses `cpu_bus_intent.address` (pending read)
+2. Removed dead `cpu_cycle_odd` field entirely
+3. DMC scheduling contract documented
+4. $2007 repeated read test added
+5. OAM PUT verification confirmed
+
+**All 312 tests pass**
 
 ---
 

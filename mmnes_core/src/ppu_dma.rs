@@ -1,13 +1,26 @@
-// Authorship: Human 45% | Claude 55%
+// Authorship: Human 35% | Claude 65%
 //! PPU DMA register ($4014) - signals OAM DMA start to the scheduler.
 //!
 //! Writing to $4014 initiates an OAM DMA transfer. In cycle-accurate mode,
 //! this module just signals the DMA start via a shared cell, and the actual
 //! byte-by-byte transfer is handled by the DmaController in the scheduler.
+//!
+//! # Timing Contract
+//!
+//! Writing $4014 sets a latch (`dma_start_page`). The scheduler samples this
+//! latch at the **start of the next master cycle**, not the current one.
+//! This means if the CPU writes $4014 on cycle N, the first DMA halt attempt
+//! begins on cycle N+1.
+//!
+//! # Double-Write Behavior
+//!
+//! If the CPU writes $4014 multiple times before the scheduler samples the
+//! latch, the last write wins. This matches hardware behavior where rapid
+//! writes would simply update the source page register.
 
 use std::cell::Cell;
 use std::rc::Rc;
-use log::info;
+use log::debug;
 use crate::bus_device::{BusDevice, BusDeviceType};
 use crate::dma::DmaType;
 use crate::dma::PpuDmaType::NESPPUDMA;
@@ -23,10 +36,10 @@ const PPU_DMA_SIZE: usize = 1;
 /// and the DmaController handles the actual transfer cycle-by-cycle.
 #[derive(Debug)]
 pub struct PpuDma {
-    /// Last written value (source page address)
-    last_transfer_addr: u8,
     /// Shared cell to signal DMA start (contains source page, None if no DMA pending)
     dma_start_page: Rc<Cell<Option<u8>>>,
+    /// Shared data bus for open bus reads
+    data_bus: Rc<Cell<u8>>,
 }
 
 impl BusDevice for PpuDma {
@@ -45,30 +58,35 @@ impl BusDevice for PpuDma {
 
 impl Memory for PpuDma {
     fn initialize(&mut self) -> Result<usize, MemoryError> {
-        info!("initializing PPU DMA (cycle-accurate mode)");
+        debug!("initializing PPU DMA (cycle-accurate mode)");
         Ok(PPU_DMA_SIZE)
     }
 
     fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        // $4014 is write-only, but reading returns the last written value
-        // (open bus behavior is handled at the bus level)
-        let value = match addr {
-            0x00 => self.last_transfer_addr,
-            _ => unreachable!()
-        };
-
-        Ok(value)
+        // $4014 is write-only on real hardware.
+        // Reading returns open bus (current data bus value), consistent with APU behavior.
+        //
+        // Address decode: Bus passes effective_addr = addr & (size - 1).
+        // With size=1, this is always 0.
+        // defensively in case bus behavior changes.
+        match addr {
+            0x00 => Ok(self.data_bus.get()),
+            _ => Ok(self.data_bus.get()), // Fallback to open bus for any unexpected address
+        }
     }
 
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
-        self.read_byte(addr)
+    fn trace_read_byte(&self, _addr: u16) -> Result<u8, MemoryError> {
+        // For tracing, also return open bus (don't expose internal state)
+        Ok(self.data_bus.get())
     }
 
     fn write_byte(&mut self, _: u16, value: u8) -> Result<(), MemoryError> {
-        // Signal DMA start to the scheduler via the shared cell
-        // The value is the high byte of the source address (page)
+        // Signal DMA start to the scheduler via the shared cell.
+        // The value is the high byte of the source address (page).
+        //
+        // Timing: This sets the latch. The scheduler will sample it at the
+        // start of the NEXT master cycle, initiating DMA on cycle N+1.
         self.dma_start_page.set(Some(value));
-        self.last_transfer_addr = value;
 
         Ok(())
     }
@@ -91,14 +109,18 @@ impl Memory for PpuDma {
 }
 
 impl PpuDma {
-    /// Create PpuDma with a shared cell for signaling DMA start.
+    /// Create PpuDma with shared cells for DMA signaling and open bus.
     ///
-    /// When write_byte is called, it sets the shared cell to Some(page),
-    /// which the scheduler's step_master_cycle() checks to start DMA.
-    pub fn new_with_dma_signal(dma_start_page: Rc<Cell<Option<u8>>>) -> Self {
+    /// # Arguments
+    /// * `dma_start_page` - Shared cell to signal DMA start (set to Some(page) on write)
+    /// * `data_bus` - Shared data bus for open bus reads
+    ///
+    /// When write_byte is called, it sets `dma_start_page` to Some(page).
+    /// The scheduler samples this at the start of the next master cycle.
+    pub fn new_with_dma_signal(dma_start_page: Rc<Cell<Option<u8>>>, data_bus: Rc<Cell<u8>>) -> Self {
         PpuDma {
-            last_transfer_addr: 0,
             dma_start_page,
+            data_bus,
         }
     }
 }
