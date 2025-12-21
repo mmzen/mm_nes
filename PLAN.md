@@ -71,6 +71,24 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
+### Recently Completed: DMA Controller Rewrite (December 21, 2025)
+
+Based on feedback in `requirements/DMA_feedback_1.md`, completely rewrote the DMA controller with proper bus arbitration:
+
+**Key changes**:
+- **Bus Arbiter Model**: Enforces exactly ONE bus operation per CPU cycle via `BusOp` enum (Read/Write/None)
+- **OAM DMA State Machine**: PendingHalt → Halt → WaitGet → Get → WaitPut → Put (phase-gated)
+- **DMC DMA State Machine**: PendingHalt → Halt → Dummy → Align → Read (correct sequence)
+- **Overlap Priority**: DMC Read > OAM Get > OAM Put > CPU repeated read
+- **No more dual bus operations**: Previous code called both `step_dmc_dma()` and `step_oam_dma()` per cycle - FIXED
+
+**Files modified**:
+- `dma_controller.rs`: Complete rewrite (100% Claude)
+- `nes_console.rs`: Updated to pass `cpu_is_writing` and use new `DmaStepResult.bus_op`
+- `tests/dma_controller.rs`: Rewritten for new interface (22 tests)
+
+**All 310 tests pass**
+
 ---
 
 ## On Hold
@@ -200,8 +218,21 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ## Session Log
 
+### Session: December 21, 2025 (session 28)
+- **DMA Feedback Round 2** - complete rewrite based on `requirements/DMA_feedback_1.md`
+- **Critical issue fixed**: Previous code called both `step_dmc_dma()` and `step_oam_dma()` per cycle - TWO bus operations per cycle (FATAL)
+- **Bus Arbiter Model**: New `BusOp` enum (Read/Write/None) - exactly ONE bus op per CPU cycle
+- **OAM DMA State Machine**: Added explicit `Halt` state between PendingHalt and WaitGet
+  - PendingHalt → Halt (when CPU not writing) → WaitGet → Get → WaitPut → Put
+  - Phase-gated: reads only on GET, writes only on PUT
+- **DMC DMA State Machine**: Correct hardware sequence
+  - PendingHalt → Halt → Dummy → Align → Read (no invented "halt count")
+- **Overlap Priority**: DMC Read wins over OAM Get when both need GET cycle
+- **Test fixes**: Tests now toggle phase after `start_oam_dma()` to simulate write-to-DMA cycle gap
+- All 310 tests pass, both core and frontend build successfully
+
 ### Session: December 21, 2025 (session 27)
-- **DMA Feedback Implementation** - addressing architectural issues from `requirements/DMA_feedback.md`
+- **DMA Feedback Implementation (Round 1)** - addressing issues from `requirements/DMA_feedback.md`
 - **Phase 1 Complete**: Eliminated interrupt_cycles batching
   - Removed `interrupt_cycles` field from `CpuCycleResult`
   - Added `InterruptType` enum and `CpuCycleState::InterruptSequence` state
@@ -226,7 +257,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
   - Fixed DMC DMA Dummy and Align cycles to perform repeated reads from halted address
   - All DMA idle/wait cycles now properly re-execute CPU's halted read (causes side effects)
   - Affects $2002 (VBlank clear), $2007 (VRAM increment), $4016/$4017 (controller clock)
-- **All 5 phases complete** - DMA feedback implementation done
+- **All 5 phases complete** - DMA feedback round 1 done
 - All 314 tests pass
 
 ### Session: December 21, 2025 (session 26)
@@ -354,6 +385,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | Dec 21, 2025 | ~73% | ~27% | DMA Phase 3: DMC DMA state machine - Core DMA complete |
 | Dec 21, 2025 | ~72% | ~28% | APU dead code removal (internal DMC DMA, Bus type param) |
 | Dec 21, 2025 | ~70% | ~30% | DMA Feedback: all 5 phases complete (interrupt, bus intent, scheduler, event-driven, repeated reads) |
+| Dec 21, 2025 | ~68% | ~32% | DMA Feedback Round 2: Complete rewrite with bus arbiter model |
 
 ---
 

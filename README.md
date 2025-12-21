@@ -15,6 +15,17 @@ The experiment aims to validate that LLMs can produce production-quality emulato
 |------------------------------------------------------------------------------|-----------------------------------------------------------------------|
 | <div align="center">_Punch-Out!_</div>                                       | <div align="center">_AccuracyCoins_</div>                             |
 
+## Key Update
+### Division of Labor
+
+Claude needs supervision and strict controls. He tends to take shortcuts when implementing requirements and fails to explicitly state the potential impacts of his decisions.
+
+ChatGPT (thinking/pro mode) now acts as the code reviewer and provides blunt, uncompromising feedback to Claude, who is responsible for implementation.
+
+The results are very encouraging. Claude was struggling with DMA timing issues, and I could not get him to fix them even after several hours of guidance. ChatGPT performed a thorough code review, identified all the problems, and clearly explained how to fix them. That review was then passed to Claude, who implemented the recommendations. Many critical issues were resolved as a result.
+
+This setup: Claude as the developer and ChatGPT as the code reviewer—shows strong promise.
+
 ## The Experiment
 
 This project explores how software engineering is evolving—how humans shift from hands-on development to **intent definition**, **problem framing**, and **quality supervision**.

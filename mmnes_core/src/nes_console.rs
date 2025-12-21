@@ -1,4 +1,4 @@
-// Authorship: Human 32% | Claude 68%
+// Authorship: Human 30% | Claude 70%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -225,21 +225,28 @@ impl NesConsole {
 
         let cpu_result = if self.dma_controller.is_active() {
             // DMA is active - step the DMA controller, CPU is halted
-            let dma_result = self.dma_controller.step_cycle()
+            let dma_result = self.dma_controller.step_cycle(cpu_is_writing)
                 .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?;
 
             // If DMC DMA completed, provide the sample to the APU
-            if let Some(sample) = dma_result.dmc_dma_complete {
+            if let Some(sample) = dma_result.dmc_sample {
                 self.apu.borrow_mut().provide_dmc_sample(sample)
                     .map_err(|e| NesConsoleError::InternalError(format!("APU error: {}", e)))?;
             }
 
+            // Derive read/write info from bus_op
+            let (memory_read, memory_write, address) = match dma_result.bus_op {
+                crate::dma_controller::BusOp::Read(addr) => (true, false, Some(addr)),
+                crate::dma_controller::BusOp::Write(addr, _) => (false, true, Some(addr)),
+                crate::dma_controller::BusOp::None => (false, false, None),
+            };
+
             CpuCycleResult {
                 halted: true,
                 instruction_complete: false,
-                memory_read: dma_result.read_occurred,
-                memory_write: dma_result.write_occurred,
-                address: dma_result.address_accessed,
+                memory_read,
+                memory_write,
+                address,
                 ..Default::default()
             }
         } else {
