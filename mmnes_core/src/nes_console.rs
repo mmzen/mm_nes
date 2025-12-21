@@ -1,4 +1,4 @@
-// Authorship: Human 28% | Claude 72%
+// Authorship: Human 25% | Claude 75%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -41,11 +41,9 @@ const WRAM_END_ADDR: u16 = 0x1FFF;
 const DEFAULT_START_ADDRESS: u16 = 0xFFFC;
 const CYCLE_START_SEQUENCE: u32 = 7;
 
-///
-/// CPU cycle counter for CPU, APU and PPU
-///
-/// All cycles are converted to CPU cycles equivalents
-///
+/// Counter for tracking elapsed clock cycles.
+/// Used for synchronizing component timing (CPU, APU, PPU).
+/// All cycles are in CPU cycle units.
 struct CyclesCounter {
     current: u32,
 }
@@ -62,23 +60,27 @@ pub struct NesConsole {
     apu: Rc<RefCell<dyn APU>>,
     controller: Rc<RefCell<dyn Controller>>,
     entry_point: Option<u16>,
+    /// Master clock counter in CPU cycle units.
+    /// Increments every cycle, including during DMA (when CPU is halted).
+    /// This is the master timing reference, not "CPU execution cycles".
     cpu_counter: CyclesCounter,
+    /// APU clock counter for tracking APU advancement
     apu_counter: CyclesCounter,
+    /// PPU clock counter for tracking PPU advancement
     ppu_counter: CyclesCounter,
     config: ConfigSpec,
     /// Shared cell for OAM DMA start signal (page to transfer from)
     dma_start_page: Rc<Cell<Option<u8>>>,
-    /// Shared cell tracking CPU odd/even cycle (for DMA alignment)
+    /// LEGACY: Shared cell tracking CPU odd/even cycle.
+    /// This is kept for backward compatibility but is no longer used for DMA decisions.
+    /// The APU phase (apu_phase field) is now the source of truth for GET/PUT timing.
+    /// DO NOT use this for timing-critical decisions in new code.
     cpu_cycle_odd: Rc<Cell<bool>>,
-    /// Total master cycles executed (for cycle-accurate mode)
+    /// Total elapsed master cycles (u64 for long-running sessions).
+    /// Same semantics as cpu_counter.current - increments every cycle including DMA.
     master_cycles: u64,
     /// DMA controller for cycle-accurate OAM DMA
     dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
-    /// Pending DMC DMA address (delayed by 2 cycles for proper timing)
-    /// When APU detects DMA is needed, we set this with countdown=1
-    /// Countdown decrements each cycle, DMA starts when countdown reaches 0
-    /// This ensures DMA happens AFTER the current CPU cycle completes its memory access
-    pending_dmc_dma: Option<(u16, u8)>,  // (address, countdown)
     /// Last address the CPU read from (for DMA repeated reads)
     /// During DMA no-bus cycles, the external bus shows repeated reads from this address,
     /// causing side effects for certain registers ($2002, $2007, $4016/$4017)
@@ -131,7 +133,6 @@ impl NesConsole {
             cpu_cycle_odd,
             master_cycles: 0,
             dma_controller,
-            pending_dmc_dma: None,
             last_cpu_read_address: None,
             apu_phase: ApuPhase::default(),
         };
@@ -185,7 +186,7 @@ impl NesConsole {
         let cpu_is_writing = cpu_bus_intent.is_write;
 
         // Query APU for DMC DMA needs from its CURRENT state (BEFORE ticking APU)
-        let dmc_dma_request = if !self.dma_controller.is_dmc_dma_active() && self.pending_dmc_dma.is_none() {
+        let dmc_dma_request = if !self.dma_controller.is_dmc_dma_active() {
             self.apu.borrow().needs_dmc_dma()
         } else {
             None
@@ -211,16 +212,6 @@ impl NesConsole {
         if let Some(dmc_address) = dmc_dma_request {
             self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
             self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, self.last_cpu_read_address);
-        }
-
-        // Handle any pending DMC DMA from previous cycle
-        if let Some((dmc_address, countdown)) = self.pending_dmc_dma.take() {
-            if countdown == 0 {
-                self.dma_controller.set_halted_read_address(self.last_cpu_read_address);
-                self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, self.last_cpu_read_address);
-            } else {
-                self.pending_dmc_dma = Some((dmc_address, countdown - 1));
-            }
         }
 
         // ============================================================
@@ -276,9 +267,9 @@ impl NesConsole {
         // Toggle APU phase (GET/PUT alternates every CPU cycle)
         self.apu_phase = self.apu_phase.toggle();
 
-        // Legacy cpu_cycle_odd for backward compatibility
-        let new_parity = !self.cpu_cycle_odd.get();
-        self.cpu_cycle_odd.set(new_parity);
+        // LEGACY: Toggle cpu_cycle_odd for backward compatibility only
+        // This is NOT used for DMA timing - apu_phase is the source of truth
+        self.cpu_cycle_odd.set(!self.cpu_cycle_odd.get());
 
         // Advance APU (AFTER the bus operation, not before)
         let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
@@ -291,7 +282,7 @@ impl NesConsole {
         }
         self.apu_counter.current = apu_cycles;
 
-        // Advance PPU (exactly 3 dots per CPU cycle for NTSC)
+        // Advance PPU by 1 CPU cycle (PPU internally converts to dots: 3 for NTSC, ~3.2 for PAL)
         let (new_ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, 1)?;
         if let Some(frame) = ppu_frame {
             out_frame = Some(frame);
@@ -388,8 +379,19 @@ impl NesConsole {
 
         // Randomize APU phase on power-on (not on reset)
         // The real NES has indeterminate initial phase
-        self.randomize_apu_phase();
+        // Pass None for non-deterministic (realism mode)
+        self.randomize_apu_phase(None);
 
+        Ok(())
+    }
+
+    /// Power on with deterministic APU phase for testing.
+    ///
+    /// # Arguments
+    /// * `phase_seed` - Seed for phase selection (seed % 2 == 0 → GET, else PUT)
+    pub fn power_on_deterministic(&mut self, phase_seed: u64) -> Result<(), NesConsoleError> {
+        self.reset_entry_point()?;
+        self.randomize_apu_phase(Some(phase_seed));
         Ok(())
     }
 
@@ -397,14 +399,20 @@ impl NesConsole {
     ///
     /// On real hardware, the initial APU phase alignment is indeterminate.
     /// This randomization ensures games don't rely on a specific initial state.
-    fn randomize_apu_phase(&mut self) {
-        // Use a simple random source - current time modulo 2
-        // In tests, this provides variation; in practice, it's effectively random
-        let random_phase = if std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() % 2 == 0)
-            .unwrap_or(false)
-        {
+    ///
+    /// # Arguments
+    /// * `seed` - If `Some(n)`, uses deterministic selection (n % 2).
+    ///            If `None`, uses wall-clock time (non-deterministic).
+    fn randomize_apu_phase(&mut self, seed: Option<u64>) {
+        let phase_value = match seed {
+            Some(s) => s % 2 == 0,
+            None => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() % 2 == 0)
+                .unwrap_or(false),
+        };
+
+        let random_phase = if phase_value {
             ApuPhase::Get
         } else {
             ApuPhase::Put
@@ -429,7 +437,6 @@ impl NesConsole {
         // cpu_cycle_odd is kept in sync with the preserved APU phase.
         self.master_cycles = 0;
         self.dma_controller.reset();
-        self.pending_dmc_dma = None;
         self.last_cpu_read_address = None;
     }
 
@@ -567,7 +574,7 @@ pub struct NesConsoleBuilder {
     config: ConfigSpec,
     /// Shared cell for OAM DMA start signal (page to transfer from)
     dma_start_page: Rc<Cell<Option<u8>>>,
-    /// Shared cell for CPU cycle parity tracking
+    /// LEGACY: Shared cell for CPU cycle parity tracking (kept for compatibility)
     cpu_cycle_odd: Rc<Cell<bool>>,
     /// Reference to PPU as DmaDevice for DmaController
     ppu_dma_device: Option<Rc<RefCell<dyn DmaDevice>>>,

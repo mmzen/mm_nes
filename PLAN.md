@@ -71,23 +71,36 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Controller Code Review Round 3 (December 21, 2025)
+### Recently Completed: DMA Controller Code Review Round 4 (December 21, 2025)
+
+Based on feedback in `requirements/DMA_code_review_3.md`, implemented 5 cleanup fixes:
+
+**Fixes implemented**:
+1. **PPU comment clarification**: Fixed misleading comment "3 dots per CPU cycle" → clarified parameter is CPU cycles, PPU internally converts to dots.
+2. **Deleted dead code**: Removed `pending_dmc_dma` field and all related handling - was never used in the new immediate DMC request flow.
+3. **Deterministic phase**: Added `power_on_deterministic(seed)` method + updated `randomize_apu_phase(seed: Option<u64>)` for testable phase initialization.
+4. **Legacy field documentation**: Added clear LEGACY comments to `cpu_cycle_odd` warning it's not used for timing and should not be relied upon.
+5. **Counter documentation**: Added documentation clarifying `cpu_counter` is master clock (increments during DMA too), not CPU execution cycles.
+
+**Files modified**:
+- `nes_console.rs`: All 5 fixes (75% Claude, up from 72%)
+
+**All 311 tests pass, frontend builds successfully**
+
+---
+
+### Session 29: DMA Controller Code Review Round 3 (December 21, 2025)
 
 Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical fixes:
 
 **Fixes implemented**:
-1. **OAM PUT writes to $2004**: Changed from writing to byte_index (0-255) to writing to PPU OAMDATA ($2004) via bus. PPU handles OAMADDR increment internally.
-2. **Explicit phase contract**: `step_cycle()` now takes `current_phase: ApuPhase` parameter. NesConsole tracks phase and passes it explicitly.
-3. **DMC alignment uses next_phase**: Fixed Dummy→Align/Read decision to check `next_phase.is_put()` instead of current phase (was backwards).
-4. **Explicit BusWinner tracking**: Added `BusWinner` enum (DmcRead, OamGet, OamPut, CpuRepeat, None). `arbitrate()` returns `(BusOp, BusWinner)`.
-5. **Removed redundant state**: Removed `bytes_transferred` field, now uses `byte_index >= 256` for completion.
+1. **OAM PUT writes to $2004**: Changed from writing to byte_index (0-255) to writing to PPU OAMDATA ($2004) via bus.
+2. **Explicit phase contract**: `step_cycle()` now takes `current_phase: ApuPhase` parameter.
+3. **DMC alignment uses next_phase**: Fixed Dummy→Align/Read decision to check `next_phase.is_put()`.
+4. **Explicit BusWinner tracking**: Added `BusWinner` enum for explicit arbitration tracking.
+5. **Removed redundant state**: Removed `bytes_transferred` field.
 
-**Files modified**:
-- `dma_controller.rs`: All 5 fixes (100% Claude)
-- `nes_console.rs`: Added `apu_phase` field, passes to `step_cycle()`, toggles locally (72% Claude)
-- `tests/dma_controller.rs`: 23 tests updated for new interface
-
-**All 311 tests pass, frontend builds successfully**
+**All 311 tests pass**
 
 ---
 
@@ -217,6 +230,24 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 21, 2025 (session 30)
+- **DMA Code Review Round 4** - addressing issues from `requirements/DMA_code_review_3.md`
+- **Phase 1**: Fixed PPU stepping comment
+  - Clarified `ppu.run(_, 1)` parameter is CPU cycles, PPU internally converts to dots (3 for NTSC, ~3.2 for PAL)
+- **Phase 2**: Deleted dead `pending_dmc_dma` code
+  - Removed unused `pending_dmc_dma: Option<(u16, u8)>` field from NesConsole
+  - DMC DMA now handled immediately via `apu.needs_dmc_dma()` → `dma_controller.request_dmc_dma()`
+- **Phase 3**: Made phase deterministic/configurable
+  - `randomize_apu_phase(seed: Option<u64>)` - uses seed for deterministic, wall-clock for None
+  - Added `power_on_deterministic(phase_seed)` for test reproducibility
+- **Phase 4**: Documented legacy `cpu_cycle_odd`
+  - Added LEGACY comments warning it's not used for timing decisions
+  - `apu_phase` field is now the source of truth
+- **Phase 5**: Clarified counter semantics
+  - Added documentation: `cpu_counter` is master clock cycles (increments during DMA)
+  - Distinguished from theoretical "CPU execution cycles"
+- All 311 tests pass, both core and frontend build successfully
 
 ### Session: December 21, 2025 (session 29)
 - **DMA Code Review Round 3** - implementing fixes from `requirements/DMA_code_review_2.md`
