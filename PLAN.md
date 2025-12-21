@@ -71,7 +71,57 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Controller Code Review Round 6 (December 21, 2025)
+### Recently Completed: DMA Code Review Round 7 - is_cpu_stalled() Fix (December 21, 2025)
+
+Based on feedback in `requirements/DMA_code_review_6.md`, fixed critical scheduler correctness bug:
+
+**Problem**: Scheduler used `is_active()` to halt CPU, but `is_active()` returns true for `PendingHalt` state. This caused the CPU to be halted immediately when DMA was requested, instead of waiting for a read cycle.
+
+**Fixes implemented**:
+1. **Added `is_cpu_stalled()` method** to DmaController - returns true only when CPU is actually stalled:
+   - OAM: `Halt`, `WaitGet`, `Get`, `WaitPut`, `Put`
+   - DMC: `Halt`, `Dummy`, `Align`, `Read`
+   - `PendingHalt` does NOT stall!
+2. **Restructured scheduler** (`step_master_cycle()`):
+   - DMA state machine advances when `is_active()` (including PendingHalt)
+   - CPU executes when `!is_cpu_stalled()` (continues during PendingHalt)
+3. **Added 2 new tests**: `test_cpu_not_stalled_during_pending_halt`, `test_cpu_not_stalled_during_dmc_pending_halt`
+
+**Files modified**:
+- `dma_controller.rs`: Added `is_cpu_stalled()` method (lines 260-274)
+- `nes_console.rs`: Restructured scheduler to use `is_cpu_stalled()`
+- `tests/dma_controller.rs`: Added 2 PendingHalt tests (28 tests total)
+
+**Acceptance criteria met**:
+- ✅ Writing $4014 on cycle N does NOT halt CPU on cycle N
+- ✅ First stall occurs on cycle N+1 (or later if CPU writing)
+- ✅ DMA overlap logic (DMC > OAM priority) unchanged
+
+**All 320 tests pass (576 total, 256 ignored), frontend builds successfully**
+
+---
+
+### Recently Completed: PPU DMA Code Review (December 21, 2025)
+
+Based on feedback in `requirements/DMA_ppu_dma_code_review_0.md`, fixed PPU DMA register behavior:
+
+**Fixes implemented**:
+1. **Address decode**: Accepts both `0x00` (offset) and `0x4014` (absolute) defensively
+2. **Open bus reads**: `read_byte()` now returns `data_bus.get()` instead of last written value (consistent with APU)
+3. **Timing contract documented**: Module docs explain N+1 timing (scheduler samples latch next cycle)
+4. **Double-write documented**: "Last write wins" behavior documented
+5. **Logging reduced**: Changed `info!` to `debug!` in `initialize()`
+
+**Files modified**:
+- `ppu_dma.rs`: Open bus via data_bus, documentation (65% Claude)
+- `nes_console.rs`: Pass data_bus through build chain
+- `tests/ppu_dma.rs`: 5 tests (3 new: open bus, double-write, N+1 timing)
+
+**All 320 tests pass, frontend builds successfully**
+
+---
+
+### Previously Completed: DMA Controller Code Review Round 6 (December 21, 2025)
 
 Based on feedback in `requirements/DMA_code_review_5.md`, implemented the critical "freeze address at halt" fix:
 
@@ -262,6 +312,38 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 21, 2025 (session 33)
+- **PPU DMA Code Review** - addressing issues from `requirements/DMA_ppu_dma_code_review_0.md`
+- **Phase 1**: Fixed address decode - accepts both 0x00 (offset) and 0x4014 (absolute) defensively
+- **Phase 2**: Implemented open bus reads - returns `data_bus.get()` instead of last written value
+  - Added `data_bus: Rc<Cell<u8>>` field to PpuDma struct
+  - Updated constructor and call chain to pass data_bus through
+- **Phase 3**: Documented timing contract in module docs (N+1: scheduler samples latch next cycle)
+- **Phase 4**: Added N+1 timing integration test `dma_begins_on_cycle_n_plus_1_not_cycle_n`
+- **Phase 5**: Documented double-write behavior ("last write wins")
+- **Phase 6**: Changed `info!` to `debug!` in `initialize()`
+- 5 PPU DMA tests total (3 new)
+- **DMA Code Review Round 7** - addressing issues from `requirements/DMA_code_review_6.md`
+- **Critical bug fixed**: CPU was being halted immediately during PendingHalt
+- **Phase 1**: Added `is_cpu_stalled()` method to DmaController
+  - Returns true only for actual stall states (Halt, WaitGet, Get, WaitPut, Put for OAM; Halt, Dummy, Align, Read for DMC)
+  - PendingHalt does NOT stall the CPU
+- **Phase 2**: Restructured scheduler to separate state machine advancement from CPU stalling
+  - DMA state machine advances when `is_active()` (including PendingHalt → Halt transitions)
+  - CPU executes when `!is_cpu_stalled()` (continues during PendingHalt)
+- **Phase 3**: Added 2 new tests for PendingHalt behavior
+- All 320 tests pass (576 total, 256 ignored), frontend builds successfully
+
+### Session: December 21, 2025 (session 32)
+- **DMA Code Review Round 6** - addressing issues from `requirements/DMA_code_review_5.md`
+- **Phase 1**: Fixed halted address capture timing (CRITICAL)
+  - Changed `step_cycle()` signature to include `pending_read_addr: Option<u16>`
+  - Address now captured at PendingHalt → Halt transition, not at DMA start
+- **Phase 2**: Added 2 delayed halt tests
+- **Phase 3**: Documented DMC scheduling contract in APU trait
+- **Phase 4**: Moved duplicate DMC request rejection to DMA controller
+- All 314 tests pass
 
 ### Session: December 21, 2025 (session 31)
 - **DMA Code Review Round 5** - addressing issues from `requirements/DMA_code_review_4.md`
@@ -489,6 +571,7 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 21, 2025 | ~72% | ~28% | APU dead code removal (internal DMC DMA, Bus type param) |
 | Dec 21, 2025 | ~70% | ~30% | DMA Feedback: all 5 phases complete (interrupt, bus intent, scheduler, event-driven, repeated reads) |
 | Dec 21, 2025 | ~68% | ~32% | DMA Feedback Round 2: Complete rewrite with bus arbiter model |
+| Dec 21, 2025 | ~67% | ~33% | PPU DMA open bus, DMA code review round 7 (is_cpu_stalled fix) |
 
 ---
 
