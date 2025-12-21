@@ -7,7 +7,7 @@ use log::{error, info, warn};
 use once_cell::sync::Lazy;
 use crate::bus::Bus;
 use crate::cpu::{BusOperation, CPU, CpuCycleResult, CpuError, Interruptible};
-use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
+use crate::cpu_debugger::CpuSnapshot;
 use crate::memory::{MemoryError};
 
 //const CLOCK_HZ: usize = 1_789_773;
@@ -522,66 +522,6 @@ impl CPU for Cpu6502 {
 
     fn dump_memory(&self) {
         self.bus.borrow().dump();
-    }
-
-    fn step_instruction(&mut self) -> Result<u32, CpuError> {
-        let byte = self.bus.borrow().read_byte(self.registers.pc)?;
-        let instruction = Cpu6502::decode_instruction(byte)?;
-        let operand = Cpu6502::fetch_operand(instruction, &self.registers, self.bus.clone())?;
-
-        let additional_cycles = self.execute_instruction(&instruction, &operand)?;
-        let cycles = instruction.cycles + additional_cycles;
-
-        if self.registers.is_pc_dirty == false {
-            self.registers.pc = self.registers.safe_pc_add(instruction.bytes as i16)?;
-        } else {
-            self.registers.is_pc_dirty = false;
-        }
-
-        self.instructions_executed += 1;
-
-        if let Some(new_i_flag) = self.pending_i_flag.take() {
-            self.registers.set_status(StatusFlag::InterruptDisable, new_i_flag);
-        }
-
-        let interrupt_cycles = self.interrupt()?;
-        self.cycles += cycles + interrupt_cycles;
-
-        Ok(cycles + interrupt_cycles)
-    }
-
-    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError> {
-        let mut cycles = start_cycle;
-        let cycles_threshold = start_cycle + credits;
-
-        loop {
-            cycles += self.step_instruction_with_cycles(start_cycle)?;
-
-            if cycles >= cycles_threshold {
-                break;
-            }
-        }
-
-        Ok(cycles)
-    }
-
-    fn run_until_breakpoint(&mut self, start_cycle: u32, credits: u32, breakpoints: Box<dyn Breakpoints>) -> Result<(u32, bool), CpuError> {
-        let mut cycles = start_cycle;
-        let cycles_threshold = start_cycle + credits;
-
-        loop {
-            if breakpoints.contains(self.registers.pc) {
-                return Ok((cycles, true));
-            } else {
-                cycles +=self.step_instruction_with_cycles(start_cycle)?;
-
-                if cycles >= cycles_threshold {
-                    break;
-                }
-            }
-        }
-
-        Ok((cycles, false))
     }
 
     fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError> {
@@ -3643,13 +3583,6 @@ impl Cpu6502 {
 
         //debug!("CPU: fetched operand: {}", operand);
         Ok(operand)
-    }
-
-    fn step_instruction_with_cycles(&mut self, start_cycle: u32) -> Result<u32, CpuError> {
-        let cycles = self.step_instruction()?;
-        self.cycles = start_cycle + cycles;
-
-        Ok(cycles)
     }
 
     fn execute_instruction(&mut self, instruction: &Instruction, operand: &Operand) -> Result<u32, CpuError> {

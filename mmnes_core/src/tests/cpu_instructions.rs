@@ -1,10 +1,25 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 80% | Claude 20%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
 use crate::cpu::{CPU, CpuError, Interruptible};
 use crate::cpu_6502::Cpu6502;
 use crate::tests::init;
+
+/// Helper to execute one instruction via cycle-accurate stepping.
+/// Loops step_cycle() until instruction_complete is true.
+/// Returns the number of cycles consumed.
+fn step_instruction_via_cycles(cpu: &mut Cpu6502) -> Result<u32, CpuError> {
+    let mut cycles = 0u32;
+    loop {
+        let result = cpu.step_cycle()?;
+        cycles += 1;
+        if result.instruction_complete {
+            break;
+        }
+    }
+    Ok(cycles)
+}
 
 // Stack page constants
 const STACK_BASE: u16 = 0x0100;
@@ -115,7 +130,7 @@ fn lda_immediate_loads_value_into_accumulator() -> Result<(), CpuError> {
     let (mut cpu, _) = create_cpu_with_program(&[0xA9, 0x42], 0x8000);
     cpu.set_pc_for_test(0x8000);
 
-    let cycles = cpu.step_instruction()?;
+    let cycles = step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x42);
     assert_eq!(cycles, 2);
@@ -132,7 +147,7 @@ fn lda_immediate_sets_zero_flag_when_loading_zero() -> Result<(), CpuError> {
     let (mut cpu, _) = create_cpu_with_program(&[0xA9, 0x00], 0x8000);
     cpu.set_pc_for_test(0x8000);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x00);
     assert!(cpu.get_zero());
@@ -148,7 +163,7 @@ fn lda_immediate_sets_negative_flag_when_loading_negative_value() -> Result<(), 
     let (mut cpu, _) = create_cpu_with_program(&[0xA9, 0x80], 0x8000);
     cpu.set_pc_for_test(0x8000);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x80);
     assert!(!cpu.get_zero());
@@ -164,7 +179,7 @@ fn ldx_immediate_loads_value_into_x_register() -> Result<(), CpuError> {
     let (mut cpu, _) = create_cpu_with_program(&[0xA2, 0x55], 0x8000);
     cpu.set_pc_for_test(0x8000);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0x55);
     assert!(!cpu.get_zero());
@@ -180,7 +195,7 @@ fn ldy_immediate_loads_value_into_y_register() -> Result<(), CpuError> {
     let (mut cpu, _) = create_cpu_with_program(&[0xA0, 0xAA], 0x8000);
     cpu.set_pc_for_test(0x8000);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_y(), 0xAA);
     assert!(!cpu.get_zero());
@@ -201,7 +216,7 @@ fn tax_transfers_accumulator_to_x() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x42);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0x42);
     assert_eq!(cpu.get_a(), 0x42); // A unchanged
@@ -217,7 +232,7 @@ fn tay_transfers_accumulator_to_y() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x33);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_y(), 0x33);
     assert_eq!(cpu.get_a(), 0x33); // A unchanged
@@ -233,7 +248,7 @@ fn txa_transfers_x_to_accumulator() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0x77);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x77);
     assert_eq!(cpu.get_x(), 0x77); // X unchanged
@@ -249,7 +264,7 @@ fn tya_transfers_y_to_accumulator() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_y(0x99);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x99);
     assert_eq!(cpu.get_y(), 0x99); // Y unchanged
@@ -265,7 +280,7 @@ fn tsx_transfers_stack_pointer_to_x() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_sp(0xFD);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0xFD);
     assert_eq!(cpu.get_sp(), 0xFD); // SP unchanged
@@ -281,7 +296,7 @@ fn txs_transfers_x_to_stack_pointer() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0xFF);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_sp(), 0xFF);
     assert_eq!(cpu.get_x(), 0xFF); // X unchanged
@@ -302,7 +317,7 @@ fn inx_increments_x_register() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0x41);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0x42);
 
@@ -317,7 +332,7 @@ fn inx_wraps_from_ff_to_00() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0xFF);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0x00);
     assert!(cpu.get_zero());
@@ -334,7 +349,7 @@ fn iny_increments_y_register() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_y(0x7F);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_y(), 0x80);
     assert!(!cpu.get_zero());
@@ -351,7 +366,7 @@ fn dex_decrements_x_register() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0x42);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0x41);
 
@@ -366,7 +381,7 @@ fn dex_wraps_from_00_to_ff() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0x00);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_x(), 0xFF);
     assert!(!cpu.get_zero());
@@ -383,7 +398,7 @@ fn dey_decrements_y_register() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_y(0x01);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_y(), 0x00);
     assert!(cpu.get_zero());
@@ -403,7 +418,7 @@ fn sec_sets_carry_flag() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_carry(false);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(cpu.get_carry());
 
@@ -418,7 +433,7 @@ fn clc_clears_carry_flag() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_carry(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(!cpu.get_carry());
 
@@ -432,7 +447,7 @@ fn sed_sets_decimal_flag() -> Result<(), CpuError> {
     let (mut cpu, _) = create_cpu_with_program(&[0xF8], 0x8000);
     cpu.set_pc_for_test(0x8000);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(cpu.get_decimal());
 
@@ -447,15 +462,15 @@ fn cld_clears_decimal_flag() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
 
     // First CLD (no-op, already clear)
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
     assert!(!cpu.get_decimal());
 
     // SED
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
     assert!(cpu.get_decimal());
 
     // CLD
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
     assert!(!cpu.get_decimal());
 
     Ok(())
@@ -469,7 +484,7 @@ fn clv_clears_overflow_flag() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_overflow(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(!cpu.get_overflow());
 
@@ -491,7 +506,7 @@ fn nop_does_nothing_but_advances_pc() -> Result<(), CpuError> {
     cpu.set_y(0x77);
     let original_status = cpu.get_status();
 
-    let cycles = cpu.step_instruction()?;
+    let cycles = step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x42);
     assert_eq!(cpu.get_x(), 0x33);
@@ -515,7 +530,7 @@ fn and_immediate_performs_bitwise_and() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0xFF);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x0F);
 
@@ -530,7 +545,7 @@ fn ora_immediate_performs_bitwise_or() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x0F);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0xFF);
 
@@ -545,7 +560,7 @@ fn eor_immediate_performs_bitwise_xor() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0xAA);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x55); // 0xAA XOR 0xFF = 0x55
 
@@ -564,7 +579,7 @@ fn asl_accumulator_shifts_left() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x40);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x80);
     assert!(!cpu.get_carry()); // bit 7 was 0
@@ -581,7 +596,7 @@ fn asl_accumulator_sets_carry_from_bit_7() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x80);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x00);
     assert!(cpu.get_carry()); // bit 7 was 1
@@ -598,7 +613,7 @@ fn lsr_accumulator_shifts_right() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x04);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x02);
     assert!(!cpu.get_carry()); // bit 0 was 0
@@ -614,7 +629,7 @@ fn lsr_accumulator_sets_carry_from_bit_0() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x01);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x00);
     assert!(cpu.get_carry()); // bit 0 was 1
@@ -632,7 +647,7 @@ fn rol_accumulator_rotates_left_through_carry() -> Result<(), CpuError> {
     cpu.set_a(0x40);
     cpu.set_carry(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x81); // 0x40 << 1 | carry = 0x81
     assert!(!cpu.get_carry()); // old bit 7 was 0
@@ -649,7 +664,7 @@ fn ror_accumulator_rotates_right_through_carry() -> Result<(), CpuError> {
     cpu.set_a(0x02);
     cpu.set_carry(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x81); // carry << 7 | 0x02 >> 1 = 0x81
     assert!(!cpu.get_carry()); // old bit 0 was 0
@@ -669,7 +684,7 @@ fn cmp_immediate_sets_zero_when_equal() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x42);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(cpu.get_zero());
     assert!(cpu.get_carry()); // A >= M
@@ -686,7 +701,7 @@ fn cmp_immediate_sets_carry_when_a_greater() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x50);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(!cpu.get_zero());
     assert!(cpu.get_carry()); // A > M
@@ -702,7 +717,7 @@ fn cmp_immediate_clears_carry_when_a_less() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_a(0x10);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(!cpu.get_zero());
     assert!(!cpu.get_carry()); // A < M
@@ -719,7 +734,7 @@ fn cpx_immediate_compares_x_register() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_x(0x42);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(cpu.get_zero());
     assert!(cpu.get_carry());
@@ -735,7 +750,7 @@ fn cpy_immediate_compares_y_register() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_y(0x42);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert!(cpu.get_zero());
     assert!(cpu.get_carry());
@@ -756,7 +771,7 @@ fn adc_immediate_adds_without_carry() -> Result<(), CpuError> {
     cpu.set_a(0x20);
     cpu.set_carry(false);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x30);
     assert!(!cpu.get_carry());
@@ -774,7 +789,7 @@ fn adc_immediate_adds_with_carry_in() -> Result<(), CpuError> {
     cpu.set_a(0x20);
     cpu.set_carry(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x31); // 0x20 + 0x10 + 1 = 0x31
     assert!(!cpu.get_carry());
@@ -791,7 +806,7 @@ fn adc_sets_carry_on_overflow() -> Result<(), CpuError> {
     cpu.set_a(0xFF);
     cpu.set_carry(false);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x00);
     assert!(cpu.get_carry()); // Wrapped around
@@ -811,7 +826,7 @@ fn adc_sets_overflow_on_signed_overflow() -> Result<(), CpuError> {
     cpu.set_a(0x7F);
     cpu.set_carry(false);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x80);
     assert!(cpu.get_overflow()); // Signed overflow
@@ -829,7 +844,7 @@ fn sbc_immediate_subtracts_with_borrow() -> Result<(), CpuError> {
     cpu.set_a(0x50);
     cpu.set_carry(true); // No borrow
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x40); // 0x50 - 0x10 = 0x40
     assert!(cpu.get_carry()); // No borrow occurred
@@ -846,7 +861,7 @@ fn sbc_immediate_subtracts_with_borrow_in() -> Result<(), CpuError> {
     cpu.set_a(0x50);
     cpu.set_carry(false); // Borrow set (carry clear)
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0x3F); // 0x50 - 0x10 - 1 = 0x3F
     assert!(cpu.get_carry());
@@ -863,7 +878,7 @@ fn sbc_clears_carry_on_borrow() -> Result<(), CpuError> {
     cpu.set_a(0x10);
     cpu.set_carry(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     assert_eq!(cpu.get_a(), 0xC0); // 0x10 - 0x50 = 0xC0 (wraps)
     assert!(!cpu.get_carry()); // Borrow occurred
@@ -957,7 +972,7 @@ fn sei_sets_interrupt_disable_after_instruction() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_interrupt_disable(false);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     // The I flag should be set after step_instruction completes
     assert!(cpu.get_interrupt_disable());
@@ -973,7 +988,7 @@ fn cli_clears_interrupt_disable_after_instruction() -> Result<(), CpuError> {
     cpu.set_pc_for_test(0x8000);
     cpu.set_interrupt_disable(true);
 
-    cpu.step_instruction()?;
+    step_instruction_via_cycles(&mut cpu)?;
 
     // The I flag should be cleared after step_instruction completes
     assert!(!cpu.get_interrupt_disable());

@@ -8,13 +8,13 @@ This file tracks the development progress of mmnes, documenting what has been do
 
 **Last updated**: December 21, 2025
 
-The emulator is functional with **true cycle-accurate emulation**. All 8 phases of cycle accuracy roadmap complete.
+The emulator is functional with **true cycle-accurate emulation**. All 8 phases of cycle accuracy roadmap complete. **Legacy instruction-level stepping has been removed** - the emulator now has a single execution path via `step_master_cycle()`.
 
 **Honest characterization**:
 - CPU: **Cycle-accurate bus operations** with **interrupt polling on each cycle**
 - PPU: **Dot-level rendering** - background shift registers, per-dot pixel output, mid-scanline register effects
 - DMA: **Cycle-by-cycle OAM DMA** + **DMC DMA mid-instruction stealing** (1-4 cycles based on CPU state)
-- Scheduler: Cycle-synchronized with DMC DMA checked every cycle
+- Scheduler: **Single-source-of-truth** via `step_master_cycle()` - no instruction-boundary fallbacks
 - Interrupts: **Latched polling** - NMI/IRQ sampled at start of each cycle, used at instruction completion
 
 **Current focus**: None (Convergence Phase on hold)
@@ -62,6 +62,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | Phase 8: APU Frame Counter | **Exact hardware cycle values for NTSC** | 4-step/5-step timing, 3 new tests |
 | Singlestep Tests Cycle-Accurate | **Tests now use step_cycle(), 100% pass rate** | SHA/SHX/SHY, JAM, TAS fixes |
 | AccuracyCoin OPEN BUS Fixes | **$4015 open bus behavior** | FAIL 7 & FAIL 9 fixed |
+| **Legacy Code Elimination** | **Removed instruction-boundary execution** | Single `step_master_cycle()` path |
 
 ---
 
@@ -165,6 +166,19 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ## Session Log
 
+### Session: December 21, 2025 (session 23)
+- **Completed legacy instruction-level execution removal** (CYCLES-ACCURATE.md requirement)
+- Phase 1-2: Removed `--instruction-level` flag, frontend always uses `step_frame_cycle_accurate()`
+- Phase 3: Gated then deleted legacy methods from CPU trait and cpu_6502.rs:
+  - `step_instruction()`, `run()`, `run_until_breakpoint()`
+- Phase 4: Converted `cpu_instructions.rs` tests to use `step_instruction_via_cycles()` helper
+- Phase 5: Removed `legacy_instruction_step` feature flag and cleaned up dead code
+  - Deleted `CyclesCounter.previous`, `CyclesCounter.debt`, `CyclesCounter.credits`
+  - Deleted `compute_ppu_credits()`, `compute_apu_credits()`, `set_credits()`
+  - Deleted legacy `catch_up_ppu_and_apu()`, `step_instruction()`, `step_frame()`, `step_frame_debug()`
+- All 279 tests pass
+- Single execution path via `step_master_cycle()` - no instruction-boundary fallbacks
+
 ### Session: December 21, 2025 (session 22)
 - Archived Convergence Phase task (put on hold)
 - Removed all debug statements from DMC DMA investigation
@@ -221,6 +235,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | Dec 20, 2025 | ~76% | ~24% | APU timing fixes (cpu_cycle_odd, DMC restart) |
 | Dec 20, 2025 | ~76% | ~24% | DMC DMA data bus fix (INC $4014 + IMPLIED DUMMY READ hangs) |
 | Dec 21, 2025 | ~76% | ~24% | Debug cleanup, Convergence Phase archived |
+| Dec 21, 2025 | ~75% | ~25% | Legacy code elimination, single execution path |
 
 ---
 

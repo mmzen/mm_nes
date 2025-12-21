@@ -1,4 +1,4 @@
-// Authorship: Human 95% | Claude 5%
+// Authorship: Human 90% | Claude 10%
 use std::path::PathBuf;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::{spawn, JoinHandle};
@@ -71,13 +71,6 @@ pub struct Args {
     )]
     rom_file: Option<PathBuf>,
 
-    #[arg(
-        short = 'i',
-        long = "instruction-level",
-        help = "use instruction-level accuracy instead of cycle-accurate mode",
-        default_value_t = false
-    )]
-    instruction_level: bool
 }
 
 
@@ -92,11 +85,9 @@ fn logger_init(debug: u8) {
     SimpleLogger::init(log_level, Config::default()).unwrap();
 }
 
-fn spawn_emulator_thread(args: &Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
-    let cycle_accurate = !args.instruction_level;
-
+fn spawn_emulator_thread(_args: &Args, frame_tx: SyncSender<NesMessage>, command_rx: Receiver<NesMessage>, debug_tx: SyncSender<NesMessage>, error_tx: SyncSender<NesMessage>) -> Result<JoinHandle<Result<(), NesConsoleError>>, NesConsoleError> {
     let handle = spawn(move || -> Result<(), NesConsoleError> {
-        let mut front = NesFrontEnd::new(frame_tx, command_rx, debug_tx, error_tx, cycle_accurate).map_err(|e| {
+        let mut front = NesFrontEnd::new(frame_tx, command_rx, debug_tx, error_tx).map_err(|e| {
             error!("fatal error while creating emulator: {}", e);
             e
         })?;

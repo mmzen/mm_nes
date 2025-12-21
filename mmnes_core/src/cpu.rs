@@ -1,10 +1,10 @@
-// Authorship: Human 75% | Claude 25%
+// Authorship: Human 70% | Claude 30%
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use crate::memory::MemoryError;
 #[cfg(test)]
 use mockall::mock;
-use crate::cpu_debugger::{Breakpoints, CpuSnapshot};
+use crate::cpu_debugger::CpuSnapshot;
 
 #[derive(Default, Debug, Clone)]
 pub enum CpuType {
@@ -59,9 +59,6 @@ pub trait CPU: Interruptible + Debug {
     #[allow(dead_code)]
     fn dump_memory(&self);
 
-    /// Execute 1 single instruction and return the number of cycles used.
-    fn step_instruction(&mut self) -> Result<u32, CpuError>;
-
     /// Execute 1 single CPU cycle. Returns information about what happened during this cycle.
     /// This enables cycle-accurate emulation where PPU/APU can be advanced between CPU cycles.
     fn step_cycle(&mut self) -> Result<CpuCycleResult, CpuError>;
@@ -86,18 +83,6 @@ pub trait CPU: Interruptible + Debug {
     /// Get the current total cycle count.
     fn get_cycles(&self) -> u32;
 
-    /// Run the CPU for at least the specified number of cycles, returning the new cycle count after execution.  
-    /// ```start_cycle```: current cycle of execution,  
-    /// ```credits```: the number of cycles available to execute instructions
-    fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError>;
-
-    /// Run the CPU for at least the specified number of cycles or until a breakpoint is met, 
-    /// returning a pair containing the new cycle count after execution and a boolean indicating whether a breakpoint was hit. 
-    /// ```start_cycle```: current cycle of execution,
-    /// ```credits```: the number of cycles available to execute instructions
-    /// ```breakpoints```: the breakpoints halting the execution
-    fn run_until_breakpoint(&mut self, start_cycle: u32, credits: u32, breakpoints: Box<dyn Breakpoints>) -> Result<(u32, bool), CpuError>;
-    
     fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError>;
     fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
     fn snapshot(&self) -> Result<Box<dyn CpuSnapshot>, CpuError>;
@@ -165,11 +150,9 @@ mock! {
         fn dump_flags(&self);
         #[allow(dead_code)]
         fn dump_memory(&self);
-        fn run(&mut self, start_cycle: u32, credits: u32) -> Result<u32, CpuError>;
         fn set_pc_immediate(&mut self, address: u16) -> Result<(), CpuError>;
         fn set_pc_indirect(&mut self, address: u16) -> Result<(), CpuError>;
         fn snapshot(&self) -> Result<Box<dyn CpuSnapshot>, CpuError>;
-        fn step_instruction(&mut self) -> Result<u32, CpuError>;
         fn step_cycle(&mut self) -> Result<CpuCycleResult, CpuError>;
         fn is_mid_instruction(&self) -> bool;
         fn get_instruction_cycle(&self) -> Option<u8>;
@@ -177,7 +160,6 @@ mock! {
         fn is_halted(&self) -> bool;
         fn halt_cycles(&mut self, cycles: u32);
         fn get_cycles(&self) -> u32;
-        fn run_until_breakpoint(&mut self, start_cycle: u32, credits: u32, breakpoints: Box<dyn Breakpoints>) -> Result<(u32, bool), CpuError>;
     }
 
     impl Interruptible for CpuStub {

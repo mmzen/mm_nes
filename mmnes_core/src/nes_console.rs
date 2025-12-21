@@ -48,27 +48,11 @@ const CYCLE_START_SEQUENCE: u32 = 7;
 ///
 struct CyclesCounter {
     current: u32,
-    previous: u32,
-    debt: u32,      // Reserved for future DMC DMA cycle stealing
-    credits: u32,   // Threshold for catch-up synchronization
 }
 
 impl CyclesCounter {
     fn new(current: u32) -> CyclesCounter {
-        CyclesCounter {
-            current,
-            previous: current,
-            debt: 0,
-            credits: 0,
-        }
-    }
-
-    fn set_credits(&mut self, credits: u32) {
-        self.credits = credits;
-    }
-
-    fn ahead(&self, other: &CyclesCounter, threshold: u32) -> bool {
-        self.current.saturating_sub(other.current) >= threshold
+        CyclesCounter { current }
     }
 }
 
@@ -105,39 +89,15 @@ impl Configurable for NesConsole {
 
         self.config = config.clone();
 
-        let ppu_credits = self.compute_ppu_credits(&config);
-        let apu_credits = self.compute_apu_credits(&config);
-
-        info!("setting ppu credits: {}", ppu_credits);
-        self.ppu_counter.set_credits(ppu_credits);
-
-        info!("setting apu credits: {}", apu_credits);
-        self.apu_counter.set_credits(apu_credits);
-
         self.ppu.borrow_mut().set_config(config.clone());
         self.apu.borrow_mut().set_config(config.clone());
-
-        // self.cpu.borrow_mut().set_config(config.clone());
     }
 }
 
 impl NesConsole {
-    
+
     pub fn config(&self) -> &ConfigSpec {
         &self.config
-    }    
-    
-    /// Compute the number of CPU cycles that correspond to one scanline (341 PPU dots).
-    /// Used as the threshold for PPU catch-up synchronization.
-    fn compute_ppu_credits(&self, config: &ConfigSpec) -> u32 {
-        let credits = (341.0 * (config.cpu_clock_hz / config.ppu_clock_hz)).floor() as u32;
-        credits.max(1)
-    }
-
-    /// Compute the number of CPU cycles for APU catch-up synchronization.
-    /// Uses the same threshold as PPU (one scanline worth of cycles).
-    fn compute_apu_credits(&self, config: &ConfigSpec) -> u32 {
-        self.compute_ppu_credits(config)
     }
 
     fn new(
@@ -188,45 +148,6 @@ impl NesConsole {
         let vec = Vec::new();
 
         Ok(vec)
-    }
-
-    /// Synchronize PPU and APU with the CPU.
-    /// This method runs PPU/APU for the exact number of cycles the CPU is ahead,
-    /// providing instruction-level synchronization for better accuracy.
-    pub fn catch_up_ppu_and_apu(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>), NesConsoleError> {
-        let mut out_frame: Option<NesFrame> = None;
-        let mut out_samples: Option<NesSamples> = None;
-
-        // Calculate how many CPU cycles the PPU needs to catch up
-        let ppu_delta = self.cpu_counter.current.saturating_sub(self.ppu_counter.current);
-        if ppu_delta > 0 {
-            let (ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, ppu_delta)?;
-            if let Some(frame) = ppu_frame {
-                out_frame = Some(frame);
-            }
-            self.ppu_counter.current = ppu_cycles;
-            self.ppu_counter.previous = self.ppu_counter.current;
-        }
-
-        // Calculate how many CPU cycles the APU needs to catch up
-        let apu_delta = self.cpu_counter.current.saturating_sub(self.apu_counter.current);
-        if apu_delta > 0 {
-            let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, apu_delta)?;
-            if let Some(sample) = apu_samples {
-                if let Some(acc) = &mut out_samples {
-                    acc.append(sample);
-                } else {
-                    out_samples = Some(sample);
-                }
-            }
-            self.apu_counter.current = apu_cycles;
-            self.apu_counter.previous = self.apu_counter.current;
-        }
-
-        // Clear any DMC stall cycles (not applied - would cause audio desync)
-        let _ = self.apu.borrow_mut().get_dmc_stall_cycles();
-
-        Ok((out_frame, out_samples))
     }
 
     /// Execute a single master cycle (one CPU cycle).
@@ -381,76 +302,58 @@ impl NesConsole {
         }
     }
 
-    ///
-    /// Execute a single CPU instruction and:  
-    ///     - catch up the PPU and APU if necessary  
-    ///     - fetch a CPU snapshot  
-    ///     - returns an optional frame, an optional sound samples buffer, and a CPU snapshot  
-    /// 
-    pub fn step_instruction(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>, Box<dyn CpuSnapshot>), NesConsoleError> {
+    /// Execute a single CPU instruction using cycle-accurate stepping.
+    /// Loops step_master_cycle() until instruction_complete is true.
+    /// Returns an optional frame, optional samples, and a CPU snapshot for debugging.
+    pub fn step_instruction_cycle_accurate(&mut self) -> Result<(Option<NesFrame>, Option<NesSamples>, Box<dyn CpuSnapshot>), NesConsoleError> {
+        let mut out_frame: Option<NesFrame> = None;
+        let mut out_samples: Option<NesSamples> = None;
 
-        self.cpu_counter.current += self.cpu.borrow_mut().step_instruction()?;
-        let snapshot = self.cpu.borrow().snapshot()?;
+        loop {
+            let (cpu_result, frame, samples) = self.step_master_cycle()?;
 
-        // Handle OAM DMA in instruction-level mode
-        // When the CPU writes to $4014, dma_start_page is set. We need to add the
-        // DMA transfer cycles (513-514) to maintain correct PPU/CPU synchronization.
-        if self.dma_start_page.get().is_some() {
-            self.dma_start_page.set(None);
-            // OAM DMA takes 513 cycles (even start) or 514 cycles (odd start)
-            // Since we don't track cycle parity in instruction-level mode, use 513
-            // which is the minimum. The actual transfer is handled by PpuDma device.
-            const OAM_DMA_CYCLES: u32 = 513;
-            self.cpu_counter.current += OAM_DMA_CYCLES;
+            // Accumulate samples
+            if let Some(s) = samples {
+                if let Some(existing) = out_samples.as_mut() {
+                    existing.append(s);
+                } else {
+                    out_samples = Some(s);
+                }
+            }
+
+            // Capture frame if one completed
+            if frame.is_some() {
+                out_frame = frame;
+            }
+
+            // Stop when instruction completes (not during DMA halts)
+            if cpu_result.instruction_complete {
+                break;
+            }
         }
 
-        let (out_frame ,out_samples) = self.catch_up_ppu_and_apu()?;
-
-        self.cpu_counter.previous = self.cpu_counter.current;
-
+        let snapshot = self.cpu.borrow().snapshot()?;
         Ok((out_frame, out_samples, snapshot))
     }
-    
-    pub fn step_frame_debug(&mut self) -> Result<(NesFrame, NesSamples, Vec<Box<dyn CpuSnapshot>>), NesConsoleError> {
-        let out_frame: Option<NesFrame>;
-        let mut out_samples: NesSamples = NesSamples::default();
+
+    /// Execute cycles until a complete frame is rendered, collecting CPU snapshots (cycle-accurate debug mode).
+    /// Uses step_instruction_cycle_accurate() for per-instruction stepping.
+    pub fn step_frame_debug_cycle_accurate(&mut self) -> Result<(NesFrame, NesSamples, Vec<Box<dyn CpuSnapshot>>), NesConsoleError> {
+        let mut out_samples = NesSamples::default();
         let mut snapshots: Vec<Box<dyn CpuSnapshot>> = Vec::new();
 
         loop {
-            let (frame, samples, snapshot) = self.step_instruction()?;
+            let (frame, samples, snapshot) = self.step_instruction_cycle_accurate()?;
             snapshots.push(snapshot);
-            
-            if let Some(s) = samples {
-                out_samples.append(s);
-            }
-
-            if frame.is_some() {
-                out_frame = frame;
-                break;
-            }
-        };
-
-        Ok((out_frame.unwrap(), out_samples, snapshots))
-    }
-
-    pub fn step_frame(&mut self) -> Result<(NesFrame, NesSamples), NesConsoleError> {
-        let out_frame: Option<NesFrame>;
-        let mut out_samples: NesSamples = NesSamples::default();
-
-        loop {
-            let (frame, samples, _snapshot) = self.step_instruction()?;
 
             if let Some(s) = samples {
                 out_samples.append(s);
             }
 
-            if frame.is_some() {
-                out_frame = frame;
-                break;
+            if let Some(frame) = frame {
+                return Ok((frame, out_samples, snapshots));
             }
-        };
-
-        Ok((out_frame.unwrap(), out_samples))
+        }
     }
 
     fn reset_entry_point(&mut self) -> Result<(), NesConsoleError> {
