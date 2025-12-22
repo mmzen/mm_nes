@@ -75,10 +75,12 @@ pub struct NesConsole {
     master_cycles: u64,
     /// DMA controller for cycle-accurate OAM DMA
     dma_controller: DmaController<dyn Bus>,
-    /// Last address the CPU read from (for DMA repeated reads)
-    /// During DMA no-bus cycles, the external bus shows repeated reads from this address,
-    /// causing side effects for certain registers ($2002, $2007, $4016/$4017)
-    last_cpu_read_address: Option<u16>,
+    /// Last address the CPU accessed on the bus (for DMA repeated reads)
+    /// During DMA no-bus cycles, the external bus shows repeated reads from this address.
+    /// This tracks ALL CPU bus operations (read OR write), not just reads.
+    /// The real NES bus shows "repeated reads" from the last accessed address when
+    /// the CPU is stalled, causing side effects for certain registers ($2002, $2007, etc.)
+    last_cpu_bus_address: Option<u16>,
     /// Current APU phase (GET/PUT alternates every CPU cycle)
     /// Phase is passed to DMA controller as a parameter for explicit contract
     apu_phase: ApuPhase,
@@ -125,7 +127,7 @@ impl NesConsole {
             dma_start_page,
             master_cycles: 0,
             dma_controller,
-            last_cpu_read_address: None,
+            last_cpu_bus_address: None,
             apu_phase: ApuPhase::default(),
         };
 
@@ -183,8 +185,8 @@ impl NesConsole {
         let pending_read_addr = if !cpu_is_writing {
             cpu_bus_intent.address
         } else {
-            // CPU is writing - fall back to last read address for repeated reads
-            self.last_cpu_read_address
+            // CPU is writing - fall back to last bus address for repeated reads
+            self.last_cpu_bus_address
         };
 
         // Query APU for DMC DMA needs from its CURRENT state (BEFORE ticking APU)
@@ -283,9 +285,11 @@ impl NesConsole {
             // CPU is bus master (DMA inactive, or DMA in PendingHalt with no bus op)
             let result = self.cpu.borrow_mut().step_cycle()?;
 
-            // Track the CPU's last read address for DMA repeated reads
-            if result.memory_read {
-                self.last_cpu_read_address = result.address;
+            // Track the CPU's last bus address for DMA repeated reads
+            // This includes BOTH reads and writes - the real NES bus shows the
+            // last accessed address during DMA stalls, regardless of access type
+            if result.memory_read || result.memory_write {
+                self.last_cpu_bus_address = result.address;
             }
 
             result
@@ -481,7 +485,7 @@ impl NesConsole {
         // (only randomized on power-on). The DmaController.reset() also preserves phase.
         self.master_cycles = 0;
         self.dma_controller.reset();
-        self.last_cpu_read_address = None;
+        self.last_cpu_bus_address = None;
     }
 
     /// Synchronize PPU internal dot position with the CPU's initial cycle offset.

@@ -1,4 +1,4 @@
-// Authorship: Human 95% | Claude 5%
+// Authorship: Human 90% | Claude 10%
 use log::LevelFilter;
 use simplelog::{Config, TestLogger};
 use std::sync::Once;
@@ -23,6 +23,7 @@ mod singlestep;
 mod standard_controller;
 mod error_display;
 mod dma_controller;
+mod axrom_cartridge;
 
 static START: Once = Once::new();
 

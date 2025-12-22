@@ -1,4 +1,4 @@
-// Authorship: Human 95% | Claude 5%
+// Authorship: Human 90% | Claude 10%
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -53,7 +53,8 @@ pub enum CartridgeType {
     NROM,
     UNROM,
     MMC1,
-    MMC2
+    MMC2,
+    AXROM,
 }
 
 impl Display for CartridgeType {
@@ -64,6 +65,7 @@ impl Display for CartridgeType {
             CartridgeType::UNROM => { write!(f, "cartridge type: UNROM") }
             CartridgeType::MMC1 => { write!(f, "cartridge type: MMC1") }
             CartridgeType::MMC2 => { write!(f, "cartridge type: MMC2") }
+            CartridgeType::AXROM => { write!(f, "cartridge type: AXROM") }
         }
     }
 }
@@ -73,6 +75,10 @@ impl PartialEq for CartridgeType {
         match (self, other) {
             (CartridgeType::NESCARTRIDGE, CartridgeType::NESCARTRIDGE) => true,
             (CartridgeType::NROM, CartridgeType::NROM) => true,
+            (CartridgeType::UNROM, CartridgeType::UNROM) => true,
+            (CartridgeType::MMC1, CartridgeType::MMC1) => true,
+            (CartridgeType::MMC2, CartridgeType::MMC2) => true,
+            (CartridgeType::AXROM, CartridgeType::AXROM) => true,
             _ => false,
         }
     }

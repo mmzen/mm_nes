@@ -18,7 +18,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 - Interrupts: **Latched polling** - NMI/IRQ sampled at start of each cycle, used at instruction completion
 - **NEW**: GET/PUT APU phase tracking for DMA alignment + CPU repeated reads during DMA idle cycles
 
-**Current focus**: DMA Implementation complete (all 7 phases) - production-grade after 14 code reviews
+**Current focus**: AxROM Mapper 7 implementation complete. Supported mappers: NROM, UxROM, MMC1, MMC2, AxROM
 
 **AccuracyCoin Score**: 90/131 (target: 120+/131)
 
@@ -70,6 +70,8 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | **CPU Code Review Round 2** | **Fixed interrupt bugs** | vector_base in InterruptSequence, NMI hijack fix, deprecated legacy methods |
 | **CPU Code Review Round 3** | **Consistent cycle numbering** | InterruptSequence cycles 2-7 only, full hijack window coverage |
 | **CPU Code Review Round 4** | **Hijack semantics + NMI contract** | interrupt_type updated on hijack, NMI line clearing documented |
+| **DMA Code Review Round 5 (INT)** | **Pure intent + commit pattern** | Eliminated Get/Put states, pure oam_wants_bus_op, last_cpu_bus_address tracking |
+| **AxROM Mapper (Mapper 7)** | **New mapper implementation** | 32KB bank switching, one-screen mirroring, CHR-RAM only, 14 tests |
 
 ---
 
@@ -79,18 +81,19 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ### DMA Code Review Status (December 22, 2025)
 
-**All 7 DMA phases complete. 11 rounds of DMA code review + 2 rounds of PPU DMA code review + 1 NES Bus code review complete.** DMA implementation is now production-grade with:
+**All 7 DMA phases complete. 12 rounds of DMA code review + 2 rounds of PPU DMA code review + 1 NES Bus code review + 4 CPU interrupt code reviews complete.** DMA implementation is now production-grade with:
 - Bus arbiter model (one bus op per cycle)
+- Pure intent + commit pattern (no state mutation before arbitration)
+- Only WaitGet/WaitPut states (eliminated fragile Get/Put states)
 - Strict debug assertions for timing drift detection
 - Clean API (no dead code, explicit phase contracts)
 - Comprehensive test coverage (31 DMA + 6 PPU DMA tests)
 - Verified data_bus consistency across all bus operations
-- Renamed `trace_read_byte` → `peek_byte` to prevent footgun misuse
-- Power-of-two size enforcement for address masking
+- last_cpu_bus_address tracking for correct repeated reads
 
 **Interrupt Flag Latency fix also complete** - IRQ/NMI now serviced at instruction boundary without extra opcode (AccuracyCoin code 1).
 
-**All 325 tests pass (582 total, 257 ignored), frontend builds successfully.**
+**All 339 tests pass (596 total, 257 ignored), frontend builds successfully.**
 
 Full DMA code review history archived in session logs below.
 
@@ -181,6 +184,44 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 22, 2025 (session 36)
+- **AxROM Mapper (Mapper 7) Implementation** - implementing `requirements/MAPPER_AxROM.md`
+  - **New file**: `mmnes_core/src/mapper/axrom_cartridge.rs` (~300 lines)
+    - 32KB PRG-ROM bank switching (bits 0-3, modulo num_banks)
+    - One-screen mirroring control via bit 4 (SingleScreenLower/Upper)
+    - CHR-RAM only (CHR-ROM rejected with error)
+    - Optional PRG-RAM at $6000-$7FFF
+  - **Modified files**:
+    - `cartridge.rs`: Added `CartridgeType::AXROM`
+    - `mapper.rs`: Added `pub mod axrom_cartridge`
+    - `ines_loader.rs`: Added match arm for `NesMapper::AxROM`
+    - `tests/mod.rs`: Added `mod axrom_cartridge`
+  - **New test file**: `tests/axrom_cartridge.rs` (14 tests)
+    - Bank selection, wrapping, masking
+    - Mirroring changes on write
+    - CHR-RAM read/write
+    - PRG-RAM when specified
+    - CHR-ROM rejection
+- All 339 tests pass (596 total, 257 ignored), frontend builds successfully
+
+### Session: December 22, 2025 (session 35)
+- **DMA Code Review Round 5 (INT)** - addressing issues from `requirements/INT_cpu_code_review_5.md`
+  - Despite the filename, this was a DMA controller review, not CPU
+  - **Fix #1**: Eliminated Get/Put states from OAM DMA state machine
+    - Now only `WaitGet` and `WaitPut` states exist
+    - Phase correctness is structurally guaranteed (WaitGet only emits read on GET, WaitPut only emits write on PUT)
+  - **Fix #2**: Made `oam_wants_bus_op()` pure (no state mutation)
+    - Function now returns intent without modifying any state
+    - Eliminates need for rollback when arbitration doesn't select OAM
+  - **Fix #3**: Added `oam_commit()` function for post-arbitration state transitions
+    - State transitions happen ONLY after bus operation succeeds
+    - Clean separation: intent (oam_wants_bus_op) vs. commit (oam_commit)
+  - **Fix #4**: Changed `last_cpu_read_address` to `last_cpu_bus_address` in NesConsole
+    - Now tracks ALL CPU bus operations (reads AND writes)
+    - Ensures correct address for repeated reads when CPU is stalled during writes
+  - **Phase correctness assertions**: Already present in dma_controller.rs (lines 387-391, 446-462)
+- All 326 tests pass (582 total, 256 ignored), frontend builds successfully
 
 ### Session: December 22, 2025 (session 34)
 - **README.md update** - updated to reflect current achievements
@@ -560,6 +601,8 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 10 (debug assertions, ppu field removal, docs) |
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 11 (stricter assertions, dead code removal, logging) |
 | Dec 22, 2025 | ~67% | ~33% | PPU DMA code review round 2 (data_bus audit, regression test, read_byte simplify) |
+| Dec 22, 2025 | ~67% | ~33% | DMA code review round 5 (INT) - pure intent+commit, last_cpu_bus_address |
+| Dec 22, 2025 | ~66% | ~34% | AxROM Mapper 7 implementation (~300 lines new code, 14 tests) |
 
 ---
 

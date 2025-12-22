@@ -11,9 +11,9 @@ Claude's contribution has grown to **~33%** of the codebase.
 
 The experiment aims to validate that LLMs can produce production-quality emulator code under human supervision.
 
-| <img height="50%" src="docs\mmnes_screenshot8.png" width="50%" heigth="50%"/> | <img height="50%" src="docs\accuracy_coin_result3.png" width="50%"  heigth="50%"/> |
-|------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
-| <div align="center">_Punch-Out!_</div>                                       | <div align="center">_AccuracyCoins_</div>                                          |
+| <img height="50%" src="docs\mmnes_screenshot9.png" width="50%" heigth="50%"/> | <img height="50%" src="docs\accuracy_coin_result3.png" width="50%"  heigth="50%"/> |
+|-------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| <div align="center">_Battletoad_</div>                                        | <div align="center">_AccuracyCoins_</div>                                          |
 
 ## Key Update
 ### True Cycle-Accurate Emulation Complete

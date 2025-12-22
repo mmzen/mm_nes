@@ -108,6 +108,12 @@ pub enum BusWinner {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 /// OAM DMA operation states.
 ///
+/// ## Design: Pure Intent + Commit Pattern
+///
+/// The state machine uses only "Wait" states. State transitions happen AFTER
+/// bus operations succeed, not when determining intent. This eliminates the
+/// need for rollback when arbitration steals a cycle.
+///
 /// ## Cycle Structure (513 or 514 cycles total)
 ///
 /// 1. **Halt cycle** (1 cycle): `Halt` state, no bus operation
@@ -116,10 +122,15 @@ pub enum BusWinner {
 ///    - If $4014 write occurs when next phase is GET: 513 cycles (no alignment needed)
 ///    - If $4014 write occurs when next phase is PUT: 514 cycles (1 alignment cycle)
 /// 3. **Transfer cycles** (512 cycles): 256 GET/PUT pairs
-///    - `Get`: Read from source address on GET phase
-///    - `WaitPut`: Wait for PUT phase (within same byte transfer)
-///    - `Put`: Write to $2004 on PUT phase
-///    - `WaitGet`: Wait for GET phase (after PUT, before next byte's GET)
+///    - `WaitGet`: Ready to read on next GET phase
+///    - `WaitPut`: Ready to write on next PUT phase (has data from previous read)
+///
+/// ## Phase Correctness
+///
+/// Phase correctness is structurally guaranteed:
+/// - `WaitGet` only emits Read intent when phase is GET
+/// - `WaitPut` only emits Write intent when phase is PUT
+/// - State transitions only occur after successful bus operation
 pub enum OamDmaOp {
     /// Not active
     #[default]
@@ -128,14 +139,10 @@ pub enum OamDmaOp {
     PendingHalt,
     /// Halt succeeded - this is the mandatory halt cycle (1 cycle, no bus op)
     Halt,
-    /// Waiting for GET phase to read - serves as alignment cycle when needed
+    /// Ready to read from source address when GET phase arrives
     WaitGet,
-    /// Performing GET read from source
-    Get,
-    /// Waiting for PUT phase to write
+    /// Ready to write to $2004 when PUT phase arrives (holds read value)
     WaitPut,
-    /// Performing PUT write to OAM via $2004
-    Put,
 }
 
 /// State of OAM DMA transfer
@@ -265,7 +272,7 @@ impl<B: Bus + ?Sized> DmaController<B> {
     }
 
     pub fn is_oam_dma_on_read(&self) -> bool {
-        matches!(self.oam.op, OamDmaOp::WaitGet | OamDmaOp::Get)
+        matches!(self.oam.op, OamDmaOp::WaitGet)
     }
 
     /// Returns true only when CPU is actually stalled by DMA.
@@ -285,8 +292,7 @@ impl<B: Bus + ?Sized> DmaController<B> {
     /// This is needed for DMC PendingHalt logic: DMC can proceed with halt
     /// if CPU is already stalled by OAM, even if CPU's bus intent is "writing".
     pub fn is_cpu_stalled_by_oam(&self) -> bool {
-        matches!(self.oam.op,
-            OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::Get | OamDmaOp::WaitPut | OamDmaOp::Put)
+        matches!(self.oam.op, OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::WaitPut)
     }
 
     /// Returns true if CPU is stalled specifically by DMC DMA.
@@ -459,6 +465,9 @@ impl<B: Bus + ?Sized> DmaController<B> {
         // Step 4: Execute the bus operation based on winner
         // ====================================================================
 
+        // Track read value for OAM commit
+        let mut oam_read_value: Option<u8> = None;
+
         match winner {
             BusWinner::DmcRead => {
                 if let BusOp::Read(addr) = bus_op {
@@ -472,8 +481,7 @@ impl<B: Bus + ?Sized> DmaController<B> {
             BusWinner::OamGet => {
                 if let BusOp::Read(addr) = bus_op {
                     let value = self.bus.borrow().read_byte(addr)?;
-                    self.oam.read_value = value;
-                    self.oam.op = OamDmaOp::WaitPut;
+                    oam_read_value = Some(value);
                 }
             }
 
@@ -481,16 +489,6 @@ impl<B: Bus + ?Sized> DmaController<B> {
                 if let BusOp::Write(addr, data) = bus_op {
                     // Write to $2004 via the bus - PPU handles OAMADDR increment
                     self.bus.borrow_mut().write_byte(addr, data)?;
-                    self.oam.byte_index += 1;
-
-                    if self.oam.byte_index >= 256 {
-                        // OAM DMA complete
-                        self.oam.op = OamDmaOp::Idle;
-                        result.oam_dma_complete = true;
-                    } else {
-                        // More bytes to transfer - go back to waiting for GET
-                        self.oam.op = OamDmaOp::WaitGet;
-                    }
                 }
             }
 
@@ -505,6 +503,14 @@ impl<B: Bus + ?Sized> DmaController<B> {
                 // No bus operation this cycle
             }
         }
+
+        // ====================================================================
+        // Step 4b: Commit OAM state transitions (after bus op succeeded)
+        // ====================================================================
+
+        // State transitions happen ONLY after bus operation succeeds
+        // This eliminates rollback - if OAM didn't win, state stays unchanged
+        result.oam_dma_complete = self.oam_commit(winner, oam_read_value);
 
         // ====================================================================
         // Step 5: Advance no-bus phases for both DMAs
@@ -529,47 +535,75 @@ impl<B: Bus + ?Sized> DmaController<B> {
         Ok(result)
     }
 
-    /// Determine what OAM DMA wants to do this cycle (may not get it due to arbitration)
-    fn oam_wants_bus_op(&mut self, current_phase: ApuPhase) -> BusOp {
+    /// Determine what OAM DMA wants to do this cycle (pure - no state mutation).
+    ///
+    /// This function returns an intent without modifying state. State transitions
+    /// happen in `oam_commit()` after arbitration confirms the operation succeeded.
+    ///
+    /// Phase correctness is structurally guaranteed:
+    /// - `WaitGet` only returns Read when phase is GET
+    /// - `WaitPut` only returns Write when phase is PUT
+    fn oam_wants_bus_op(&self, current_phase: ApuPhase) -> BusOp {
         match self.oam.op {
-            OamDmaOp::Idle | OamDmaOp::PendingHalt => BusOp::None,
-
-            // Halt cycle - no bus op, just consuming the halt cycle
-            OamDmaOp::Halt => BusOp::None,
+            OamDmaOp::Idle | OamDmaOp::PendingHalt | OamDmaOp::Halt => BusOp::None,
 
             OamDmaOp::WaitGet => {
                 if current_phase.is_get() {
-                    // Phase matches - transition to Get and request read
-                    self.oam.op = OamDmaOp::Get;
+                    // Phase matches - request read from source
                     let addr = ((self.oam.page as u16) << 8) | self.oam.byte_index;
                     BusOp::Read(addr)
                 } else {
-                    // Wrong phase - stay waiting
+                    // Wrong phase - no bus op this cycle
                     BusOp::None
                 }
-            }
-
-            OamDmaOp::Get => {
-                // Already in Get state - return the read we want
-                let addr = ((self.oam.page as u16) << 8) | self.oam.byte_index;
-                BusOp::Read(addr)
             }
 
             OamDmaOp::WaitPut => {
                 if current_phase.is_put() {
-                    // Phase matches - transition to Put and request write to $2004
-                    self.oam.op = OamDmaOp::Put;
+                    // Phase matches - request write to $2004
                     BusOp::Write(PPU_OAMDATA, self.oam.read_value)
                 } else {
-                    // Wrong phase - stay waiting
+                    // Wrong phase - no bus op this cycle
                     BusOp::None
                 }
             }
+        }
+    }
 
-            OamDmaOp::Put => {
-                // Already in Put state - return the write we want (to $2004)
-                BusOp::Write(PPU_OAMDATA, self.oam.read_value)
+    /// Commit OAM DMA state transition after arbitration confirms the operation.
+    ///
+    /// This is called after the bus operation succeeds. State transitions only
+    /// happen here, ensuring no rollback is ever needed.
+    ///
+    /// # Arguments
+    /// * `winner` - Who won the bus arbitration
+    /// * `read_value` - Value read from bus (only used for OamGet)
+    fn oam_commit(&mut self, winner: BusWinner, read_value: Option<u8>) -> bool {
+        match (winner, self.oam.op) {
+            (BusWinner::OamGet, OamDmaOp::WaitGet) => {
+                // Read succeeded - store value and transition to WaitPut
+                self.oam.read_value = read_value.unwrap_or(0);
+                self.oam.op = OamDmaOp::WaitPut;
+                false // not complete
             }
+
+            (BusWinner::OamPut, OamDmaOp::WaitPut) => {
+                // Write succeeded - advance byte index
+                self.oam.byte_index += 1;
+
+                if self.oam.byte_index >= 256 {
+                    // OAM DMA complete
+                    self.oam.op = OamDmaOp::Idle;
+                    true // complete!
+                } else {
+                    // More bytes to transfer
+                    self.oam.op = OamDmaOp::WaitGet;
+                    false // not complete
+                }
+            }
+
+            // OAM didn't win or wrong state - no state change needed
+            _ => false,
         }
     }
 
@@ -592,18 +626,17 @@ impl<B: Bus + ?Sized> DmaController<B> {
         }
     }
 
-    /// Arbitrate between OAM and DMC DMA requests.
+    /// Arbitrate between OAM and DMC DMA requests (pure - no state mutation).
+    ///
     /// Returns (BusOp, BusWinner) - explicit tracking of who won.
     /// Priority: DMC Read > OAM Get > OAM Put > CPU repeated read
-    fn arbitrate(&mut self, oam_wants: BusOp, dmc_wants: BusOp) -> (BusOp, BusWinner) {
+    ///
+    /// Note: This function no longer mutates state. OAM state transitions
+    /// are handled by `oam_commit()` after the bus operation executes.
+    fn arbitrate(&self, oam_wants: BusOp, dmc_wants: BusOp) -> (BusOp, BusWinner) {
         // DMC Read has highest priority
         if let BusOp::Read(_) = dmc_wants {
-            // DMC wins - if OAM was trying to Get, it stays in Get/WaitGet
-            if matches!(self.oam.op, OamDmaOp::Get) {
-                // OAM was in Get state but DMC stole the cycle
-                // Transition back to WaitGet to try again next GET cycle
-                self.oam.op = OamDmaOp::WaitGet;
-            }
+            // DMC wins - OAM will simply not get its turn, no rollback needed
             return (dmc_wants, BusWinner::DmcRead);
         }
 

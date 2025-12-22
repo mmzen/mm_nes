@@ -1,4 +1,4 @@
-// Authorship: Human 100% | Claude 0%
+// Authorship: Human 95% | Claude 5%
 use std::cell::RefCell;
 use std::cmp::PartialEq;
 use std::fmt::{Debug, Display, Formatter};
@@ -11,6 +11,7 @@ use crate::cartridge::Cartridge;
 use crate::loader::{Loader, LoaderError};
 use crate::mapper::NesMapper;
 use crate::memory_ciram::PpuNameTableMirroring;
+use crate::mapper::axrom_cartridge::AxromCartridge;
 use crate::mapper::mmc1_cartridge::Mmc1Cartridge;
 use crate::mapper::mmc2_cartridge::Mmc2Cartridge;
 use crate::mapper::nrom_cartridge::NromCartridge;
@@ -65,6 +66,7 @@ impl Loader for INesLoader {
             NesMapper::UxROM => Rc::new(RefCell::new(UnromCartridge::from_ines(self.file, self.header)?)),
             NesMapper::MMC1 => Rc::new(RefCell::new(Mmc1Cartridge::from_ines(self.file, self.header)?)),
             NesMapper::MMC2 => Rc::new(RefCell::new(Mmc2Cartridge::from_ines(self.file, self.header)?)),
+            NesMapper::AxROM => Rc::new(RefCell::new(AxromCartridge::from_ines(self.file, self.header)?)),
             _ => Err(LoaderError::UnsupportedMapper(self.header.mapper.name().to_string()))?
         };
 
