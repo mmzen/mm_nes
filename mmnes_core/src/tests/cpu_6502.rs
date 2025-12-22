@@ -1,4 +1,4 @@
-// Authorship: Human 50% | Claude 50%
+// Authorship: Human 45% | Claude 55%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
@@ -579,7 +579,7 @@ fn step_cycle_executes_branch_taken_and_continues() -> Result<(), CpuError> {
 // ============================================================================
 
 /// Test that NMI signaled before the final cycle's poll is latched and serviced.
-/// NMI should be serviced after the instruction completes.
+/// NMI should be serviced at the next instruction boundary (FetchOpcode).
 #[test]
 fn nmi_signaled_before_final_cycle_is_serviced() -> Result<(), CpuError> {
     use crate::tests::singlestep::tracing_bus::TracingBus;
@@ -590,7 +590,7 @@ fn nmi_signaled_before_final_cycle_is_serviced() -> Result<(), CpuError> {
     // NOP (2 cycles) followed by another NOP
     bus.load_memory(&[
         (0x8000, 0xEA), // NOP
-        (0x8001, 0xEA), // NOP
+        (0x8001, 0xEA), // NOP (will be interrupted)
         // NMI vector points to 0x9000
         (0xFFFA, 0x00),
         (0xFFFB, 0x90),
@@ -619,10 +619,24 @@ fn nmi_signaled_before_final_cycle_is_serviced() -> Result<(), CpuError> {
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete, "NOP should complete on cycle 2");
 
-    // After instruction completion, CPU transitions to InterruptSequence state
-    // Execute the 7-cycle interrupt sequence
-    assert!(cpu.is_mid_instruction(), "CPU should be in interrupt sequence");
-    run_interrupt_sequence(&mut cpu)?;
+    // After instruction completion, CPU transitions to FetchOpcode with pending_interrupt set.
+    // CPU is NOT yet in InterruptSequence - that happens when FetchOpcode runs.
+    assert!(!cpu.is_mid_instruction(), "CPU should be in FetchOpcode, not mid-instruction");
+
+    // Next step_cycle: FetchOpcode detects pending_interrupt, does interrupt cycle 1
+    let result = cpu.step_cycle()?;
+    assert!(!result.instruction_complete, "Interrupt cycle 1 should not complete");
+    assert_eq!(result.address, Some(0x8001), "Should do dummy read at PC");
+
+    // Now CPU is in InterruptSequence, execute remaining 6 cycles (2-7)
+    for i in 2..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(result.instruction_complete, "Interrupt should complete on cycle 7");
+        } else {
+            assert!(!result.instruction_complete, "Interrupt cycle {} should not complete", i);
+        }
+    }
 
     // PC should now be at NMI vector (0x9000)
     let snapshot = cpu.snapshot()?;
@@ -865,9 +879,36 @@ fn nmi_latched_state_persists_even_if_cleared_before_completion() -> Result<(), 
     // Cycle 3: Read from ZP, complete instruction
     let result = cpu.step_cycle()?;
     assert!(result.instruction_complete);
-    // NMI should be serviced because it was latched on cycle 2
-    assert!(cpu.is_mid_instruction(), "NMI should trigger");
-    run_interrupt_sequence(&mut cpu)?;
+    // After instruction completion, CPU transitions to FetchOpcode with pending_interrupt set.
+    // CPU is NOT yet in InterruptSequence - that happens when FetchOpcode runs.
+    assert!(
+        !cpu.is_mid_instruction(),
+        "CPU should be in FetchOpcode, not mid-instruction"
+    );
+
+    // Next step_cycle: FetchOpcode detects pending_interrupt (NMI), does interrupt cycle 1
+    let result = cpu.step_cycle()?;
+    assert!(
+        !result.instruction_complete,
+        "Interrupt cycle 1 should not complete"
+    );
+
+    // Now CPU is in InterruptSequence, execute remaining 6 cycles (2-7)
+    for i in 2..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(
+                result.instruction_complete,
+                "Interrupt sequence should complete on cycle 7"
+            );
+        } else {
+            assert!(
+                !result.instruction_complete,
+                "Interrupt sequence cycle {} should not be complete",
+                i
+            );
+        }
+    }
 
     let snapshot = cpu.snapshot()?;
     assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");

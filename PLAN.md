@@ -66,6 +66,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | **Legacy Code Elimination** | **Removed instruction-boundary execution** | Single `step_master_cycle()` path |
 | **DMA Implementation (All 7 Phases)** | **Production-grade DMA** | Bus arbiter, phase tracking, 31 tests, 14 code reviews |
 | **Interrupt Flag Latency Fix** | **IRQ/NMI at instruction boundary** | AccuracyCoin code 1 fix, 2 new tests |
+| **CPU Code Review Round 1** | **Unified interrupt entry path** | FetchOpcode is single canonical cycle-1 entry point |
 
 ---
 
@@ -294,7 +295,27 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
     - `irq_latched_while_i_flag_set_triggers_after_cli` - verifies I flag semantics
   - **Phase 4**: Updated 3 existing tests to match correct behavior
     - Tests now expect interrupt at boundary, not after instruction completion
-- All 325 tests pass (582 total, 257 ignored), frontend builds successfully
+- **CPU Code Review Round 1** - addressing issues from `requirements/INT_cpu_code_review_1.md`
+  - **Issue identified**: Two different interrupt entry paths existed
+    - From FetchOpcode: cycle 1 done inline → InterruptSequence { cycle: 2 }
+    - From Executing: → InterruptSequence { cycle: 1 } (WRONG - created duplicate cycle 1)
+  - **Fix #1**: Added `pending_interrupt: Option<InterruptType>` field to Cpu6502
+    - Records which interrupt to service at next FetchOpcode boundary
+    - Prevents losing interrupt decision when transitioning through FetchOpcode
+  - **Fix #2**: Changed Executing completion path
+    - When instruction completes with interrupt pending, set `pending_interrupt` and go to FetchOpcode
+    - No longer jumps directly to InterruptSequence { cycle: 1 }
+  - **Fix #3**: Updated FetchOpcode to check `pending_interrupt` first
+    - Uses `pending_interrupt.take().or_else(...)` pattern
+    - If set, service that interrupt (don't re-decide)
+    - If not set, poll/latch and decide normally
+  - **Fix #4**: Clear latches when committing to service interrupt
+    - Both `latched_nmi` and `latched_irq` cleared when entering interrupt sequence
+  - **Test fixes**: Updated 2 tests to match unified interrupt entry model
+    - `nmi_signaled_before_final_cycle_is_serviced` - expects FetchOpcode after instruction
+    - `nmi_latched_state_persists_even_if_cleared_before_completion` - same fix
+  - **Result**: Single canonical interrupt entry point (FetchOpcode does cycle 1, then InterruptSequence { cycle: 2 })
+- All 326 tests pass (582 total, 256 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)
 - **PPU DMA Code Review** - addressing issues from `requirements/DMA_ppu_dma_code_review_0.md`

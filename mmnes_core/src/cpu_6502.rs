@@ -399,6 +399,9 @@ enum CpuCycleState {
         interrupt_type: InterruptType,
         /// Current cycle within interrupt sequence (1-7)
         cycle: u8,
+        /// Base address of interrupt vector ($FFFA for NMI, $FFFE for IRQ)
+        /// This is set when entering the sequence and updated if NMI hijacks IRQ
+        vector_base: u16,
         /// Intermediate state for vector address
         state: InstructionState,
     },
@@ -433,10 +436,10 @@ pub struct Cpu6502 {
     /// IRQ state latched on the penultimate cycle of the current instruction.
     /// This is what gets checked after instruction completion.
     latched_irq: bool,
-    /// True if the previous NMI line state was low (for edge detection during polling).
-    /// This tracks the NMI line state as seen during the last poll, separate from nmi_line_low
-    /// which tracks the actual external line state.
-    prev_nmi_line_low: bool,
+    /// Interrupt type to service at the next FetchOpcode boundary.
+    /// Set when an instruction completes with an interrupt pending.
+    /// This ensures interrupt cycle 1 always happens in FetchOpcode.
+    pending_interrupt: Option<InterruptType>,
     /// Pending RMW result value for cycle-accurate mode.
     /// When set, rmw_overwrite skips bus writes and stores the result here instead.
     /// The cycle-accurate code then retrieves this value and does the write itself.
@@ -500,10 +503,10 @@ impl CPU for Cpu6502 {
         self.nmi_line_low = false;
         self.pending_nmi = false;
         self.pending_i_flag = None;
+        self.pending_interrupt = None;
         self.cycle_state = CpuCycleState::FetchOpcode;
         self.latched_nmi = false;
         self.latched_irq = false;
-        self.prev_nmi_line_low = false;
         self.set_pc_indirect(RESET_VECTOR)?;
 
         Ok(())
@@ -597,23 +600,34 @@ impl CPU for Cpu6502 {
 
         match &self.cycle_state {
             CpuCycleState::FetchOpcode => {
-                // Clear latched interrupt state for the new instruction
-                self.latched_nmi = false;
-                self.latched_irq = false;
-
-                // Poll interrupts at the START of the cycle (before opcode fetch)
-                // This samples the current NMI/IRQ state
-                self.poll_interrupts();
+                // Determine if an interrupt should be serviced.
+                // Priority: pending_interrupt (set by previous instruction) > poll/latch
+                //
+                // If pending_interrupt is set, we already decided to service an interrupt
+                // at the end of the previous instruction. Don't re-poll.
+                //
+                // If pending_interrupt is None, poll and check latch as usual.
+                let int_type = self.pending_interrupt.take().or_else(|| {
+                    // Clear latched state and poll fresh
+                    self.latched_nmi = false;
+                    self.latched_irq = false;
+                    self.poll_interrupts();
+                    self.check_interrupt_from_latch()
+                });
 
                 // CRITICAL: Check for pending interrupt BEFORE fetching opcode
                 // If an interrupt is pending at this instruction boundary, we must
                 // NOT execute the next opcode. Instead, enter the interrupt sequence
                 // immediately. The first cycle performs a dummy read at PC.
-                if let Some(int_type) = self.check_interrupt_from_latch() {
+                if let Some(int_type) = int_type {
                     // Clear pending_nmi if we're servicing NMI
                     if int_type == InterruptType::Nmi {
                         self.pending_nmi = false;
                     }
+
+                    // Clear latches now that we're committing to service
+                    self.latched_nmi = false;
+                    self.latched_irq = false;
 
                     // Perform dummy read at current PC (interrupt cycle 1)
                     let pc = self.registers.pc;
@@ -622,9 +636,14 @@ impl CPU for Cpu6502 {
 
                     // Transition to interrupt sequence - cycle 2 is next
                     // (we just completed cycle 1's dummy read above)
+                    let vector_base = match int_type {
+                        InterruptType::Nmi => NMI_VECTOR,
+                        InterruptType::Irq => IRQ_VECTOR,
+                    };
                     self.cycle_state = CpuCycleState::InterruptSequence {
                         interrupt_type: int_type,
                         cycle: 2,
+                        vector_base,
                         state: InstructionState::default(),
                     };
 
@@ -683,21 +702,18 @@ impl CPU for Cpu6502 {
                 // Check if instruction is complete
                 if result.instruction_complete {
                     // Check for interrupts using the LATCHED state from the final cycle's poll
-                    // Instead of batching cycles, transition to InterruptSequence state
+                    // If an interrupt is pending, record it and go to FetchOpcode.
+                    // FetchOpcode will then perform interrupt cycle 1 (dummy read at PC).
+                    // This ensures there's ONE canonical place for interrupt cycle 1.
                     if let Some(int_type) = self.check_interrupt_from_latch() {
-                        // Clear pending_nmi if we're servicing NMI
-                        if int_type == InterruptType::Nmi {
-                            self.pending_nmi = false;
-                        }
-                        // Transition to interrupt sequence state
-                        self.cycle_state = CpuCycleState::InterruptSequence {
-                            interrupt_type: int_type,
-                            cycle: 1,
-                            state: InstructionState::default(),
-                        };
-                    } else {
-                        self.cycle_state = CpuCycleState::FetchOpcode;
+                        // Record which interrupt to service at the next FetchOpcode boundary
+                        self.pending_interrupt = Some(int_type);
+                        // Clear latches immediately to prevent stale state persisting
+                        self.latched_nmi = false;
+                        self.latched_irq = false;
                     }
+                    // Always transition to FetchOpcode - it handles interrupt entry
+                    self.cycle_state = CpuCycleState::FetchOpcode;
                 } else {
                     // Continue to next cycle
                     self.cycle_state = CpuCycleState::Executing {
@@ -712,19 +728,27 @@ impl CPU for Cpu6502 {
                 Ok(result)
             }
 
-            CpuCycleState::InterruptSequence { interrupt_type, cycle, state } => {
+            CpuCycleState::InterruptSequence { interrupt_type, cycle, vector_base, state } => {
                 let interrupt_type = *interrupt_type;
                 let cycle = *cycle;
+                let mut vector_base = *vector_base;
                 let mut state = state.clone();
 
                 // Poll interrupts at the START of each cycle
                 // NMI can hijack an IRQ sequence if it arrives during cycles 1-4
                 self.poll_interrupts();
 
+                // Check for NMI hijack during cycles 2-4 (cycle 1 is done in FetchOpcode)
+                // If NMI arrives while processing IRQ, it hijacks the vector
+                if interrupt_type == InterruptType::Irq && cycle <= 4 && self.pending_nmi {
+                    self.pending_nmi = false;
+                    vector_base = NMI_VECTOR;
+                }
+
                 self.cycles += 1;
 
                 // Execute one cycle of the interrupt sequence
-                let result = self.execute_interrupt_cycle(interrupt_type, cycle, &mut state)?;
+                let result = self.execute_interrupt_cycle(interrupt_type, cycle, vector_base, &mut state)?;
 
                 if result.instruction_complete {
                     // Interrupt sequence complete, go to next instruction
@@ -734,6 +758,7 @@ impl CPU for Cpu6502 {
                     self.cycle_state = CpuCycleState::InterruptSequence {
                         interrupt_type,
                         cycle: cycle + 1,
+                        vector_base,
                         state,
                     };
                 }
@@ -808,8 +833,8 @@ impl Cpu6502 {
                 self.compute_executing_bus_intent(*opcode, instruction, *cycle, state)
             }
 
-            CpuCycleState::InterruptSequence { cycle, .. } => {
-                // Interrupt sequence: cycles 1-2 read, 3-5 write, 6-7 read
+            CpuCycleState::InterruptSequence { cycle, vector_base, .. } => {
+                // Interrupt sequence: cycles 1-2 read PC, 3-5 write stack, 6-7 read vector
                 match cycle {
                     1 | 2 => CpuBusIntent {
                         op: BusOperation::Read,
@@ -821,9 +846,14 @@ impl Cpu6502 {
                         address: Some(STACK_BASE_ADDRESS + self.registers.sp as u16),
                         is_write: true,
                     },
-                    6 | 7 => CpuBusIntent {
+                    6 => CpuBusIntent {
                         op: BusOperation::Read,
-                        address: None, // Vector address depends on interrupt type
+                        address: Some(*vector_base),
+                        is_write: false,
+                    },
+                    7 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(*vector_base + 1),
                         is_write: false,
                     },
                     _ => CpuBusIntent::default(),
@@ -3432,13 +3462,19 @@ impl Cpu6502 {
             cycle_state: CpuCycleState::FetchOpcode,
             latched_nmi: false,
             latched_irq: false,
-            prev_nmi_line_low: false,
+            pending_interrupt: None,
             rmw_pending_value: None,
         }
     }
 
     const INTERRUPT_HANDLER_NUM_CYCLES: u32 = 7;
 
+    /// DEPRECATED: Legacy synchronous interrupt handler.
+    /// Use the cycle-stepped InterruptSequence state instead.
+    /// This method runs the entire interrupt sequence synchronously, which breaks
+    /// cycle-accurate timing. Kept only for reference/testing.
+    #[deprecated(note = "Use InterruptSequence state machine for cycle-accurate interrupts")]
+    #[allow(dead_code)]
     fn interrupt(&mut self) -> Result<u32, CpuError> {
         let cycle = if self.pending_nmi {
             self.pending_nmi = false;
@@ -3454,8 +3490,11 @@ impl Cpu6502 {
         Ok(cycle)
     }
 
-    /// Calculate additional cycles for an instruction based on operand (page crossings, branches, etc.)
-    /// This is used by the cycle-stepping state machine to know total cycles upfront.
+    /// DEPRECATED: Calculate additional cycles for an instruction.
+    /// This was used by legacy instruction-level stepping which has been removed.
+    /// The cycle-stepped state machine handles cycles internally per-cycle.
+    #[deprecated(note = "Legacy method - cycle-stepped execution handles cycles per-cycle")]
+    #[allow(dead_code)]
     fn calculate_additional_cycles(&self, instruction: &Instruction, operand: &Operand) -> u32 {
         match instruction.opcode {
             // Branch instructions: +1 if taken, +2 if taken and page crossed
@@ -3478,10 +3517,14 @@ impl Cpu6502 {
         }
     }
 
-    /// Check for pending interrupts and setup the cycle state machine for interrupt handling.
+    /// DEPRECATED: Legacy synchronous interrupt check and setup.
+    /// Use the cycle-stepped InterruptSequence state machine instead.
+    ///
     /// Returns the number of cycles the interrupt will take (0 if no interrupt).
     /// NOTE: This uses the CURRENT interrupt state, not the latched state.
-    /// For cycle-accurate emulation, use check_and_setup_interrupt_from_latch() instead.
+    /// For cycle-accurate emulation, the interrupt polling/latching happens per-cycle.
+    #[deprecated(note = "Use InterruptSequence state machine for cycle-accurate interrupts")]
+    #[allow(dead_code)]
     fn check_and_setup_interrupt(&mut self) -> Result<u32, CpuError> {
         if self.pending_nmi {
             self.pending_nmi = false;
@@ -3553,35 +3596,25 @@ impl Cpu6502 {
     /// Execute one cycle of a hardware interrupt sequence (NMI or IRQ).
     ///
     /// The interrupt sequence takes 7 cycles:
-    /// - Cycle 1: Internal operation (read from PC)
+    /// - Cycle 1: Internal operation (read from PC) - done in FetchOpcode
     /// - Cycle 2: Internal operation (read from PC)
     /// - Cycle 3: Push PCH to stack
     /// - Cycle 4: Push PCL to stack
     /// - Cycle 5: Push P to stack (B flag clear for hardware interrupts)
     /// - Cycle 6: Read interrupt vector low byte, set I flag
     /// - Cycle 7: Read interrupt vector high byte, jump to handler
+    ///
+    /// The vector_base is passed in from the InterruptSequence state. It is set
+    /// when entering the sequence and updated if NMI hijacks an IRQ sequence
+    /// during cycles 2-4. This ensures consistent vector addressing.
     fn execute_interrupt_cycle(
         &mut self,
-        interrupt_type: InterruptType,
+        _interrupt_type: InterruptType,
         cycle: u8,
+        vector: u16,
         state: &mut InstructionState,
     ) -> Result<CpuCycleResult, CpuError> {
         let pc = self.registers.pc;
-
-        // Determine vector address based on interrupt type
-        // Note: NMI can hijack IRQ if it arrives during cycles 1-4
-        let vector = match interrupt_type {
-            InterruptType::Nmi => NMI_VECTOR,
-            InterruptType::Irq => {
-                // Check if NMI arrived during the sequence (NMI hijack)
-                if self.pending_nmi && cycle <= 4 {
-                    self.pending_nmi = false;
-                    NMI_VECTOR
-                } else {
-                    IRQ_VECTOR
-                }
-            }
-        };
 
         match cycle {
             1 => {
@@ -3868,6 +3901,10 @@ impl Cpu6502 {
         self.registers.set_status(StatusFlag::Overflow, overflow);
     }
 
+    /// DEPRECATED: Legacy method to write result to operand address.
+    /// The cycle-stepped execution uses rmw_overwrite() with explicit cycle control.
+    #[deprecated(note = "Legacy method - use rmw_overwrite() for cycle-accurate RMW")]
+    #[allow(dead_code)]
     fn overwrite(&mut self, operand: &Operand, value: u8) -> Result<(), CpuError> {
         match operand {
             Operand::Address(addr) |
