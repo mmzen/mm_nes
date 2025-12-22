@@ -266,11 +266,22 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// - OAM DMA: `Halt`, `WaitGet`, `Get`, `WaitPut`, `Put`
     /// - DMC DMA: `Halt`, `Dummy`, `Align`, `Read`
     pub fn is_cpu_stalled(&self) -> bool {
-        let oam_stalls = matches!(self.oam.op,
-            OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::Get | OamDmaOp::WaitPut | OamDmaOp::Put);
-        let dmc_stalls = matches!(self.dmc.phase,
-            DmcDmaPhase::Halt | DmcDmaPhase::Dummy | DmcDmaPhase::Align | DmcDmaPhase::Read);
-        oam_stalls || dmc_stalls
+        self.is_cpu_stalled_by_oam() || self.is_cpu_stalled_by_dmc()
+    }
+
+    /// Returns true if CPU is stalled specifically by OAM DMA.
+    ///
+    /// This is needed for DMC PendingHalt logic: DMC can proceed with halt
+    /// if CPU is already stalled by OAM, even if CPU's bus intent is "writing".
+    pub fn is_cpu_stalled_by_oam(&self) -> bool {
+        matches!(self.oam.op,
+            OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::Get | OamDmaOp::WaitPut | OamDmaOp::Put)
+    }
+
+    /// Returns true if CPU is stalled specifically by DMC DMA.
+    fn is_cpu_stalled_by_dmc(&self) -> bool {
+        matches!(self.dmc.phase,
+            DmcDmaPhase::Halt | DmcDmaPhase::Dummy | DmcDmaPhase::Align | DmcDmaPhase::Read)
     }
 
     // ========================================================================
@@ -296,7 +307,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// If DMC DMA is already active, this request is ignored. This allows the
     /// APU to be authoritative about WHEN to request without the scheduler
     /// needing to track DMA state.
-    pub fn request_dmc_dma(&mut self, address: u16, _cpu_is_writing: bool, _conflict_address: Option<u16>) {
+    pub fn request_dmc_dma(&mut self, address: u16) {
         // Ignore duplicate requests if DMC DMA is already in progress
         if self.is_dmc_dma_active() {
             return;
@@ -312,7 +323,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     #[deprecated(note = "Use request_dmc_dma")]
     #[allow(dead_code)]
     pub fn start_dmc_dma(&mut self, address: u16, _cycles: u8, _conflict_address: Option<u16>) {
-        self.request_dmc_dma(address, false, None);
+        self.request_dmc_dma(address);
     }
 
     #[deprecated(note = "Use request_dmc_dma - no pre-calculation needed")]
@@ -323,7 +334,8 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         _oam_dma_active: bool,
         _oam_dma_on_read: bool,
     ) -> u8 {
-        3 // Placeholder - not used in new model
+        panic!("DEPRECATED: DMC DMA is now event-driven via request_dmc_dma(). \
+                Do not pre-calculate cycles - the DMA controller determines timing dynamically.")
     }
 
     // ========================================================================
@@ -366,9 +378,11 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         }
 
         // DMC DMA: PendingHalt -> Halt (only if CPU is not writing OR already halted by OAM)
+        // Must use OAM-only check here: we're asking "is CPU already stalled by something else?"
+        // Using is_cpu_stalled() would incorrectly include DMC's own states.
         if self.dmc.phase == DmcDmaPhase::PendingHalt {
-            let cpu_already_halted = matches!(self.oam.op, OamDmaOp::Halt | OamDmaOp::WaitGet | OamDmaOp::Get | OamDmaOp::WaitPut | OamDmaOp::Put);
-            if !cpu_is_writing || cpu_already_halted {
+            let cpu_already_halted_by_oam = self.is_cpu_stalled_by_oam();
+            if !cpu_is_writing || cpu_already_halted_by_oam {
                 // Halt succeeds
                 // Only capture address if not already captured by OAM halt
                 if self.cpu_halted_addr.is_none() {
@@ -462,7 +476,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
 
         result.bus_op = bus_op;
         result.winner = winner;
-        result.cpu_halted = self.is_active();
+        result.cpu_halted = self.is_cpu_stalled();
 
         Ok(result)
     }
@@ -552,8 +566,11 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
             BusOp::None => {}
         }
 
-        // DMC no-bus phases or OAM waiting - CPU repeated read if halted
-        if self.is_active() {
+        // DMC no-bus phases or OAM waiting - CPU repeated read if stalled
+        // IMPORTANT: Must use is_cpu_stalled(), not is_active().
+        // During PendingHalt, DMA is active but CPU is NOT stalled - we must not
+        // steal the bus with CpuRepeat in that case.
+        if self.is_cpu_stalled() {
             if let Some(addr) = self.cpu_halted_addr {
                 return (BusOp::Read(addr), BusWinner::CpuRepeat);
             }
@@ -611,16 +628,25 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     }
 
     // ========================================================================
-    // Utility methods
+    // Test-only utility methods
     // ========================================================================
 
-    /// Returns expected OAM DMA cycle count based on the phase when $4014 was written.
+    /// Returns expected OAM DMA cycle count assuming immediate halt on write cycle.
+    ///
+    /// **WARNING**: This is only accurate when halt succeeds immediately after the
+    /// $4014 write. If the CPU is writing when halt is attempted, the halt is
+    /// delayed and the actual cycle count may differ from this prediction.
+    ///
+    /// This method is intended for tests with controlled conditions where the
+    /// CPU is known to be reading when DMA starts.
     ///
     /// # Arguments
     /// * `write_phase` - The APU phase when the write to $4014 occurred
+    #[cfg(test)]
     pub fn oam_dma_cycles(write_phase: ApuPhase) -> u16 {
         // Write on GET -> first DMA step on PUT -> 513 cycles
         // Write on PUT -> first DMA step on GET -> 514 cycles
+        // NOTE: Only valid when halt succeeds immediately!
         if write_phase.is_get() { 513 } else { 514 }
     }
 

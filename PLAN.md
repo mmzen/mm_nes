@@ -6,7 +6,7 @@ This file tracks the development progress of mmnes, documenting what has been do
 
 ## Current Status
 
-**Last updated**: December 21, 2025
+**Last updated**: December 22, 2025
 
 The emulator is functional with **true cycle-accurate emulation**. All 8 phases of cycle accuracy roadmap complete. **Legacy instruction-level stepping has been removed** - the emulator now has a single execution path via `step_master_cycle()`.
 
@@ -71,7 +71,51 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Code Review Round 7 - is_cpu_stalled() Fix (December 21, 2025)
+### Recently Completed: DMA Code Review Round 9 (December 22, 2025)
+
+Based on feedback in `requirements/DMA_code_review_8.md`, implemented 4 correctness fixes + 1 cleanup:
+
+**Fixes implemented**:
+1. **Fixed DMC `cpu_already_halted` predicate** (CORRECTNESS):
+   - Was using `is_cpu_stalled()` which includes DMC states
+   - Created `is_cpu_stalled_by_oam()` method for OAM-only check
+   - DMC can now correctly detect if CPU is stalled by OAM when deciding to halt
+2. **Fixed CpuRepeat condition in arbitrate()** (CORRECTNESS):
+   - Changed from `is_active()` to `is_cpu_stalled()`
+   - Prevents stealing bus with CpuRepeat during PendingHalt (when DMA active but CPU not stalled)
+3. **Quarantined `oam_dma_cycles()` as test-only**:
+   - Added `#[cfg(test)]` attribute
+   - Added warning documentation about delayed halt assumptions
+4. **Verified $4014 N+1 timing** (already correct):
+   - Existing test confirms write on cycle N → DMA starts cycle N+1
+5. **Removed unused parameters** from `request_dmc_dma()`:
+   - Removed `_cpu_is_writing` and `_conflict_address` parameters
+   - Simplified signature to just `request_dmc_dma(address: u16)`
+
+**Files modified**:
+- `dma_controller.rs`: Added `is_cpu_stalled_by_oam()`, `is_cpu_stalled_by_dmc()`, fixed arbitrate(), cleaned `request_dmc_dma()`
+- `nes_console.rs`: Updated `request_dmc_dma()` call
+- `tests/dma_controller.rs`: Updated test calls for new signature
+
+**All 322 tests pass (579 total, 257 ignored), frontend builds successfully**
+
+---
+
+### Previously Completed: DMA Code Review Round 8 (December 22, 2025)
+
+Based on feedback in `requirements/DMA_code_review_7.md`, implemented 4 fixes + validation tests:
+
+**Fixes implemented**:
+1. **Enforced one bus op per cycle invariant** in scheduler
+2. **Fixed `DmaStepResult.cpu_halted`** - now uses `is_cpu_stalled()` instead of `is_active()`
+3. **Made `calculate_dmc_dma_cycles()` panic** - deprecation message
+4. **Replaced ad-hoc `cpu_already_halted` check** with canonical method
+
+**All 322 tests pass**
+
+---
+
+### Previously Completed: DMA Code Review Round 7 - is_cpu_stalled() Fix (December 21, 2025)
 
 Based on feedback in `requirements/DMA_code_review_6.md`, fixed critical scheduler correctness bug:
 
@@ -312,6 +356,27 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 22, 2025 (session 34)
+- **README.md update** - updated to reflect current achievements
+  - Claude contribution now ~33% (was ~16%)
+  - Added "True Cycle-Accurate Emulation Complete" section
+  - Expanded Claude achievements with DMA implementation details
+  - Added DMA section to completeness checklist
+  - Fixed AccuracyCoin score to 90/131
+  - Updated test count to 322 tests
+- **DMA Code Review Round 8** - addressing issues from `requirements/DMA_code_review_7.md`
+  - Enforced one bus op per cycle invariant with `dma_used_bus` check
+  - Fixed `DmaStepResult.cpu_halted` to use `is_cpu_stalled()`
+  - Made `calculate_dmc_dma_cycles()` panic with deprecation message
+  - Added 3 validation tests for side-effect registers ($2007, $4016)
+- **DMA Code Review Round 9** - addressing issues from `requirements/DMA_code_review_8.md`
+  - Fixed DMC `cpu_already_halted` to use OAM-only check (created `is_cpu_stalled_by_oam()`)
+  - Fixed CpuRepeat condition in `arbitrate()` to use `is_cpu_stalled()` instead of `is_active()`
+  - Quarantined `oam_dma_cycles()` as `#[cfg(test)]` only with warning docs
+  - Verified $4014 N+1 timing (already correct)
+  - Removed unused `_cpu_is_writing` and `_conflict_address` params from `request_dmc_dma()`
+- All 322 tests pass (579 total, 257 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)
 - **PPU DMA Code Review** - addressing issues from `requirements/DMA_ppu_dma_code_review_0.md`
@@ -572,6 +637,8 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 21, 2025 | ~70% | ~30% | DMA Feedback: all 5 phases complete (interrupt, bus intent, scheduler, event-driven, repeated reads) |
 | Dec 21, 2025 | ~68% | ~32% | DMA Feedback Round 2: Complete rewrite with bus arbiter model |
 | Dec 21, 2025 | ~67% | ~33% | PPU DMA open bus, DMA code review round 7 (is_cpu_stalled fix) |
+| Dec 22, 2025 | ~67% | ~33% | DMA code review round 8 (one-bus-op invariant, validation tests) |
+| Dec 22, 2025 | ~67% | ~33% | DMA code review round 9 (OAM-only halt check, CpuRepeat fix, cleanup) |
 
 ---
 

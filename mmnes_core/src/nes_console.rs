@@ -222,7 +222,7 @@ impl NesConsole {
         // Start DMC DMA if APU requested it
         // NOTE: Same as above - address captured at halt, not at request time
         if let Some(dmc_address) = dmc_dma_request {
-            self.dma_controller.request_dmc_dma(dmc_address, cpu_is_writing, pending_read_addr);
+            self.dma_controller.request_dmc_dma(dmc_address);
         }
 
         // ============================================================
@@ -246,11 +246,21 @@ impl NesConsole {
             }
         }
 
-        // CPU executes if not stalled by DMA.
+        // CPU executes if not stalled by DMA AND DMA didn't use the bus.
         // Important: PendingHalt does NOT stall - CPU continues until halt actually succeeds.
-        let cpu_result = if self.dma_controller.is_cpu_stalled() {
-            // CPU is stalled - DMA is bus master
-            let dma_result = dma_result.expect("DMA should have result when CPU is stalled");
+        //
+        // INVARIANT: Exactly one bus operation per CPU cycle.
+        // - If DMA returned a bus op, CPU must NOT execute (DMA owns bus)
+        // - If DMA returned BusOp::None AND CPU not stalled, CPU executes
+        // This protects the one-bus-op invariant even if DMA ever does something during PendingHalt.
+        let dma_used_bus = dma_result
+            .as_ref()
+            .map(|r| !matches!(r.bus_op, crate::dma_controller::BusOp::None))
+            .unwrap_or(false);
+
+        let cpu_result = if self.dma_controller.is_cpu_stalled() || dma_used_bus {
+            // CPU is stalled OR DMA used the bus - DMA is bus master
+            let dma_result = dma_result.expect("DMA should have result when CPU is stalled or DMA used bus");
 
             // Derive read/write info from bus_op
             let (memory_read, memory_write, address) = match dma_result.bus_op {
@@ -268,7 +278,7 @@ impl NesConsole {
                 ..Default::default()
             }
         } else {
-            // CPU is bus master (either no DMA or in PendingHalt)
+            // CPU is bus master (DMA inactive, or DMA in PendingHalt with no bus op)
             let result = self.cpu.borrow_mut().step_cycle()?;
 
             // Track the CPU's last read address for DMA repeated reads

@@ -70,7 +70,7 @@ fn test_start_oam_dma_activates_controller() {
 fn test_start_dmc_dma_activates_controller() {
     init();
     let mut controller = create_controller();
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
     assert!(controller.is_active());
     assert!(controller.is_dmc_dma_active());
 }
@@ -95,7 +95,7 @@ fn test_reset_clears_dma_state() {
     init();
     let mut controller = create_controller();
     controller.start_oam_dma(0x02);
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
     assert!(controller.is_active());
 
     controller.reset();
@@ -287,7 +287,7 @@ fn test_dmc_dma_state_machine_sequence() {
     let mut current_phase = ApuPhase::Get;
 
     // Start DMC DMA
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
 
     // Run until complete
     let mut cycles = 0;
@@ -305,7 +305,7 @@ fn test_dmc_dma_returns_sample() {
     init();
     let mut controller = create_controller();
     let mut current_phase = ApuPhase::Get;
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
 
     let mut sample_received = false;
 
@@ -327,7 +327,7 @@ fn test_dmc_dma_halt_fails_on_cpu_write() {
     init();
     let mut controller = create_controller();
     let mut current_phase = ApuPhase::Get;
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
 
     // First cycle with CPU writing - halt should fail
     controller.step_cycle(true, None, current_phase).unwrap();
@@ -483,7 +483,7 @@ fn test_dmc_read_has_priority_over_oam_get() {
 
     // Start both DMAs
     controller.start_oam_dma(0x02);
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
 
     // Run until DMC completes - it should get priority on GET cycles when it needs to read
     let mut dmc_sample = None;
@@ -523,7 +523,7 @@ fn test_repeated_reads_during_dma_idle_cycles_go_through_bus() {
     // Start DMC DMA - it has 2-3 no-bus cycles (Halt, Dummy, maybe Align)
     // where CPU repeated reads should occur.
     // The halted read address ($2007) will be captured at halt via step_cycle parameter.
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
 
     let mut current_phase = ApuPhase::Get;
     let mut cpu_repeat_reads = 0u32;
@@ -614,7 +614,7 @@ fn test_dmc_delayed_halt_captures_correct_address() {
     let mut controller = create_controller();
 
     // Start DMC DMA
-    controller.request_dmc_dma(0xC000, true, None); // cpu_is_writing = true at request time
+    controller.request_dmc_dma(0xC000);
     let current_phase = ApuPhase::Get;
 
     // Cycle 1: CPU is WRITING - halt should fail
@@ -681,7 +681,7 @@ fn test_cpu_not_stalled_during_dmc_pending_halt() {
     let mut controller = create_controller();
 
     // Start DMC DMA - enters PendingHalt
-    controller.request_dmc_dma(0xC000, false, None);
+    controller.request_dmc_dma(0xC000);
 
     // DMA is active
     assert!(controller.is_active(), "DMC DMA should be active after request");
@@ -698,4 +698,131 @@ fn test_cpu_not_stalled_during_dmc_pending_halt() {
     assert!(result.cpu_halted, "DMA result should indicate CPU halted");
     assert!(controller.is_cpu_stalled(),
         "CPU should be stalled after DMC halt succeeded");
+}
+
+// ============================================================================
+// Side-Effect Register Validation Tests
+// ============================================================================
+// These tests validate that get_pending_bus_operation() correctly captures
+// side-effect register addresses during DMA stalls.
+
+/// Tests that controller register ($4016) repeated reads during DMA
+/// are properly tracked and would trigger side effects.
+///
+/// On real hardware, reading $4016 clocks the controller shift register.
+/// During DMA stalls, repeated reads from $4016 would clock it multiple times.
+#[test]
+fn test_repeated_reads_from_controller_register_during_dmc_dma() {
+    init();
+    let mut controller = create_controller();
+
+    // Start DMC DMA - pending read from $4016 will be passed in step_cycle
+    controller.request_dmc_dma(0xC000);
+
+    let mut current_phase = ApuPhase::Get;
+    let mut controller_reads = 0u32;
+    let mut cycles = 0;
+
+    // Run through the DMC DMA sequence
+    while controller.is_dmc_dma_active() && cycles < 10 {
+        let result = controller.step_cycle(false, Some(0x4016), current_phase).unwrap();
+        current_phase = current_phase.toggle();
+        cycles += 1;
+
+        // Count repeated reads from $4016
+        if result.winner == BusWinner::CpuRepeat {
+            if let BusOp::Read(addr) = result.bus_op {
+                assert_eq!(addr, 0x4016,
+                    "Repeated read during DMA should be from halted address $4016");
+                controller_reads += 1;
+            }
+        }
+    }
+
+    // DMC DMA has Halt, Dummy, [Align], Read phases
+    // Halt and Dummy (and maybe Align) have CpuRepeat reads
+    assert!(controller_reads >= 2,
+        "Expected at least 2 repeated reads from $4016 during DMC DMA idle cycles, got {}. \
+         Each read would clock the controller shift register on real hardware.",
+        controller_reads);
+}
+
+/// Tests that OAM DMA alignment cycles also produce repeated reads.
+///
+/// When OAM DMA waits for phase alignment (WaitGet or WaitPut states),
+/// repeated reads occur which would trigger side effects on registers.
+#[test]
+fn test_repeated_reads_during_oam_dma_alignment() {
+    init();
+    let mut controller = create_controller();
+
+    // Start OAM DMA on PUT phase - this may require alignment
+    controller.start_oam_dma(0x02);
+
+    // Use PUT phase at start to potentially cause WaitGet alignment
+    let mut current_phase = ApuPhase::Put;
+    let mut repeated_reads = 0u32;
+    let mut cycles = 0;
+
+    // Run first 10 cycles to see alignment behavior
+    while controller.is_oam_dma_active() && cycles < 10 {
+        // Pass $2007 as the pending read address
+        let result = controller.step_cycle(false, Some(0x2007), current_phase).unwrap();
+        current_phase = current_phase.toggle();
+        cycles += 1;
+
+        if result.winner == BusWinner::CpuRepeat {
+            if let BusOp::Read(addr) = result.bus_op {
+                assert_eq!(addr, 0x2007,
+                    "Repeated read should be from halted address $2007");
+                repeated_reads += 1;
+            }
+        }
+    }
+
+    // OAM DMA has at least a Halt cycle with CpuRepeat
+    // If started on wrong phase, also has WaitGet with CpuRepeat
+    assert!(repeated_reads >= 1,
+        "Expected at least 1 repeated read during OAM DMA Halt/alignment, got {}. \
+         These reads would increment VRAM address if reading $2007.",
+        repeated_reads);
+}
+
+/// Tests that the halted address is correctly used for ALL repeated reads
+/// throughout a DMA sequence, not just the first one.
+#[test]
+fn test_halted_address_consistent_throughout_dma() {
+    init();
+    let mut controller = create_controller();
+
+    // Start DMC DMA
+    controller.request_dmc_dma(0xC000);
+
+    let mut current_phase = ApuPhase::Get;
+    let mut all_repeated_read_addresses: Vec<u16> = Vec::new();
+    let mut cycles = 0;
+    let halted_addr = 0x2007u16;
+
+    while controller.is_dmc_dma_active() && cycles < 10 {
+        let result = controller.step_cycle(false, Some(halted_addr), current_phase).unwrap();
+        current_phase = current_phase.toggle();
+        cycles += 1;
+
+        if result.winner == BusWinner::CpuRepeat {
+            if let BusOp::Read(addr) = result.bus_op {
+                all_repeated_read_addresses.push(addr);
+            }
+        }
+    }
+
+    // All repeated reads must be from the same halted address
+    for (i, addr) in all_repeated_read_addresses.iter().enumerate() {
+        assert_eq!(*addr, halted_addr,
+            "Repeated read {} should be from halted address ${:04X}, got ${:04X}. \
+             Address must be consistent for proper side-effect behavior.",
+            i, halted_addr, addr);
+    }
+
+    assert!(!all_repeated_read_addresses.is_empty(),
+        "Expected at least one repeated read during DMC DMA");
 }
