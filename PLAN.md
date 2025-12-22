@@ -67,6 +67,9 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | **DMA Implementation (All 7 Phases)** | **Production-grade DMA** | Bus arbiter, phase tracking, 31 tests, 14 code reviews |
 | **Interrupt Flag Latency Fix** | **IRQ/NMI at instruction boundary** | AccuracyCoin code 1 fix, 2 new tests |
 | **CPU Code Review Round 1** | **Unified interrupt entry path** | FetchOpcode is single canonical cycle-1 entry point |
+| **CPU Code Review Round 2** | **Fixed interrupt bugs** | vector_base in InterruptSequence, NMI hijack fix, deprecated legacy methods |
+| **CPU Code Review Round 3** | **Consistent cycle numbering** | InterruptSequence cycles 2-7 only, full hijack window coverage |
+| **CPU Code Review Round 4** | **Hijack semantics + NMI contract** | interrupt_type updated on hijack, NMI line clearing documented |
 
 ---
 
@@ -177,66 +180,6 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 
 ---
 
-## Known Defects
-
-| ID | Description | Severity | Status |
-|----|-------------|----------|--------|
-| DEF-001 | Audio crackles/pops during playback | Low | Open |
-| DEF-002 | DMC DMA timing not cycle-accurate | Medium | Open |
-| DEF-003 | Rendering Flag Behavior FAIL 2 | Medium | Deferred |
-
-### DEF-001: Audio Crackles
-**Description**: Occasional audio crackles/pops during emulation playback.
-**Possible causes**:
-- Sample buffer underruns in the audio pipeline
-- Timing jitter from fine-grained synchronization
-- SDL2 audio callback timing issues
-**Notes**: Audio is synchronized with video; only quality is affected.
-
-### DEF-002: DMC DMA Timing
-**Description**: AccuracyCoin "DMA + OPEN BUS" FAIL 2 - DMC DMA occurs on wrong cycle or doesn't update data bus correctly.
-**Root cause**: DMC DMA currently occurs during APU catch-up (after CPU instruction execution), but real hardware performs DMA mid-instruction at specific cycles.
-**Attempted fixes**:
-- Pre-instruction DMA check (rolled back - didn't solve issue)
-**Required**: Cycle-accurate emulation where DMC DMA can interrupt CPU mid-instruction.
-**Notes**: This is a fundamental architecture limitation of instruction-level emulation.
-
-### DEF-004: Arbitrary Sprite Zero
-**Description**: AccuracyCoin "ARBITRARY SPRITE ZERO" test fails.
-**Test behavior**: The test checks two conditions:
-1. FAIL 1: Only sprite at OAM index 0 should trigger sprite zero hit (when OAMADDR=0)
-2. FAIL 2: When OAMADDR is set mid-frame, the sprite at OAMADDR/4 should be treated as "sprite zero"
-**Attempted fixes**:
-1. Mark first in-range sprite as sprite0 → caused FAIL 1 regression
-2. Mark sprite at OAMADDR/4 as sprite0 → passes FAIL 1, still fails FAIL 2
-**Root cause hypothesis**: The test requires precise timing coordination between OAMADDR writes and sprite evaluation. Current implementation reads OAMADDR at sprite evaluation time, but the test may require OAMADDR to affect sprite zero determination at a specific PPU cycle (cycle 66) during evaluation.
-**Notes**: Deferred pending further investigation of PPU sprite evaluation timing.
-
-### DEF-005: CPU Bus Phase Timing (phi1/phi2)
-**Description**: Several AccuracyCoin tests require sub-cycle bus phase timing that's not currently implemented.
-**Affected tests**:
-- FRAME COUNTER IRQ FAIL 7: "IRQ flag should not be cleared when APU transitions from 'get' to 'put' cycle"
-- CONTROLLER STROBING FAIL 4: "Controllers should not be strobed when CPU transitions from 'put' to 'get' cycle"
-- CONTROLLER CLOCKING FAIL 3: "Double-reading $4016 should only clock controller once"
-**Root cause**: The NES CPU has two phases per cycle: phi1 (address phase / "get") and phi2 (data phase / "put"). Side effects like clearing IRQ flags or clocking shift registers should only occur during phi2.
-**Required changes**:
-- Add bus phase tracking (phi1/phi2) to CPU cycle state
-- Modify Memory trait to distinguish between "address phase read" and "data phase read"
-- Update APU and controller implementations to only perform side effects during phi2
-**Notes**: This is a significant architectural change. Deferred for future work.
-
-### DEF-003: Rendering Flag Behavior FAIL 2
-**Description**: AccuracyCoin "RENDERING FLAG BEHAVIOR" test FAIL 2 - "Background shift registers should be initialized and clocked when only rendering sprites."
-**Test behavior**: Test enables only sprites ($10) during h-blank, expects background shift registers to be populated, then enables both flags mid-scanline before sprite 0 hit position.
-**Attempted fixes**:
-1. Background fetches when only sprites enabled (`render_background()` called when ShowSprites=true) - implemented, retained
-2. Sprite 0 hit detection deferred to hit dot with mask flag check - implemented, retained
-3. Checked various sprite 0 hit conditions (rendering_enabled OR vs AND) - tested both approaches
-**Root cause hypothesis**: The test requires dot-level accuracy for mid-scanline mask changes. Current implementation renders entire scanline at dot 1 and may not correctly handle the precise timing of when shift registers are populated vs when sprite 0 hit is evaluated.
-**Notes**: Deferred pending further investigation. Current fixes are retained as they represent correct hardware behavior even if timing precision is insufficient for this specific test.
-
----
-
 ## Session Log
 
 ### Session: December 22, 2025 (session 34)
@@ -315,6 +258,42 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
     - `nmi_signaled_before_final_cycle_is_serviced` - expects FetchOpcode after instruction
     - `nmi_latched_state_persists_even_if_cleared_before_completion` - same fix
   - **Result**: Single canonical interrupt entry point (FetchOpcode does cycle 1, then InterruptSequence { cycle: 2 })
+- **CPU Code Review Round 2** - addressing issues from `requirements/INT_cpu_code_review_2.md`
+  - **Fix #1**: Added `pending_interrupt = None` in `reset()` to prevent stale interrupt state after reset
+  - **Fix #2**: Clear latches immediately when setting `pending_interrupt` at Executing completion
+    - Prevents stale latch state from persisting across instruction boundaries
+  - **Fix #3**: Added `vector_base: u16` field to InterruptSequence state
+    - Stores interrupt vector address ($FFFA for NMI, $FFFE for IRQ)
+    - Fixed NMI hijack bug: hijack now correctly updates `vector_base` during cycles 2-4
+    - Previously, hijack would set `pending_nmi = false` but then recompute vector each cycle
+  - **Fix #4**: Updated `compute_pending_bus_intent()` for interrupt cycles 6/7
+    - Now returns correct vector addresses: cycle 6 → `vector_base`, cycle 7 → `vector_base + 1`
+    - DMA can now correctly predict bus addresses during interrupt sequence
+  - **Fix #5**: Removed unused `prev_nmi_line_low` field (half-implemented edge detection, never used)
+  - **Fix #6**: Marked legacy synchronous interrupt methods as deprecated
+    - `interrupt()`, `check_and_setup_interrupt()`, `calculate_additional_cycles()`, `overwrite()`
+    - Added `#[deprecated]` and `#[allow(dead_code)]` attributes with explanatory notes
+- **CPU Code Review Round 3** - addressing issues from `requirements/INT_cpu_code_review_3.md`
+  - **Fix #1**: Made InterruptSequence cycles explicitly 2-7 only
+    - Removed `cycle == 1` arm from `compute_pending_bus_intent()` (cycle 1 is in FetchOpcode)
+    - Removed `cycle == 1` arm from `execute_interrupt_cycle()`
+    - Added `debug_assert!(cycle >= 2 && cycle <= 7)` for cycle validation
+  - **Fix #2**: Added NMI hijack check in FetchOpcode for cycle 1
+    - After dummy read, check if NMI arrived during cycle 1 and hijack vector if so
+    - Full hijack window now covered: cycle 1 (FetchOpcode) + cycles 2-4 (InterruptSequence)
+  - **Fix #3**: Removed unused `_interrupt_type` parameter from `execute_interrupt_cycle()`
+    - Vector is now passed explicitly via `vector_base`, no need for interrupt type
+- **CPU Code Review Round 4** - addressing issues from `requirements/INT_cpu_code_review_4.md`
+  - **Fix #1**: Update `interrupt_type` to `Nmi` on hijack (both FetchOpcode and InterruptSequence)
+    - Previously only `vector_base` was changed, `interrupt_type` stayed as `Irq`
+    - Now state machine consistently reflects that we're servicing NMI after hijack
+  - **Fix #2**: Documented stack push address timing in `compute_pending_bus_intent()`
+    - Added detailed comments explaining SP decrement timing (after each push)
+    - Current SP at cycle start is correct address since state transitions after execution
+  - **Fix #3**: Documented NMI line clearing contract
+    - Added comprehensive doc comments to `signal_nmi()` and `clear_nmi()`
+    - Contract: PPU must call `clear_nmi()` when line released, CPU does not clear `nmi_line_low`
+    - Prevents NMI deadlock if caller forgets to release the line
 - All 326 tests pass (582 total, 256 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)

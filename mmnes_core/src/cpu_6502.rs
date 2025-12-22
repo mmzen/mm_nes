@@ -467,6 +467,23 @@ impl Interruptible for Cpu6502 {
         Ok(self.interrupt.is_set(irq_source))
     }
 
+    /// Signal NMI to the CPU (falling edge detection).
+    ///
+    /// NMI is edge-triggered: this sets `pending_nmi` only on the transition from
+    /// high to low (i.e., only if the line wasn't already low). Once triggered,
+    /// `pending_nmi` remains true until the CPU services the interrupt.
+    ///
+    /// # NMI Line Clearing Contract
+    ///
+    /// **IMPORTANT**: The caller (typically PPU) is responsible for calling `clear_nmi()`
+    /// when the NMI line is released (goes high). The CPU does NOT clear `nmi_line_low`
+    /// when servicing NMI - it only clears `pending_nmi`. If the caller never calls
+    /// `clear_nmi()`, subsequent `signal_nmi()` calls will be ignored (line stays low),
+    /// effectively deadlocking NMI.
+    ///
+    /// Typical PPU integration:
+    /// 1. PPU sets NMI at start of vblank: `cpu.signal_nmi()`
+    /// 2. PPU clears NMI when vblank ends or when $2002 is read: `cpu.clear_nmi()`
     fn signal_nmi(&mut self) -> Result<(), CpuError> {
         if !self.nmi_line_low {
             self.nmi_line_low = true;
@@ -475,6 +492,15 @@ impl Interruptible for Cpu6502 {
         Ok(())
     }
 
+    /// Clear the NMI line (release from low to high).
+    ///
+    /// This must be called by the NMI source (typically PPU) when the condition
+    /// that caused NMI is cleared. This allows future `signal_nmi()` calls to
+    /// trigger new NMI edges.
+    ///
+    /// Note: This does NOT clear `pending_nmi`. If NMI was already triggered and
+    /// hasn't been serviced yet, it will still be serviced. This only allows
+    /// future edges to be detected.
     fn clear_nmi(&mut self) -> Result<(), CpuError> {
         self.nmi_line_low = false;
         Ok(())
@@ -634,12 +660,26 @@ impl CPU for Cpu6502 {
                     let data = self.bus.borrow().read_byte(pc)?;
                     self.cycles += 1;
 
-                    // Transition to interrupt sequence - cycle 2 is next
-                    // (we just completed cycle 1's dummy read above)
-                    let vector_base = match int_type {
+                    // Compute initial vector address based on interrupt type
+                    let mut vector_base = match int_type {
                         InterruptType::Nmi => NMI_VECTOR,
                         InterruptType::Irq => IRQ_VECTOR,
                     };
+
+                    // NMI hijack check for cycle 1: If we committed to IRQ but NMI
+                    // arrived during the dummy read (signaled externally), hijack now.
+                    // This covers the full hijack window: cycle 1 here + cycles 2-4 in
+                    // InterruptSequence. Hijack is allowed until push PCH (cycle 3).
+                    // When hijack occurs, update BOTH vector_base AND int_type so the
+                    // state machine consistently reflects that we're now servicing NMI.
+                    let mut int_type = int_type;
+                    if int_type == InterruptType::Irq && self.pending_nmi {
+                        self.pending_nmi = false;
+                        vector_base = NMI_VECTOR;
+                        int_type = InterruptType::Nmi;
+                    }
+
+                    // Transition to interrupt sequence - cycle 2 is next
                     self.cycle_state = CpuCycleState::InterruptSequence {
                         interrupt_type: int_type,
                         cycle: 2,
@@ -729,7 +769,7 @@ impl CPU for Cpu6502 {
             }
 
             CpuCycleState::InterruptSequence { interrupt_type, cycle, vector_base, state } => {
-                let interrupt_type = *interrupt_type;
+                let mut interrupt_type = *interrupt_type;
                 let cycle = *cycle;
                 let mut vector_base = *vector_base;
                 let mut state = state.clone();
@@ -739,16 +779,19 @@ impl CPU for Cpu6502 {
                 self.poll_interrupts();
 
                 // Check for NMI hijack during cycles 2-4 (cycle 1 is done in FetchOpcode)
-                // If NMI arrives while processing IRQ, it hijacks the vector
+                // If NMI arrives while processing IRQ, it hijacks the vector.
+                // When hijack occurs, update BOTH vector_base AND interrupt_type so the
+                // state machine consistently reflects that we're now servicing NMI.
                 if interrupt_type == InterruptType::Irq && cycle <= 4 && self.pending_nmi {
                     self.pending_nmi = false;
                     vector_base = NMI_VECTOR;
+                    interrupt_type = InterruptType::Nmi;
                 }
 
                 self.cycles += 1;
 
                 // Execute one cycle of the interrupt sequence
-                let result = self.execute_interrupt_cycle(interrupt_type, cycle, vector_base, &mut state)?;
+                let result = self.execute_interrupt_cycle(cycle, vector_base, &mut state)?;
 
                 if result.instruction_complete {
                     // Interrupt sequence complete, go to next instruction
@@ -834,18 +877,31 @@ impl Cpu6502 {
             }
 
             CpuCycleState::InterruptSequence { cycle, vector_base, .. } => {
-                // Interrupt sequence: cycles 1-2 read PC, 3-5 write stack, 6-7 read vector
+                // Interrupt sequence cycles 2-7 (cycle 1 is done in FetchOpcode):
+                // - Cycle 2: dummy read PC
+                // - Cycles 3-5: push PCH, PCL, P to stack (SP decrements after each)
+                // - Cycles 6-7: read interrupt vector
                 match cycle {
-                    1 | 2 => CpuBusIntent {
+                    2 => CpuBusIntent {
                         op: BusOperation::Read,
                         address: Some(self.registers.pc),
                         is_write: false,
                     },
-                    3 | 4 | 5 => CpuBusIntent {
-                        op: BusOperation::Write,
-                        address: Some(STACK_BASE_ADDRESS + self.registers.sp as u16),
-                        is_write: true,
-                    },
+                    3 | 4 | 5 => {
+                        // Stack push cycles use current SP, then decrement after write.
+                        // Intent must report the actual address that will be written:
+                        // - Cycle 3: writes to SP (current), then SP--
+                        // - Cycle 4: writes to SP (decremented once), then SP--
+                        // - Cycle 5: writes to SP (decremented twice), then SP--
+                        // Since execute_interrupt_cycle uses current SP at start of each
+                        // cycle and decrements after, and state transitions happen after
+                        // execution, the current SP should already reflect prior decrements.
+                        CpuBusIntent {
+                            op: BusOperation::Write,
+                            address: Some(STACK_BASE_ADDRESS + self.registers.sp as u16),
+                            is_write: true,
+                        }
+                    }
                     6 => CpuBusIntent {
                         op: BusOperation::Read,
                         address: Some(*vector_base),
@@ -3595,41 +3651,30 @@ impl Cpu6502 {
 
     /// Execute one cycle of a hardware interrupt sequence (NMI or IRQ).
     ///
-    /// The interrupt sequence takes 7 cycles:
-    /// - Cycle 1: Internal operation (read from PC) - done in FetchOpcode
-    /// - Cycle 2: Internal operation (read from PC)
+    /// This handles cycles 2-7 of the interrupt sequence. Cycle 1 is performed
+    /// in FetchOpcode (dummy read at PC before entering InterruptSequence).
+    ///
+    /// Cycle breakdown:
+    /// - Cycle 2: Internal operation (dummy read from PC)
     /// - Cycle 3: Push PCH to stack
     /// - Cycle 4: Push PCL to stack
     /// - Cycle 5: Push P to stack (B flag clear for hardware interrupts)
     /// - Cycle 6: Read interrupt vector low byte, set I flag
     /// - Cycle 7: Read interrupt vector high byte, jump to handler
     ///
-    /// The vector_base is passed in from the InterruptSequence state. It is set
+    /// The vector is passed in from the InterruptSequence state. It is set
     /// when entering the sequence and updated if NMI hijacks an IRQ sequence
-    /// during cycles 2-4. This ensures consistent vector addressing.
+    /// during cycles 1-4. This ensures consistent vector addressing.
     fn execute_interrupt_cycle(
         &mut self,
-        _interrupt_type: InterruptType,
         cycle: u8,
         vector: u16,
         state: &mut InstructionState,
     ) -> Result<CpuCycleResult, CpuError> {
+        debug_assert!(cycle >= 2 && cycle <= 7, "InterruptSequence cycles are 2-7, got {}", cycle);
         let pc = self.registers.pc;
 
         match cycle {
-            1 => {
-                // Internal operation - dummy read from current PC
-                let data = self.bus.borrow().read_byte(pc)?;
-
-                Ok(CpuCycleResult {
-                    memory_read: true,
-                    address: Some(pc),
-                    data: Some(data),
-                    bus_op: BusOperation::Read,
-                    cycle_description: "Interrupt: internal op (read PC)",
-                    ..Default::default()
-                })
-            }
             2 => {
                 // Internal operation - dummy read from current PC
                 let data = self.bus.borrow().read_byte(pc)?;
