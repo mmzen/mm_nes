@@ -74,7 +74,7 @@ impl<T: Input> Memory for StandardController<T> {
         Ok(result)
     }
 
-    fn trace_read_byte(&self, _: u16) -> Result<u8, MemoryError> {
+    fn peek_byte(&self, _: u16) -> Result<u8, MemoryError> {
         Ok(0)
     }
 

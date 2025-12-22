@@ -73,12 +73,14 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ### DMA Code Review Status (December 22, 2025)
 
-**11 rounds of DMA code review + 2 rounds of PPU DMA code review complete.** DMA implementation is now production-grade with:
+**11 rounds of DMA code review + 2 rounds of PPU DMA code review + 1 NES Bus code review complete.** DMA implementation is now production-grade with:
 - Bus arbiter model (one bus op per cycle)
 - Strict debug assertions for timing drift detection
 - Clean API (no dead code, explicit phase contracts)
 - Comprehensive test coverage (31 DMA + 6 PPU DMA tests)
 - Verified data_bus consistency across all bus operations
+- Renamed `trace_read_byte` → `peek_byte` to prevent footgun misuse
+- Power-of-two size enforcement for address masking
 
 **All 323 tests pass (580 total, 257 ignored), frontend builds successfully.**
 
@@ -292,6 +294,15 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
   - Added regression test `scheduler_samples_dma_latch_at_cycle_start_regression`
   - Simplified `read_byte()` to ignore addr parameter (always returns open bus)
   - Verified bus layer handles write data_bus updates (no change needed)
+- **NES Bus Code Review** - addressing issues from `requirements/DMA_nes_bus_code_review_0.md`
+  - **Bug #1 Fixed**: Renamed `trace_read_byte` → `peek_byte` across entire codebase
+    - Added documentation warning: "must NEVER be used for timing-accurate code paths"
+    - Updated Memory trait, Bus trait mocks, and all implementations (13 files)
+  - **Bug #2 Fixed**: Added documentation to `read_word`/`write_word` warning about side effects
+    - Methods documented as NOT for cycle-accurate execution
+    - Verified not used in `step_cycle()` path (only debugging/init)
+  - **Bug #3 Fixed**: Added `debug_assert!(size.is_power_of_two())` in `lookup_address()`
+    - Prevents silent misconfiguration of device address masking
 - All 323 tests pass (580 total, 257 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)

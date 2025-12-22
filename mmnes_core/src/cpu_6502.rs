@@ -261,11 +261,11 @@ impl Cpu6502Snapshot {
     
     fn build_instruction(instruction: &Instruction, registers: &Registers, bus: Rc<RefCell<dyn Bus>>) -> Result<Vec<u8>, CpuError> {
         let mut bytes = Vec::<u8>::new();
-        let byte0 = bus.borrow().trace_read_byte(registers.pc)?;
+        let byte0 = bus.borrow().peek_byte(registers.pc)?;
         bytes.push(byte0);
 
         for i in 1..instruction.bytes {
-            let byte = bus.borrow().trace_read_byte(registers.safe_pc_add(i as i16)?)?;
+            let byte = bus.borrow().peek_byte(registers.safe_pc_add(i as i16)?)?;
             bytes.push(byte);
         }
 
@@ -286,42 +286,42 @@ impl Cpu6502Snapshot {
             // JSR handles operand fetching internally, so we read address for display
             (AddressingMode::Absolute, Operand::None, OpCode::JSR) => {
                 let pc_plus_1 = registers.safe_pc_add(1)?;
-                let addr = bus.borrow().trace_read_byte(pc_plus_1)? as u16
-                    | ((bus.borrow().trace_read_byte(registers.safe_pc_add(2)?)? as u16) << 8);
+                let addr = bus.borrow().peek_byte(pc_plus_1)? as u16
+                    | ((bus.borrow().peek_byte(registers.safe_pc_add(2)?)? as u16) << 8);
                 format!("${:04X}", addr)
             },
 
             (AddressingMode::Absolute, Operand::Address(addr), _) =>
-                format!("${:04X} = {:02X}", *addr, bus.borrow().trace_read_byte(*addr)?),
+                format!("${:04X} = {:02X}", *addr, bus.borrow().peek_byte(*addr)?),
 
             (AddressingMode::Relative, Operand::Address(addr), _) =>
                 format!("${:04X}", *addr),
 
             (AddressingMode::ZeroPage, Operand::Address(addr), _) =>
-                format!("${:02X} = {:02X}", *addr as u8, bus.borrow().trace_read_byte(*addr)?),
+                format!("${:02X} = {:02X}", *addr as u8, bus.borrow().peek_byte(*addr)?),
 
             (AddressingMode::AbsoluteIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+                format!("${:04X},X @ {:04X} = {:02X}", *addr, *effective, bus.borrow().peek_byte(*effective)?),
 
             (AddressingMode::AbsoluteIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+                format!("${:04X},Y @ {:04X} = {:02X}", *addr, *effective, bus.borrow().peek_byte(*effective)?),
 
             (AddressingMode::ZeroPageIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+                format!("${:02X},X @ {:02X} = {:02X}", *addr, *effective, bus.borrow().peek_byte(*effective)?),
 
             (AddressingMode::ZeroPageIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
-                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, bus.borrow().trace_read_byte(*effective)?),
+                format!("${:02X},Y @ {:02X} = {:02X}", *addr, *effective, bus.borrow().peek_byte(*effective)?),
 
             (AddressingMode::Indirect, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:04X}) = {:04X}", *addr, *effective),
 
             (AddressingMode::IndirectIndexedX, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:02X},X) @ {:02X} = {:04X} = {:02X}", *addr, (*addr as u8).wrapping_add(registers.x),
-                        *effective, bus.borrow().trace_read_byte(*effective)?),
+                        *effective, bus.borrow().peek_byte(*effective)?),
 
             (AddressingMode::IndirectIndexedY, Operand::AddressAndEffectiveAddress(addr, effective, _), _) =>
                 format!("(${:02X}),Y = {:04X} @ {:04X} = {:02X}", *addr, (*effective).wrapping_sub(registers.y as u16),
-                        *effective, bus.borrow().trace_read_byte(*effective)?),
+                        *effective, bus.borrow().peek_byte(*effective)?),
 
             (AddressingMode::Immediate, Operand::Byte(byte), _) =>
                 format!("#${:02X}", byte),

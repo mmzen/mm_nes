@@ -618,7 +618,7 @@ impl Memory for Ppu2c02 {
         Ok(value)
     }
 
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+    fn peek_byte(&self, addr: u16) -> Result<u8, MemoryError> {
 
         let value = match addr {
             0x00 => self.register.borrow().control,

@@ -68,8 +68,8 @@ impl Memory for PpuDma {
         Ok(self.data_bus.get())
     }
 
-    fn trace_read_byte(&self, _addr: u16) -> Result<u8, MemoryError> {
-        // For tracing, also return open bus (don't expose internal state)
+    fn peek_byte(&self, _addr: u16) -> Result<u8, MemoryError> {
+        // For peeking, also return open bus (don't expose internal state)
         Ok(self.data_bus.get())
     }
 

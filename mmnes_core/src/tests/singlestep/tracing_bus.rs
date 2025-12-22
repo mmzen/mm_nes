@@ -73,7 +73,7 @@ impl Memory for TracingBus {
         Ok(value)
     }
 
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+    fn peek_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         // Non-tracing read for debugging purposes
         Ok(self.memory[addr as usize])
     }

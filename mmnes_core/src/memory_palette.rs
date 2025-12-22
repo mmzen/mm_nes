@@ -20,9 +20,9 @@ impl Memory for MemoryPalette {
         self.memory.read_byte(mirrored_addr)
     }
 
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+    fn peek_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         let mirrored_addr = self.get_mirrored_address(addr);
-        self.memory.trace_read_byte(mirrored_addr)
+        self.memory.peek_byte(mirrored_addr)
     }
 
     fn write_byte(&mut self, addr: u16, value: u8) -> Result<(), MemoryError> {

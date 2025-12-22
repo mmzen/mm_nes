@@ -113,7 +113,7 @@ impl Memory for NromCartridge {
         self.prg_rom.borrow().read_byte(addr)
     }
 
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+    fn peek_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         self.read_byte(addr)
     }
 

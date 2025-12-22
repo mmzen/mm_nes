@@ -1,4 +1,4 @@
-// Authorship: Human 90% | Claude 10%
+// Authorship: Human 85% | Claude 15%
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -32,9 +32,10 @@ impl Memory for NESBus {
         Ok(value)
     }
 
-    fn trace_read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+    /// Peek at memory without updating data bus (for debugging/disassembly only).
+    fn peek_byte(&self, addr: u16) -> Result<u8, MemoryError> {
         let (memory, effective_addr) = self.lookup_address(addr)?;
-        let value = memory.borrow().trace_read_byte(effective_addr)?;
+        let value = memory.borrow().peek_byte(effective_addr)?;
 
         Ok(value)
     }
@@ -125,7 +126,19 @@ impl NESBus {
 
     fn lookup_address(&self, addr: u16) -> Result<(Rc<RefCell<dyn BusDevice>>, u16), BusError> {
         let device = self.devices[addr as usize].clone();
-        let effective_addr = addr & (device.borrow().size() - 1) as u16;
+        let size = device.borrow().size();
+
+        // INVARIANT: Device size must be a power of two for correct address masking.
+        // A non-power-of-two size will produce incorrect effective addresses via the
+        // `addr & (size - 1)` mask. If this fires, the device's size() is misconfigured.
+        debug_assert!(
+            size.is_power_of_two(),
+            "BUS: device {} has non-power-of-two size {} - address masking will be incorrect!",
+            device.borrow().get_name(),
+            size
+        );
+
+        let effective_addr = addr & (size - 1) as u16;
 
         trace!("BUS: translated address 0x{:04X} to device {} ({}, 0x{:04X} - 0x{:04X}), effective address 0x{:04X}",
                     addr, device.borrow().get_name(), device.borrow().get_device_type(),
@@ -189,7 +202,7 @@ impl Memory for OpenBus {
         Ok(self.data_bus.get())  // Return current data bus value
     }
 
-    fn trace_read_byte(&self, _: u16) -> Result<u8, MemoryError> {
+    fn peek_byte(&self, _: u16) -> Result<u8, MemoryError> {
         Ok(self.data_bus.get())
     }
 
