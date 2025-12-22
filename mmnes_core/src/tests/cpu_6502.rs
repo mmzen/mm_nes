@@ -1,4 +1,4 @@
-// Authorship: Human 55% | Claude 45%
+// Authorship: Human 50% | Claude 50%
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
@@ -631,13 +631,13 @@ fn nmi_signaled_before_final_cycle_is_serviced() -> Result<(), CpuError> {
     Ok(())
 }
 
-/// Test that NMI signaled AFTER instruction completion does not affect current instruction.
-/// This tests the timing: if NMI arrives "during" the final cycle (after the poll),
-/// it should not be serviced until the next instruction.
+/// Test that NMI signaled AFTER instruction completion triggers at the next
+/// instruction boundary, BEFORE executing the next instruction.
 ///
 /// In our emulation model:
-/// - Poll happens at START of step_cycle()
-/// - NMI signaled after step_cycle() completes will be seen by next instruction
+/// - Poll happens at START of step_cycle() (FetchOpcode)
+/// - NMI signaled after step_cycle() completes will be seen at the NEXT FetchOpcode
+/// - The interrupt sequence begins BEFORE the next opcode is fetched/executed
 #[test]
 fn nmi_signaled_after_instruction_completion_delays_to_next_instruction() -> Result<(), CpuError> {
     use crate::tests::singlestep::tracing_bus::TracingBus;
@@ -680,16 +680,22 @@ fn nmi_signaled_after_instruction_completion_delays_to_next_instruction() -> Res
     // This simulates NMI arriving after the final cycle of an instruction
     cpu.signal_nmi()?;
 
-    // Execute second NOP - NMI should be polled and latched on cycle 1
-    // Cycle 1: Fetch opcode (poll: NMI pending, latched!)
-    cpu.step_cycle()?;
-    // Cycle 2: Execute NOP (poll: NMI still pending, already latched)
+    // Next step_cycle is FetchOpcode for second NOP at 0x8001
+    // NMI should be polled and latched, then interrupt triggers IMMEDIATELY
+    // The second NOP does NOT execute - interrupt takes priority
     let result = cpu.step_cycle()?;
-    assert!(result.instruction_complete);
 
-    // NMI should be serviced now - CPU transitions to InterruptSequence
-    assert!(cpu.is_mid_instruction(), "CPU should be in interrupt sequence");
-    run_interrupt_sequence(&mut cpu)?;
+    // This is interrupt cycle 1 (dummy read at PC), NOT the NOP fetch
+    assert!(!result.instruction_complete, "First interrupt cycle should not complete");
+    assert_eq!(result.address, Some(0x8001), "Should do dummy read at PC (0x8001)");
+
+    // Complete the remaining 6 cycles of interrupt sequence
+    for i in 2..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(result.instruction_complete, "Interrupt should complete on cycle 7");
+        }
+    }
 
     let snapshot = cpu.snapshot()?;
     assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");
@@ -697,8 +703,8 @@ fn nmi_signaled_after_instruction_completion_delays_to_next_instruction() -> Res
     Ok(())
 }
 
-/// Test that IRQ is only serviced if I flag is clear at instruction completion.
-/// Even if IRQ was latched during execution, SEI setting I flag should prevent service.
+/// Test that IRQ is only serviced if I flag is clear at the instruction boundary.
+/// If I flag is set (by SEI), subsequent IRQs should not trigger.
 #[test]
 fn irq_respects_i_flag_at_instruction_completion() -> Result<(), CpuError> {
     use crate::tests::singlestep::tracing_bus::TracingBus;
@@ -706,10 +712,11 @@ fn irq_respects_i_flag_at_instruction_completion() -> Result<(), CpuError> {
     init();
 
     let mut bus = TracingBus::new();
-    // SEI (2 cycles) - sets I flag
+    // SEI (2 cycles) - sets I flag, followed by NOP
     bus.load_memory(&[
         (0x8000, 0x78), // SEI
-        (0x8001, 0xEA), // NOP (should execute, not interrupted)
+        (0x8001, 0xEA), // NOP (should execute, not interrupted because I=1)
+        (0x8002, 0xEA), // NOP
         // IRQ vector
         (0xFFFE, 0x00),
         (0xFFFF, 0x90),
@@ -722,34 +729,39 @@ fn irq_respects_i_flag_at_instruction_completion() -> Result<(), CpuError> {
     let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
     cpu.initialize()?;
 
-    // Clear I flag initially so IRQ would be serviced
+    // Clear I flag initially
     cpu.set_status_for_test(cpu.get_status() & !0x04);
 
-    // Signal IRQ before executing SEI
+    // Execute SEI (2 cycles) WITHOUT any IRQ pending
+    cpu.step_cycle()?;
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete, "SEI should complete");
+
+    // Verify I flag is now set
+    let snapshot = cpu.snapshot()?;
+    assert!(snapshot.p() & 0x04 != 0, "I flag should be set after SEI");
+    assert_eq!(snapshot.pc(), 0x8001, "PC should be at NOP");
+
+    // NOW signal IRQ - but I flag is set, so it should NOT trigger
     cpu.signal_irq(APU_FRAME_COUNTER_IRQ)?;
 
-    // Execute SEI (2 cycles)
-    // Cycle 1: Fetch opcode (poll: IRQ asserted, I clear, latched!)
+    // Execute NOP (2 cycles) - IRQ should NOT trigger because I=1
     cpu.step_cycle()?;
-    // Cycle 2: Execute SEI - sets I flag
     let result = cpu.step_cycle()?;
-    assert!(result.instruction_complete);
-    // IRQ was latched on cycle 1 when I was clear, but SEI set I on cycle 2
-    // The I flag check at completion should see I=1 and NOT service the IRQ
+    assert!(result.instruction_complete, "NOP should complete (IRQ blocked by I flag)");
+
     // CPU should NOT be in interrupt sequence
-    assert!(!cpu.is_mid_instruction(), "IRQ should NOT trigger because I flag is now set");
+    assert!(!cpu.is_mid_instruction(), "IRQ should NOT trigger because I flag is set");
 
     let snapshot = cpu.snapshot()?;
-    // Should be at 0x8001 (next instruction), not at IRQ handler
-    assert_eq!(snapshot.pc(), 0x8001, "PC should be at 0x8001, not IRQ handler");
-
-    // Verify I flag is set
-    assert!(cpu.get_interrupt_disable(), "I flag should be set after SEI");
+    // Should be at 0x8002 (next instruction), not at IRQ handler
+    assert_eq!(snapshot.pc(), 0x8002, "PC should be at 0x8002, not IRQ handler");
 
     Ok(())
 }
 
 /// Test that NMI has priority over IRQ when both are pending.
+/// When both are pending at instruction boundary, NMI should be serviced first.
 #[test]
 fn nmi_has_priority_over_irq() -> Result<(), CpuError> {
     use crate::tests::singlestep::tracing_bus::TracingBus;
@@ -758,7 +770,7 @@ fn nmi_has_priority_over_irq() -> Result<(), CpuError> {
 
     let mut bus = TracingBus::new();
     bus.load_memory(&[
-        (0x8000, 0xEA), // NOP
+        (0x8000, 0xEA), // NOP (will be interrupted by NMI)
         (0x8001, 0xEA), // NOP
         // NMI vector
         (0xFFFA, 0x00),
@@ -781,18 +793,26 @@ fn nmi_has_priority_over_irq() -> Result<(), CpuError> {
     // Clear I flag
     cpu.set_status_for_test(cpu.get_status() & !0x04);
 
-    // Signal both NMI and IRQ
+    // Signal both NMI and IRQ before first instruction
     cpu.signal_nmi()?;
     cpu.signal_irq(APU_FRAME_COUNTER_IRQ)?;
 
-    // Execute NOP (2 cycles)
-    cpu.step_cycle()?;
+    // At FetchOpcode, both interrupts are detected
+    // NMI has priority, so interrupt sequence begins immediately
+    // The NOP does NOT execute
     let result = cpu.step_cycle()?;
-    assert!(result.instruction_complete);
 
-    // Interrupt should trigger - CPU enters InterruptSequence
-    assert!(cpu.is_mid_instruction(), "Interrupt should trigger");
-    run_interrupt_sequence(&mut cpu)?;
+    // This is interrupt cycle 1 (dummy read at PC), NOT the NOP fetch
+    assert!(!result.instruction_complete, "First interrupt cycle should not complete");
+    assert_eq!(result.address, Some(0x8000), "Should do dummy read at PC (0x8000)");
+
+    // Complete the remaining 6 cycles of interrupt sequence
+    for i in 2..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(result.instruction_complete, "Interrupt should complete on cycle 7");
+        }
+    }
 
     // Should jump to NMI handler (0x9000), not IRQ handler (0xA000)
     let snapshot = cpu.snapshot()?;
@@ -851,6 +871,168 @@ fn nmi_latched_state_persists_even_if_cleared_before_completion() -> Result<(), 
 
     let snapshot = cpu.snapshot()?;
     assert_eq!(snapshot.pc(), 0x9000, "PC should be at NMI handler");
+
+    Ok(())
+}
+
+// ============================================================================
+// Interrupt Flag Latency tests (AccuracyCoin code 1)
+// These tests verify that IRQ is serviced at instruction boundary without
+// executing an extra opcode.
+// ============================================================================
+
+/// Test that IRQ pending at instruction boundary triggers immediately.
+/// When IRQ is asserted and I flag is clear, the CPU must enter the interrupt
+/// sequence at the next instruction boundary WITHOUT executing the next opcode.
+#[test]
+fn irq_at_instruction_boundary_triggers_immediately() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    // Program: NOP at 0x8000, LDA #$FF at 0x8001 (should NOT execute if IRQ triggers)
+    bus.load_memory(&[
+        (0x8000, 0xEA), // NOP (first instruction)
+        (0x8001, 0xA9), // LDA immediate (should NOT be executed)
+        (0x8002, 0xFF), // operand for LDA
+        // IRQ vector points to 0xA000
+        (0xFFFE, 0x00),
+        (0xFFFF, 0xA0),
+        // IRQ handler at 0xA000 - just has a NOP
+        (0xA000, 0xEA),
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Clear I flag to allow IRQ
+    cpu.set_status_for_test(cpu.get_status() & !0x04);
+
+    // Verify initial state
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x8000, "Should start at 0x8000");
+    assert_eq!(snapshot.a(), 0, "A should be 0 initially");
+
+    // Execute NOP (2 cycles)
+    cpu.step_cycle()?; // Cycle 1: Fetch NOP
+    let result = cpu.step_cycle()?; // Cycle 2: Execute NOP
+    assert!(result.instruction_complete, "NOP should complete");
+
+    // Now PC is at 0x8001 (LDA instruction)
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0x8001, "PC should be at 0x8001 after NOP");
+
+    // Signal IRQ - this should be serviced at the next instruction boundary
+    // BEFORE the LDA is executed
+    cpu.signal_irq(APU_FRAME_COUNTER_IRQ)?;
+
+    // Next step_cycle should detect IRQ at FetchOpcode and enter interrupt sequence
+    // It should NOT fetch and execute the LDA instruction
+    let result = cpu.step_cycle()?;
+
+    // This cycle should be the first cycle of the interrupt sequence (dummy read at PC)
+    // NOT the opcode fetch for LDA
+    assert!(!result.instruction_complete, "First interrupt cycle should not complete");
+    assert_eq!(result.address, Some(0x8001), "Should do dummy read at PC (0x8001)");
+
+    // A register should still be 0 - LDA was never executed
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.a(), 0, "A should still be 0 - LDA was NOT executed");
+
+    // Complete the remaining 6 cycles of interrupt sequence
+    for i in 2..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(result.instruction_complete, "Interrupt should complete on cycle 7");
+        }
+    }
+
+    // PC should be at IRQ handler
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0xA000, "PC should be at IRQ handler");
+    assert_eq!(snapshot.a(), 0, "A should still be 0 - LDA was never executed");
+
+    Ok(())
+}
+
+/// Test that IRQ latched while I flag is set gets serviced after CLI clears the flag.
+/// This tests the latching semantics: IRQ line state is sampled independently of I flag.
+#[test]
+fn irq_latched_while_i_flag_set_triggers_after_cli() -> Result<(), CpuError> {
+    use crate::tests::singlestep::tracing_bus::TracingBus;
+
+    init();
+
+    let mut bus = TracingBus::new();
+    // Program: SEI, <signal IRQ here>, CLI, NOP (NOP should NOT execute)
+    bus.load_memory(&[
+        (0x8000, 0x78), // SEI (2 cycles) - sets I flag
+        (0x8001, 0x58), // CLI (2 cycles) - clears I flag
+        (0x8002, 0xEA), // NOP - should NOT execute if IRQ triggers correctly
+        // IRQ vector
+        (0xFFFE, 0x00),
+        (0xFFFF, 0xA0),
+        // IRQ handler at 0xA000
+        (0xA000, 0xEA),
+        // Reset vector
+        (0xFFFC, 0x00),
+        (0xFFFD, 0x80),
+    ]);
+
+    let mut cpu = Cpu6502::new(Rc::new(RefCell::new(bus)));
+    cpu.initialize()?;
+
+    // Clear I flag initially so we start in a known state
+    cpu.set_status_for_test(cpu.get_status() & !0x04);
+
+    // Execute SEI (2 cycles) - this sets the I flag
+    cpu.step_cycle()?;
+    let result = cpu.step_cycle()?;
+    assert!(result.instruction_complete, "SEI should complete");
+
+    // Verify I flag is set
+    let snapshot = cpu.snapshot()?;
+    assert!(snapshot.p() & 0x04 != 0, "I flag should be set after SEI");
+    assert_eq!(snapshot.pc(), 0x8001, "PC should be at CLI");
+
+    // Signal IRQ while I flag is set
+    // The IRQ line should be latched even though I=1
+    cpu.signal_irq(APU_FRAME_COUNTER_IRQ)?;
+
+    // Execute CLI (2 cycles) - this clears the I flag
+    // During CLI's execution, IRQ is being latched each cycle
+    cpu.step_cycle()?; // Cycle 1: Fetch CLI
+    let result = cpu.step_cycle()?; // Cycle 2: Execute CLI
+    assert!(result.instruction_complete, "CLI should complete");
+
+    // After CLI, I flag should be clear
+    let snapshot = cpu.snapshot()?;
+    assert!(snapshot.p() & 0x04 == 0, "I flag should be clear after CLI");
+    assert_eq!(snapshot.pc(), 0x8002, "PC should be at NOP");
+
+    // Now at the next instruction boundary (FetchOpcode for NOP at 0x8002),
+    // IRQ should be detected and serviced immediately
+    let result = cpu.step_cycle()?;
+
+    // This should be interrupt cycle 1, NOT the NOP fetch
+    assert!(!result.instruction_complete);
+    assert_eq!(result.address, Some(0x8002), "Should do dummy read at PC (0x8002)");
+
+    // Complete interrupt sequence (cycles 2-7)
+    for i in 2..=7 {
+        let result = cpu.step_cycle()?;
+        if i == 7 {
+            assert!(result.instruction_complete, "Interrupt should complete on cycle 7");
+        }
+    }
+
+    // PC should be at IRQ handler
+    let snapshot = cpu.snapshot()?;
+    assert_eq!(snapshot.pc(), 0xA000, "PC should be at IRQ handler");
 
     Ok(())
 }

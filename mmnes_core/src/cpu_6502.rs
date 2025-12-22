@@ -605,7 +605,40 @@ impl CPU for Cpu6502 {
                 // This samples the current NMI/IRQ state
                 self.poll_interrupts();
 
-                // Cycle 1: fetch opcode only
+                // CRITICAL: Check for pending interrupt BEFORE fetching opcode
+                // If an interrupt is pending at this instruction boundary, we must
+                // NOT execute the next opcode. Instead, enter the interrupt sequence
+                // immediately. The first cycle performs a dummy read at PC.
+                if let Some(int_type) = self.check_interrupt_from_latch() {
+                    // Clear pending_nmi if we're servicing NMI
+                    if int_type == InterruptType::Nmi {
+                        self.pending_nmi = false;
+                    }
+
+                    // Perform dummy read at current PC (interrupt cycle 1)
+                    let pc = self.registers.pc;
+                    let data = self.bus.borrow().read_byte(pc)?;
+                    self.cycles += 1;
+
+                    // Transition to interrupt sequence - cycle 2 is next
+                    // (we just completed cycle 1's dummy read above)
+                    self.cycle_state = CpuCycleState::InterruptSequence {
+                        interrupt_type: int_type,
+                        cycle: 2,
+                        state: InstructionState::default(),
+                    };
+
+                    return Ok(CpuCycleResult {
+                        memory_read: true,
+                        address: Some(pc),
+                        data: Some(data),
+                        bus_op: BusOperation::Read,
+                        cycle_description: "Interrupt: dummy read (PC) [cycle 1]",
+                        ..Default::default()
+                    });
+                }
+
+                // No interrupt pending - fetch opcode as normal
                 let pc = self.registers.pc;
                 let opcode = self.bus.borrow().read_byte(pc)?;
                 let instruction = Cpu6502::decode_instruction(opcode)?;
@@ -3472,8 +3505,9 @@ impl Cpu6502 {
     /// the NMI line transitions from high to low. Once detected, pending_nmi
     /// stays true until serviced, but we only latch it if it was pending at poll time.
     ///
-    /// IRQ level detection: IRQ is level-sensitive. We simply sample the current
-    /// state of the IRQ line and the I flag.
+    /// IRQ level detection: IRQ is level-sensitive. We sample the IRQ line state
+    /// independently of the I flag. The I flag is checked only when deciding
+    /// whether to service the interrupt (in check_interrupt_from_latch).
     fn poll_interrupts(&mut self) {
         // NMI: Latch if pending_nmi is currently set
         // Note: pending_nmi is set by signal_nmi() on the falling edge
@@ -3482,10 +3516,14 @@ impl Cpu6502 {
             self.latched_nmi = true;
         }
 
-        // IRQ: Latch if IRQ line is asserted AND I flag is clear
+        // IRQ: Latch if IRQ line is asserted (independently of I flag)
+        // The I flag is checked only when deciding whether to SERVICE the interrupt,
+        // not when latching. This ensures correct behavior when:
+        //   - IRQ is asserted while I=1
+        //   - I is cleared shortly before the instruction boundary
         // Note: is_asserted_irq() returns Ok(true) if any IRQ source is active
         if let Ok(irq_asserted) = self.is_asserted_irq() {
-            if irq_asserted && !self.registers.get_status(StatusFlag::InterruptDisable) {
+            if irq_asserted {
                 self.latched_irq = true;
             }
         }

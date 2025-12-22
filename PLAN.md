@@ -65,6 +65,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | AccuracyCoin OPEN BUS Fixes | **$4015 open bus behavior** | FAIL 7 & FAIL 9 fixed |
 | **Legacy Code Elimination** | **Removed instruction-boundary execution** | Single `step_master_cycle()` path |
 | **DMA Implementation (All 7 Phases)** | **Production-grade DMA** | Bus arbiter, phase tracking, 31 tests, 14 code reviews |
+| **Interrupt Flag Latency Fix** | **IRQ/NMI at instruction boundary** | AccuracyCoin code 1 fix, 2 new tests |
 
 ---
 
@@ -83,7 +84,9 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 - Renamed `trace_read_byte` → `peek_byte` to prevent footgun misuse
 - Power-of-two size enforcement for address masking
 
-**All 323 tests pass (580 total, 257 ignored), frontend builds successfully.**
+**Interrupt Flag Latency fix also complete** - IRQ/NMI now serviced at instruction boundary without extra opcode (AccuracyCoin code 1).
+
+**All 325 tests pass (582 total, 257 ignored), frontend builds successfully.**
 
 Full DMA code review history archived in session logs below.
 
@@ -278,7 +281,20 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
     - Verified not used in `step_cycle()` path (only debugging/init)
   - **Bug #3 Fixed**: Added `debug_assert!(size.is_power_of_two())` in `lookup_address()`
     - Prevents silent misconfiguration of device address masking
-- All 323 tests pass (580 total, 257 ignored), frontend builds successfully
+- **Interrupt Flag Latency Fix** - addressing issues from `requirements/TEST_interrupt_flag_latency_0.md`
+  - **Phase 1**: Fixed IRQ latching semantics in `poll_interrupts()`
+    - IRQ line now latched independently of I flag (was gating on I flag - wrong!)
+    - I flag checked only in `check_interrupt_from_latch()` when deciding to service
+  - **Phase 2**: Fixed `FetchOpcode` to check interrupts BEFORE fetching opcode
+    - If interrupt pending at instruction boundary, enter `InterruptSequence` immediately
+    - CPU no longer executes an extra opcode when IRQ/NMI is pending
+    - First cycle performs dummy read at PC (correct 6502 behavior)
+  - **Phase 3**: Added 2 new interrupt timing tests
+    - `irq_at_instruction_boundary_triggers_immediately` - verifies no extra opcode
+    - `irq_latched_while_i_flag_set_triggers_after_cli` - verifies I flag semantics
+  - **Phase 4**: Updated 3 existing tests to match correct behavior
+    - Tests now expect interrupt at boundary, not after instruction completion
+- All 325 tests pass (582 total, 257 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)
 - **PPU DMA Code Review** - addressing issues from `requirements/DMA_ppu_dma_code_review_0.md`
