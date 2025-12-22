@@ -8,7 +8,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use crate::bus::MockBusStub;
 use crate::dma_controller::DmaController;
-use crate::dma_device::MockDmaDeviceStub;
 use crate::memory::Memory;
 use crate::ppu_dma::PpuDma;
 use crate::tests::init;
@@ -83,19 +82,13 @@ fn double_write_last_value_wins() {
         "Double-write: last value should win");
 }
 
-/// Creates a DmaController with mock bus/ppu for timing tests.
-fn create_dma_controller() -> DmaController<MockBusStub, MockDmaDeviceStub> {
+/// Creates a DmaController with mock bus for timing tests.
+fn create_dma_controller() -> DmaController<MockBusStub> {
     let mut bus = MockBusStub::new();
     bus.expect_read_byte().returning(|addr| Ok((addr & 0xFF) as u8));
     bus.expect_write_byte().returning(|_, _| Ok(()));
 
-    let mut ppu = MockDmaDeviceStub::new();
-    ppu.expect_dma_write().returning(|_, _| Ok(()));
-
-    DmaController::new(
-        Rc::new(RefCell::new(bus)),
-        Rc::new(RefCell::new(ppu))
-    )
+    DmaController::new(Rc::new(RefCell::new(bus)))
 }
 
 /// Integration test: Verifies the N+1 timing contract.

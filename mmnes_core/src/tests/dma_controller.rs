@@ -11,21 +11,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use crate::bus::MockBusStub;
 use crate::dma_controller::{ApuPhase, BusOp, BusWinner, DmaController};
-use crate::dma_device::MockDmaDeviceStub;
 use crate::tests::init;
 
-fn create_controller() -> DmaController<MockBusStub, MockDmaDeviceStub> {
+fn create_controller() -> DmaController<MockBusStub> {
     let mut bus = MockBusStub::new();
     bus.expect_read_byte().returning(|addr| Ok((addr & 0xFF) as u8));
     bus.expect_write_byte().returning(|_, _| Ok(()));
 
-    let mut ppu = MockDmaDeviceStub::new();
-    ppu.expect_dma_write().returning(|_, _| Ok(()));
-
-    DmaController::new(
-        Rc::new(RefCell::new(bus)),
-        Rc::new(RefCell::new(ppu))
-    )
+    DmaController::new(Rc::new(RefCell::new(bus)))
 }
 
 /// Helper to check if a BusOp is a read
@@ -80,14 +73,14 @@ fn test_oam_dma_cycles_get_phase_start() {
     init();
     // oam_dma_cycles is now a static method that takes the write phase
     // Write on GET phase = 513 cycles
-    assert_eq!(DmaController::<MockBusStub, MockDmaDeviceStub>::oam_dma_cycles(ApuPhase::Get), 513);
+    assert_eq!(DmaController::<MockBusStub>::oam_dma_cycles(ApuPhase::Get), 513);
 }
 
 #[test]
 fn test_oam_dma_cycles_put_phase_start() {
     init();
     // Write on PUT phase = 514 cycles
-    assert_eq!(DmaController::<MockBusStub, MockDmaDeviceStub>::oam_dma_cycles(ApuPhase::Put), 514);
+    assert_eq!(DmaController::<MockBusStub>::oam_dma_cycles(ApuPhase::Put), 514);
 }
 
 #[test]
@@ -430,13 +423,7 @@ fn test_cpu_repeated_read_during_dma_idle() {
     bus.expect_read_byte().returning(|addr| Ok((addr & 0xFF) as u8));
     bus.expect_write_byte().returning(|_, _| Ok(()));
 
-    let mut ppu = MockDmaDeviceStub::new();
-    ppu.expect_dma_write().returning(|_, _| Ok(()));
-
-    let mut controller = DmaController::new(
-        Rc::new(RefCell::new(bus)),
-        Rc::new(RefCell::new(ppu))
-    );
+    let mut controller = DmaController::new(Rc::new(RefCell::new(bus)));
 
     // Start OAM DMA - address will be captured at halt via step_cycle parameter
     controller.start_oam_dma(0x02);

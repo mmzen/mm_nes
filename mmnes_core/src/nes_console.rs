@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use std::rc::Rc;
-use log::{debug, info};
+use log::{debug, info, trace};
 use crate::apu::{ApuError, ApuType, APU};
 use crate::apu_rp2a03::ApuRp2A03;
 use crate::bus::{Bus, BusError, BusType};
@@ -16,7 +16,6 @@ use crate::cpu_6502::Cpu6502;
 use crate::cpu_debugger::CpuSnapshot;
 use crate::dma::PpuDmaType;
 use crate::dma_controller::{ApuPhase, DmaController};
-use crate::dma_device::DmaDevice;
 use crate::ines_loader::INesLoader;
 use crate::input::InputError;
 use crate::input_external::InputExternal;
@@ -75,7 +74,7 @@ pub struct NesConsole {
     /// Same semantics as cpu_counter.current - increments every cycle including DMA.
     master_cycles: u64,
     /// DMA controller for cycle-accurate OAM DMA
-    dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
+    dma_controller: DmaController<dyn Bus>,
     /// Last address the CPU read from (for DMA repeated reads)
     /// During DMA no-bus cycles, the external bus shows repeated reads from this address,
     /// causing side effects for certain registers ($2002, $2007, $4016/$4017)
@@ -110,7 +109,7 @@ impl NesConsole {
         entry_point: Option<u16>,
         config: ConfigSpec,
         dma_start_page: Rc<Cell<Option<u8>>>,
-        dma_controller: DmaController<dyn Bus, dyn DmaDevice>,
+        dma_controller: DmaController<dyn Bus>,
     ) -> NesConsole {
         let mut console = NesConsole {
             cpu,
@@ -222,7 +221,10 @@ impl NesConsole {
         // Start DMC DMA if APU requested it
         // NOTE: Same as above - address captured at halt, not at request time
         if let Some(dmc_address) = dmc_dma_request {
-            self.dma_controller.request_dmc_dma(dmc_address);
+            let accepted = self.dma_controller.request_dmc_dma(dmc_address);
+            if !accepted {
+                trace!("DMC DMA request rejected (already active) at address ${:04X}", dmc_address);
+            }
         }
 
         // ============================================================
@@ -288,6 +290,20 @@ impl NesConsole {
 
             result
         };
+
+        // ============================================================
+        // Scheduler invariant assertion (catches double-stepping or starvation)
+        // ============================================================
+        // - If DMA used bus OR CPU stalled: CPU must NOT have stepped (halted=true)
+        // - If DMA didn't use bus AND CPU not stalled: CPU must have stepped (halted=false)
+        let cpu_should_be_halted = self.dma_controller.is_cpu_stalled() || dma_used_bus;
+        debug_assert_eq!(
+            cpu_result.halted, cpu_should_be_halted,
+            "Scheduler invariant violated: cpu_result.halted={} but expected {} \
+             (is_cpu_stalled={}, dma_used_bus={})",
+            cpu_result.halted, cpu_should_be_halted,
+            self.dma_controller.is_cpu_stalled(), dma_used_bus
+        );
 
         // ============================================================
         // STEP 4: ADVANCE ALL COMPONENTS (AFTER BUS OPERATION)
@@ -602,8 +618,6 @@ pub struct NesConsoleBuilder {
     config: ConfigSpec,
     /// Shared cell for OAM DMA start signal (page to transfer from)
     dma_start_page: Rc<Cell<Option<u8>>>,
-    /// Reference to PPU as DmaDevice for DmaController
-    ppu_dma_device: Option<Rc<RefCell<dyn DmaDevice>>>,
 }
 
 impl NesConsoleBuilder {
@@ -625,7 +639,6 @@ impl NesConsoleBuilder {
             cartridge: None,
             config: ConfigSpec::default(),
             dma_start_page: Rc::new(Cell::new(None)),
-            ppu_dma_device: None,
         }
     }
 
@@ -710,7 +723,7 @@ impl NesConsoleBuilder {
         Ok(Rc::new(RefCell::new(wram)))
     }
 
-    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, _bus: Rc<RefCell<dyn Bus>>, _ppu: Rc<RefCell<dyn DmaDevice>>, data_bus: Rc<Cell<u8>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
+    fn build_ppu_dma(&self, ppu_dma_type: &PpuDmaType, data_bus: Rc<Cell<u8>>) -> Result<Rc<RefCell<dyn BusDevice>>, NesConsoleError>{
         debug!("creating ppu dma {:?}", ppu_dma_type);
 
         let ppu_dma = match ppu_dma_type {
@@ -736,15 +749,13 @@ impl NesConsoleBuilder {
         };
 
         let ppu = Rc::new(RefCell::new(result));
-        let dma = self.build_ppu_dma(&PpuDmaType::NESPPUDMA, bus.clone(), ppu.clone(), data_bus)?;
+        let dma = self.build_ppu_dma(&PpuDmaType::NESPPUDMA, data_bus)?;
 
         ppu.borrow_mut().initialize()?;
         dma.borrow_mut().initialize()?;
 
         self.ppu = Some(ppu.clone());
         self.ppu_type = Some(ppu_type.clone());
-        // Store PPU as DmaDevice for DmaController
-        self.ppu_dma_device = Some(ppu.clone());
 
         Ok((ppu.clone(), dma))
     }
@@ -898,11 +909,8 @@ impl NesConsoleBuilder {
         let controller = self.controller.take()
             .ok_or(NesConsoleError::BuilderError("controller missing".to_string()))?;
 
-        // Create DmaController with bus and PPU (as DmaDevice)
-        let ppu_dma_device = self.ppu_dma_device.take()
-            .ok_or(NesConsoleError::BuilderError("ppu_dma_device missing".to_string()))?;
-
-        let dma_controller = DmaController::new(bus, ppu_dma_device);
+        // Create DmaController with bus (OAM writes go through bus to $2004)
+        let dma_controller = DmaController::new(bus);
 
         let console = NesConsole::new(
             cpu,

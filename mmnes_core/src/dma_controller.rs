@@ -40,7 +40,6 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
 use crate::bus::Bus;
-use crate::dma_device::DmaDevice;
 use crate::memory::MemoryError;
 
 /// PPU OAM data register address
@@ -106,17 +105,30 @@ pub enum BusWinner {
     None,
 }
 
-/// OAM DMA operation state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// OAM DMA operation states.
+///
+/// ## Cycle Structure (513 or 514 cycles total)
+///
+/// 1. **Halt cycle** (1 cycle): `Halt` state, no bus operation
+/// 2. **Alignment cycle** (0-1 cycles): `WaitGet` state if first read would land on PUT
+///    - This optional cycle ensures the first GET read occurs on a GET phase
+///    - If $4014 write occurs when next phase is GET: 513 cycles (no alignment needed)
+///    - If $4014 write occurs when next phase is PUT: 514 cycles (1 alignment cycle)
+/// 3. **Transfer cycles** (512 cycles): 256 GET/PUT pairs
+///    - `Get`: Read from source address on GET phase
+///    - `WaitPut`: Wait for PUT phase (within same byte transfer)
+///    - `Put`: Write to $2004 on PUT phase
+///    - `WaitGet`: Wait for GET phase (after PUT, before next byte's GET)
 pub enum OamDmaOp {
     /// Not active
     #[default]
     Idle,
     /// Attempting to halt CPU - waiting for CPU read cycle
     PendingHalt,
-    /// Halt succeeded - this is the halt cycle itself (1 cycle, no bus op)
+    /// Halt succeeded - this is the mandatory halt cycle (1 cycle, no bus op)
     Halt,
-    /// Waiting for GET phase to read
+    /// Waiting for GET phase to read - serves as alignment cycle when needed
     WaitGet,
     /// Performing GET read from source
     Get,
@@ -184,28 +196,27 @@ pub struct DmaStepResult {
 }
 
 /// DMA Controller with proper bus arbitration
+///
+/// OAM DMA writes go through the bus to $2004 (OAMDATA), so no direct PPU
+/// reference is needed. The bus handles routing to the correct device.
 #[derive(Debug)]
-pub struct DmaController<B: Bus + ?Sized, D: DmaDevice + ?Sized> {
+pub struct DmaController<B: Bus + ?Sized> {
     /// OAM DMA state
     oam: OamDmaState,
     /// DMC DMA state
     dmc: DmcDmaState,
-    /// Reference to system bus
+    /// Reference to system bus (all DMA operations go through here)
     bus: Rc<RefCell<B>>,
-    /// Reference to PPU for OAM writes (kept for compatibility, but writes go through bus)
-    #[allow(dead_code)]
-    ppu: Rc<RefCell<D>>,
     /// CPU's halted read address (for repeated reads when DMA doesn't use bus)
     cpu_halted_addr: Option<u16>,
 }
 
-impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
-    pub fn new(bus: Rc<RefCell<B>>, ppu: Rc<RefCell<D>>) -> Self {
+impl<B: Bus + ?Sized> DmaController<B> {
+    pub fn new(bus: Rc<RefCell<B>>) -> Self {
         DmaController {
             oam: OamDmaState::default(),
             dmc: DmcDmaState::default(),
             bus,
-            ppu,
             cpu_halted_addr: None,
         }
     }
@@ -307,16 +318,18 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     /// If DMC DMA is already active, this request is ignored. This allows the
     /// APU to be authoritative about WHEN to request without the scheduler
     /// needing to track DMA state.
-    pub fn request_dmc_dma(&mut self, address: u16) {
+    /// Returns true if the request was accepted, false if ignored (already active).
+    pub fn request_dmc_dma(&mut self, address: u16) -> bool {
         // Ignore duplicate requests if DMC DMA is already in progress
         if self.is_dmc_dma_active() {
-            return;
+            return false;
         }
         self.dmc = DmcDmaState {
             phase: DmcDmaPhase::PendingHalt,
             address,
             sample: None,
         };
+        true
     }
 
     // Legacy compatibility
@@ -358,6 +371,18 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
     pub fn step_cycle(&mut self, cpu_is_writing: bool, pending_read_addr: Option<u16>, current_phase: ApuPhase) -> Result<DmaStepResult, MemoryError> {
         let mut result = DmaStepResult::default();
         let next_phase = current_phase.toggle();
+
+        // ====================================================================
+        // Pre-step invariant: DMC Read state must only exist on GET phase
+        // ====================================================================
+        // If DMC is in Read state but we're on PUT phase, the Dummy→Align→Read
+        // sequencing is broken. This catches alignment bugs early rather than
+        // silently waiting an extra cycle.
+        debug_assert!(
+            self.dmc.phase != DmcDmaPhase::Read || current_phase.is_get(),
+            "DMC in Read state on PUT phase - Dummy/Align sequencing is broken. \
+             The alignment logic should guarantee Read only occurs on GET."
+        );
 
         // ====================================================================
         // Step 1: Advance pending halt states
@@ -406,6 +431,29 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         // ====================================================================
 
         let (bus_op, winner) = self.arbitrate(oam_wants, dmc_wants);
+
+        // ====================================================================
+        // Debug assertions: catch phase alignment drift early
+        // ====================================================================
+
+        // DMC Read must happen on GET phase - if we're reading on PUT, alignment is broken
+        debug_assert!(
+            winner != BusWinner::DmcRead || current_phase.is_get(),
+            "DMC Read occurred on PUT phase - alignment logic is broken"
+        );
+
+        // OAM PUT must happen on PUT phase - if we're writing on GET, alignment is broken
+        debug_assert!(
+            winner != BusWinner::OamPut || current_phase.is_put(),
+            "OAM PUT occurred on GET phase - alignment logic is broken"
+        );
+
+        // CpuRepeat should only happen when CPU is actually stalled
+        // (This is already enforced by arbitrate(), but belt-and-suspenders)
+        debug_assert!(
+            winner != BusWinner::CpuRepeat || self.is_cpu_stalled(),
+            "CpuRepeat returned when CPU is not stalled - should never happen"
+        );
 
         // ====================================================================
         // Step 4: Execute the bus operation based on winner
@@ -650,34 +698,7 @@ impl<B: Bus + ?Sized, D: DmaDevice + ?Sized> DmaController<B, D> {
         if write_phase.is_get() { 513 } else { 514 }
     }
 
-    // ========================================================================
-    // Phase management (for caller convenience)
-    // ========================================================================
-
     // NOTE: The DMA controller no longer tracks phase internally.
     // The caller (nes_console) must track phase and pass it to step_cycle().
-    // These methods are kept for test compatibility but delegate to a default.
-
-    #[cfg(test)]
-    pub fn set_apu_phase(&mut self, _phase: ApuPhase) {
-        // No-op - phase is now passed to step_cycle
-    }
-
-    #[cfg(test)]
-    pub fn get_apu_phase(&self) -> ApuPhase {
-        // Return default - phase is now passed to step_cycle
-        ApuPhase::Get
-    }
-
-    #[cfg(test)]
-    pub fn toggle_apu_phase(&mut self) {
-        // No-op - phase is now passed to step_cycle
-    }
-
-    // Legacy compatibility aliases
-    #[deprecated(note = "Phase is now passed to step_cycle")]
-    #[allow(dead_code)]
-    pub fn set_cpu_cycle_odd(&mut self, _odd: bool) {
-        // No-op - phase is now passed to step_cycle
-    }
+    // Tests should track phase locally and pass it explicitly.
 }

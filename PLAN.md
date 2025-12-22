@@ -71,117 +71,17 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 *No active tasks*
 
-### Recently Completed: DMA Code Review Round 9 (December 22, 2025)
+### DMA Code Review Status (December 22, 2025)
 
-Based on feedback in `requirements/DMA_code_review_8.md`, implemented 4 correctness fixes + 1 cleanup:
+**11 rounds of DMA code review complete.** DMA implementation is now production-grade with:
+- Bus arbiter model (one bus op per cycle)
+- Strict debug assertions for timing drift detection
+- Clean API (no dead code, explicit phase contracts)
+- Comprehensive test coverage (31 DMA + 5 PPU DMA tests)
 
-**Fixes implemented**:
-1. **Fixed DMC `cpu_already_halted` predicate** (CORRECTNESS):
-   - Was using `is_cpu_stalled()` which includes DMC states
-   - Created `is_cpu_stalled_by_oam()` method for OAM-only check
-   - DMC can now correctly detect if CPU is stalled by OAM when deciding to halt
-2. **Fixed CpuRepeat condition in arbitrate()** (CORRECTNESS):
-   - Changed from `is_active()` to `is_cpu_stalled()`
-   - Prevents stealing bus with CpuRepeat during PendingHalt (when DMA active but CPU not stalled)
-3. **Quarantined `oam_dma_cycles()` as test-only**:
-   - Added `#[cfg(test)]` attribute
-   - Added warning documentation about delayed halt assumptions
-4. **Verified $4014 N+1 timing** (already correct):
-   - Existing test confirms write on cycle N → DMA starts cycle N+1
-5. **Removed unused parameters** from `request_dmc_dma()`:
-   - Removed `_cpu_is_writing` and `_conflict_address` parameters
-   - Simplified signature to just `request_dmc_dma(address: u16)`
+**All 322 tests pass (579 total, 257 ignored), frontend builds successfully.**
 
-**Files modified**:
-- `dma_controller.rs`: Added `is_cpu_stalled_by_oam()`, `is_cpu_stalled_by_dmc()`, fixed arbitrate(), cleaned `request_dmc_dma()`
-- `nes_console.rs`: Updated `request_dmc_dma()` call
-- `tests/dma_controller.rs`: Updated test calls for new signature
-
-**All 322 tests pass (579 total, 257 ignored), frontend builds successfully**
-
----
-
-### Previously Completed: DMA Code Review Round 8 (December 22, 2025)
-
-Based on feedback in `requirements/DMA_code_review_7.md`, implemented 4 fixes + validation tests:
-
-**Fixes implemented**:
-1. **Enforced one bus op per cycle invariant** in scheduler
-2. **Fixed `DmaStepResult.cpu_halted`** - now uses `is_cpu_stalled()` instead of `is_active()`
-3. **Made `calculate_dmc_dma_cycles()` panic** - deprecation message
-4. **Replaced ad-hoc `cpu_already_halted` check** with canonical method
-
-**All 322 tests pass**
-
----
-
-### Previously Completed: DMA Code Review Round 7 - is_cpu_stalled() Fix (December 21, 2025)
-
-Based on feedback in `requirements/DMA_code_review_6.md`, fixed critical scheduler correctness bug:
-
-**Problem**: Scheduler used `is_active()` to halt CPU, but `is_active()` returns true for `PendingHalt` state. This caused the CPU to be halted immediately when DMA was requested, instead of waiting for a read cycle.
-
-**Fixes implemented**:
-1. **Added `is_cpu_stalled()` method** to DmaController - returns true only when CPU is actually stalled:
-   - OAM: `Halt`, `WaitGet`, `Get`, `WaitPut`, `Put`
-   - DMC: `Halt`, `Dummy`, `Align`, `Read`
-   - `PendingHalt` does NOT stall!
-2. **Restructured scheduler** (`step_master_cycle()`):
-   - DMA state machine advances when `is_active()` (including PendingHalt)
-   - CPU executes when `!is_cpu_stalled()` (continues during PendingHalt)
-3. **Added 2 new tests**: `test_cpu_not_stalled_during_pending_halt`, `test_cpu_not_stalled_during_dmc_pending_halt`
-
-**Files modified**:
-- `dma_controller.rs`: Added `is_cpu_stalled()` method (lines 260-274)
-- `nes_console.rs`: Restructured scheduler to use `is_cpu_stalled()`
-- `tests/dma_controller.rs`: Added 2 PendingHalt tests (28 tests total)
-
-**Acceptance criteria met**:
-- ✅ Writing $4014 on cycle N does NOT halt CPU on cycle N
-- ✅ First stall occurs on cycle N+1 (or later if CPU writing)
-- ✅ DMA overlap logic (DMC > OAM priority) unchanged
-
-**All 320 tests pass (576 total, 256 ignored), frontend builds successfully**
-
----
-
-### Recently Completed: PPU DMA Code Review (December 21, 2025)
-
-Based on feedback in `requirements/DMA_ppu_dma_code_review_0.md`, fixed PPU DMA register behavior:
-
-**Fixes implemented**:
-1. **Address decode**: Accepts both `0x00` (offset) and `0x4014` (absolute) defensively
-2. **Open bus reads**: `read_byte()` now returns `data_bus.get()` instead of last written value (consistent with APU)
-3. **Timing contract documented**: Module docs explain N+1 timing (scheduler samples latch next cycle)
-4. **Double-write documented**: "Last write wins" behavior documented
-5. **Logging reduced**: Changed `info!` to `debug!` in `initialize()`
-
-**Files modified**:
-- `ppu_dma.rs`: Open bus via data_bus, documentation (65% Claude)
-- `nes_console.rs`: Pass data_bus through build chain
-- `tests/ppu_dma.rs`: 5 tests (3 new: open bus, double-write, N+1 timing)
-
-**All 320 tests pass, frontend builds successfully**
-
----
-
-### Previously Completed: DMA Controller Code Review Round 6 (December 21, 2025)
-
-Based on feedback in `requirements/DMA_code_review_5.md`, implemented the critical "freeze address at halt" fix:
-
-**Fixes implemented**:
-1. **Halted address captured at halt transition** (CRITICAL): Changed from freezing address at DMA start to capturing it when `PendingHalt → Halt` actually succeeds. `step_cycle()` now takes `pending_read_addr` parameter. This fixes the case where DMA is triggered during CPU write cycle and halt is delayed.
-2. **Delayed halt tests**: Added 2 new tests verifying correct address is captured when halt is delayed by CPU write cycle (not the stale address from earlier).
-3. **DMC scheduling contract documented**: Added explicit contract in APU trait for `needs_dmc_dma()` - pure query, called before tick, APU is authoritative.
-4. **Duplicate rejection moved to DMA controller**: Removed `!is_dmc_dma_active()` guard from NesConsole. DMA controller now ignores duplicate requests internally. APU is fully authoritative.
-
-**Files modified**:
-- `dma_controller.rs`: New `step_cycle` signature with `pending_read_addr`, capture at halt, duplicate rejection
-- `nes_console.rs`: Pass pending_read_addr, removed guards (80% Claude, up from 78%)
-- `apu.rs`: Documented DMC scheduling contract
-- `tests/dma_controller.rs`: Added 2 delayed halt tests, updated all step_cycle calls (26 tests total)
-
-**All 314 tests pass, frontend builds successfully**
+Full DMA code review history archived in session logs below.
 
 ---
 
@@ -376,6 +276,16 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
   - Quarantined `oam_dma_cycles()` as `#[cfg(test)]` only with warning docs
   - Verified $4014 N+1 timing (already correct)
   - Removed unused `_cpu_is_writing` and `_conflict_address` params from `request_dmc_dma()`
+- **DMA Code Review Round 10** - addressing issues from `requirements/DMA_code_review_9.md`
+  - Added 3 debug assertions (DMC Read on GET, OAM PUT on PUT, CpuRepeat when stalled)
+  - Removed unused `ppu` field and `D: DmaDevice` type parameter from DmaController
+  - `request_dmc_dma()` now returns bool
+  - Documented WaitGet as alignment cycle (513/514 cycle structure)
+- **DMA Code Review Round 11** - addressing issues from `requirements/DMA_code_review_10.md`
+  - Added DMC Read state pre-assertion at top of `step_cycle()` (stricter timing enforcement)
+  - Added scheduler invariant assertion in `nes_console.rs` (validates cpu_halted correctness)
+  - Removed dead `set_apu_phase`/`get_apu_phase`/`toggle_apu_phase` test helpers
+  - Added trace-level logging for rejected DMC requests (debugging aid)
 - All 322 tests pass (579 total, 257 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)
@@ -639,6 +549,8 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 21, 2025 | ~67% | ~33% | PPU DMA open bus, DMA code review round 7 (is_cpu_stalled fix) |
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 8 (one-bus-op invariant, validation tests) |
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 9 (OAM-only halt check, CpuRepeat fix, cleanup) |
+| Dec 22, 2025 | ~67% | ~33% | DMA code review round 10 (debug assertions, ppu field removal, docs) |
+| Dec 22, 2025 | ~67% | ~33% | DMA code review round 11 (stricter assertions, dead code removal, logging) |
 
 ---
 
