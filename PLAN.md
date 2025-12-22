@@ -18,7 +18,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 - Interrupts: **Latched polling** - NMI/IRQ sampled at start of each cycle, used at instruction completion
 - **NEW**: GET/PUT APU phase tracking for DMA alignment + CPU repeated reads during DMA idle cycles
 
-**Current focus**: DMA Feedback implementation complete (all 5 phases)
+**Current focus**: DMA Implementation complete (all 7 phases) - production-grade after 14 code reviews
 
 **AccuracyCoin Score**: 90/131 (target: 120+/131)
 
@@ -64,6 +64,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | Singlestep Tests Cycle-Accurate | **Tests now use step_cycle(), 100% pass rate** | SHA/SHX/SHY, JAM, TAS fixes |
 | AccuracyCoin OPEN BUS Fixes | **$4015 open bus behavior** | FAIL 7 & FAIL 9 fixed |
 | **Legacy Code Elimination** | **Removed instruction-boundary execution** | Single `step_master_cycle()` path |
+| **DMA Implementation (All 7 Phases)** | **Production-grade DMA** | Bus arbiter, phase tracking, 31 tests, 14 code reviews |
 
 ---
 
@@ -73,7 +74,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ### DMA Code Review Status (December 22, 2025)
 
-**11 rounds of DMA code review + 2 rounds of PPU DMA code review + 1 NES Bus code review complete.** DMA implementation is now production-grade with:
+**All 7 DMA phases complete. 11 rounds of DMA code review + 2 rounds of PPU DMA code review + 1 NES Bus code review complete.** DMA implementation is now production-grade with:
 - Bus arbiter model (one bus op per cycle)
 - Strict debug assertions for timing drift detection
 - Clean API (no dead code, explicit phase contracts)
@@ -134,32 +135,6 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## On Hold
-
-### DMA Implementation - Advanced Phases (requirements/DMA.md)
-
-**Status**: Deferred (December 21, 2025)
-**Core DMA (Phases 1-3)**: ✓ Complete
-**Remaining Phases**: 4-7 deferred for future work
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Phase 1 | ✓ Complete | GET/PUT APU phase tracking |
-| Phase 2 | ✓ Complete | CPU repeated reads during DMA |
-| Phase 3 | ✓ Complete | DMC DMA state machine |
-| Phase 4 | Deferred | DMC Load vs Reload DMA scheduling |
-| Phase 5 | Deferred | DMC DMA bugs (aborted DMA, unexpected reload) |
-| Phase 6 | Deferred | OAM decay model (row-based timing) |
-| Phase 7 | Deferred | APU register activation during DMA |
-
-**Files modified** (Core DMA):
-- `dma_controller.rs`: `ApuPhase`, `DmcDmaPhase` enums, phase tracking, repeated reads
-- `nes_console.rs`: Phase toggling, power-on randomization
-- `apu_rp2a03.rs`: Removed internal DMC DMA (now external via DmaController)
-- `tests/dma_controller.rs`: 26 tests
-
-**Plan file**: `C:\Users\mathi\.claude\plans\bubbly-greeting-tiger.md` contains full implementation details for phases 4-7.
-
----
 
 ### Test Coverage (≥80% target)
 
