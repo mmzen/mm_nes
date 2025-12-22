@@ -1,4 +1,4 @@
-// Authorship: Human 35% | Claude 65%
+// Authorship: Human 30% | Claude 70%
 //! PPU DMA register ($4014) - signals OAM DMA start to the scheduler.
 //!
 //! Writing to $4014 initiates an OAM DMA transfer. In cycle-accurate mode,
@@ -62,17 +62,10 @@ impl Memory for PpuDma {
         Ok(PPU_DMA_SIZE)
     }
 
-    fn read_byte(&self, addr: u16) -> Result<u8, MemoryError> {
+    fn read_byte(&self, _addr: u16) -> Result<u8, MemoryError> {
         // $4014 is write-only on real hardware.
         // Reading returns open bus (current data bus value), consistent with APU behavior.
-        //
-        // Address decode: Bus passes effective_addr = addr & (size - 1).
-        // With size=1, this is always 0.
-        // defensively in case bus behavior changes.
-        match addr {
-            0x00 => Ok(self.data_bus.get()),
-            _ => Ok(self.data_bus.get()), // Fallback to open bus for any unexpected address
-        }
+        Ok(self.data_bus.get())
     }
 
     fn trace_read_byte(&self, _addr: u16) -> Result<u8, MemoryError> {

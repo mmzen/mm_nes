@@ -73,13 +73,14 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 ### DMA Code Review Status (December 22, 2025)
 
-**11 rounds of DMA code review complete.** DMA implementation is now production-grade with:
+**11 rounds of DMA code review + 2 rounds of PPU DMA code review complete.** DMA implementation is now production-grade with:
 - Bus arbiter model (one bus op per cycle)
 - Strict debug assertions for timing drift detection
 - Clean API (no dead code, explicit phase contracts)
-- Comprehensive test coverage (31 DMA + 5 PPU DMA tests)
+- Comprehensive test coverage (31 DMA + 6 PPU DMA tests)
+- Verified data_bus consistency across all bus operations
 
-**All 322 tests pass (579 total, 257 ignored), frontend builds successfully.**
+**All 323 tests pass (580 total, 257 ignored), frontend builds successfully.**
 
 Full DMA code review history archived in session logs below.
 
@@ -286,7 +287,12 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
   - Added scheduler invariant assertion in `nes_console.rs` (validates cpu_halted correctness)
   - Removed dead `set_apu_phase`/`get_apu_phase`/`toggle_apu_phase` test helpers
   - Added trace-level logging for rejected DMC requests (debugging aid)
-- All 322 tests pass (579 total, 257 ignored), frontend builds successfully
+- **PPU DMA Code Review Round 2** - addressing issues from `requirements/DMA_ppu_dma_code_review_1.md`
+  - Audited NESBus: data_bus correctly updated on all reads/writes (including DMA ops)
+  - Added regression test `scheduler_samples_dma_latch_at_cycle_start_regression`
+  - Simplified `read_byte()` to ignore addr parameter (always returns open bus)
+  - Verified bus layer handles write data_bus updates (no change needed)
+- All 323 tests pass (580 total, 257 ignored), frontend builds successfully
 
 ### Session: December 21, 2025 (session 33)
 - **PPU DMA Code Review** - addressing issues from `requirements/DMA_ppu_dma_code_review_0.md`
@@ -551,6 +557,7 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 9 (OAM-only halt check, CpuRepeat fix, cleanup) |
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 10 (debug assertions, ppu field removal, docs) |
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 11 (stricter assertions, dead code removal, logging) |
+| Dec 22, 2025 | ~67% | ~33% | PPU DMA code review round 2 (data_bus audit, regression test, read_byte simplify) |
 
 ---
 

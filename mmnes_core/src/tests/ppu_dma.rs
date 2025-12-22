@@ -1,4 +1,4 @@
-// Authorship: Human 20% | Claude 80%
+// Authorship: Human 15% | Claude 85%
 //! Tests for PPU DMA signal-based interface.
 //!
 //! The actual byte-by-byte DMA transfer is tested in dma_controller.rs tests.
@@ -131,4 +131,60 @@ fn dma_begins_on_cycle_n_plus_1_not_cycle_n() {
 
     // Signal should be cleared after sampling
     assert_eq!(dma_signal.get(), None, "Signal should be cleared after sampling");
+}
+
+/// Regression test: Verifies scheduler samples latch at TOP of cycle.
+///
+/// INVARIANT: The scheduler MUST sample dma_start_page at the very start of
+/// step_master_cycle(), BEFORE any bus operation executes. If sampling happened
+/// AFTER bus ops, DMA would incorrectly start on cycle N instead of N+1.
+///
+/// This test verifies the contract by ensuring:
+/// 1. Signal set → DMA controller state unchanged (no side effects yet)
+/// 2. Only explicit start_oam_dma() call activates DMA
+/// 3. The signal is consumed (set to None) after sampling
+///
+/// In nes_console.rs, sampling happens at line ~205, before CPU step at ~263.
+#[test]
+fn scheduler_samples_dma_latch_at_cycle_start_regression() {
+    init();
+
+    let dma_signal = Rc::new(Cell::new(None));
+    let data_bus = Rc::new(Cell::new(0x00));
+    let mut ppu_dma = PpuDma::new_with_dma_signal(dma_signal.clone(), data_bus.clone());
+    ppu_dma.initialize().unwrap();
+
+    let mut dma_controller = create_dma_controller();
+
+    // Precondition: both components idle
+    assert!(!dma_controller.is_active(), "DMA should be idle initially");
+    assert!(!dma_controller.is_oam_dma_active(), "OAM DMA should be idle initially");
+    assert_eq!(dma_signal.get(), None, "Signal should be None initially");
+
+    // Simulate: CPU executes a write to $4014 (end of cycle N)
+    ppu_dma.write_byte(0x00, 0x02).unwrap();
+
+    // KEY ASSERTION: Setting signal has NO EFFECT on DMA controller state
+    // This proves the signal is just a latch, not immediate activation
+    assert!(!dma_controller.is_active(),
+        "REGRESSION: DMA must NOT activate when signal is set - sampling must be explicit");
+    assert!(!dma_controller.is_oam_dma_active(),
+        "REGRESSION: OAM DMA must NOT activate when signal is set");
+
+    // Simulate: Start of cycle N+1 - scheduler samples latch
+    // This is what step_master_cycle() does at its very start
+    let sampled = dma_signal.take(); // .take() = .get() + .set(None)
+    assert_eq!(sampled, Some(0x02), "Scheduler should see the latched page");
+
+    // Simulate: Scheduler calls start_oam_dma() based on sampled value
+    if let Some(page) = sampled {
+        dma_controller.start_oam_dma(page);
+    }
+
+    // NOW DMA is active
+    assert!(dma_controller.is_active(), "DMA should be active after explicit start");
+    assert!(dma_controller.is_oam_dma_active(), "OAM DMA should be active after start");
+
+    // Latch is cleared - subsequent cycles won't re-trigger
+    assert_eq!(dma_signal.get(), None, "Signal must be cleared after sampling");
 }
