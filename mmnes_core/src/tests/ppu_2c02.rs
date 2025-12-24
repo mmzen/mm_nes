@@ -1,4 +1,4 @@
-// Authorship: Human 60% | Claude 40%
+// Authorship: Human 55% | Claude 45%
 use std::cell::RefCell;
 use std::rc::Rc;
 use log::debug;
@@ -1376,5 +1376,135 @@ fn test_power_on_alignment() {
     // Frame should start as even (not odd)
     assert!(!ppu.is_frame_odd(),
         "First frame should be even (frame_odd = false)");
+}
+
+// ============================================================================
+// Sprite Zero Hit Tests (REQ_ppu_sprite_zero_arbitrary_fix_1.md)
+// ============================================================================
+// Sprite-0 hit detection is ALWAYS tied to OAM index 0, regardless of:
+// - OAMADDR value (evaluation order)
+// - Which sprite is first in secondary OAM
+// Only OAM index 0 can trigger sprite-0 hit.
+
+/// Test that OAM index 0 is correctly marked as sprite zero (normal case).
+#[test]
+fn test_sprite_zero_with_oamaddr_zero() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Note: Sprites are displayed one pixel lower than their Y coordinate.
+    // So Y=49 means sprite is visible on scanlines 50-57 (for 8x8 sprites).
+    // Set up sprites in primary OAM:
+    // - Sprite 0 at Y=49 (visible on scanline 50)
+    // - Sprite 1 at Y=49 (also visible on scanline 50)
+    ppu.set_primary_oam_sprite(0, 49, 0x10, 0x00, 100);  // OAM index 0
+    ppu.set_primary_oam_sprite(1, 49, 0x11, 0x00, 110);  // OAM index 1
+
+    // OAMADDR should be 0 by default after init
+    assert_eq!(ppu.get_oam_addr(), 0, "OAMADDR should be 0 after init");
+
+    // Run sprite evaluation for scanline 50
+    ppu.test_do_sprite_evaluation(50).unwrap();
+
+    // Check secondary OAM
+    let count = ppu.get_secondary_oam_count();
+    assert_eq!(count, 2, "Should have 2 sprites in secondary OAM");
+
+    // OAM index 0 should have sprite0=true
+    let slot0 = ppu.get_secondary_oam_sprite(0).unwrap();
+    assert_eq!(slot0.1, 0x10, "Slot 0 should contain sprite with tile 0x10 (OAM index 0)");
+    assert!(slot0.4, "OAM index 0 should have sprite0=true");
+
+    // OAM index 1 should NOT have sprite0 flag
+    let slot1 = ppu.get_secondary_oam_sprite(1).unwrap();
+    assert_eq!(slot1.1, 0x11, "Slot 1 should contain sprite with tile 0x11 (OAM index 1)");
+    assert!(!slot1.4, "OAM index 1 should have sprite0=false");
+}
+
+/// Test that with non-zero OAMADDR, ONLY OAM index 0 can trigger sprite-0 hit.
+/// Even if another sprite is processed first (due to OAMADDR), it should NOT
+/// have sprite0=true. Only OAM index 0 triggers sprite-0 hit.
+#[test]
+fn test_sprite_zero_with_nonzero_oamaddr() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Note: Sprites are displayed one pixel lower than their Y coordinate.
+    // Set up sprites in primary OAM:
+    // - OAM index 0 at Y=99 (visible on scanline 100, NOT on scanline 50)
+    // - OAM index 5 at Y=49 (visible on scanline 50)
+    // - OAM index 6 at Y=49 (also visible on scanline 50)
+    ppu.set_primary_oam_sprite(0, 99, 0x00, 0x00, 50);   // OAM index 0
+    ppu.set_primary_oam_sprite(5, 49, 0x55, 0x00, 60);   // OAM index 5
+    ppu.set_primary_oam_sprite(6, 49, 0x66, 0x00, 70);   // OAM index 6
+
+    // Set OAMADDR to point to sprite 5 (byte address = 5 * 4 = 20)
+    // Evaluation starts at sprite 5, wraps around
+    ppu.write_byte(0x03, 20).unwrap();
+    assert_eq!(ppu.get_oam_addr(), 20, "OAMADDR should be 20");
+
+    // Run sprite evaluation for scanline 50
+    // Sprites 5 and 6 are visible, but OAM index 0 is NOT visible on this scanline.
+    ppu.test_do_sprite_evaluation(50).unwrap();
+
+    // Check secondary OAM
+    let count = ppu.get_secondary_oam_count();
+    assert_eq!(count, 2, "Should have 2 sprites in secondary OAM");
+
+    // Slot 0 contains sprite 5 (first processed due to OAMADDR)
+    // But sprite0 should be FALSE because this is OAM index 5, not 0
+    let slot0 = ppu.get_secondary_oam_sprite(0).unwrap();
+    assert_eq!(slot0.1, 0x55, "Slot 0 should contain sprite with tile 0x55 (OAM index 5)");
+    assert!(!slot0.4,
+        "OAM index 5 should NOT have sprite0=true (only OAM index 0 triggers sprite-0 hit)");
+
+    // Slot 1 contains sprite 6, also should NOT have sprite0
+    let slot1 = ppu.get_secondary_oam_sprite(1).unwrap();
+    assert_eq!(slot1.1, 0x66, "Slot 1 should contain sprite with tile 0x66 (OAM index 6)");
+    assert!(!slot1.4, "OAM index 6 should have sprite0=false");
+}
+
+/// Test that sprite-0 hit only occurs when OAM index 0 is visible on the scanline.
+/// If OAM index 0 is not visible, no sprite should have sprite0=true.
+#[test]
+fn test_sprite_zero_only_when_oam_index_zero_visible() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Note: Sprites are displayed one pixel lower than their Y coordinate.
+    // Set up sprites:
+    // - OAM index 0 at Y=99 (visible on scanline 100, NOT on scanline 50)
+    // - OAM index 3 at Y=49 (visible on scanline 50)
+    ppu.set_primary_oam_sprite(0, 99, 0x00, 0x00, 50);   // OAM index 0
+    ppu.set_primary_oam_sprite(3, 49, 0x33, 0x00, 60);   // OAM index 3
+
+    // OAMADDR = 0 (default)
+    assert_eq!(ppu.get_oam_addr(), 0);
+
+    // On scanline 50, OAM index 0 is NOT visible, only index 3 is visible
+    // Therefore NO sprite should have sprite0=true
+    ppu.test_do_sprite_evaluation(50).unwrap();
+
+    let count = ppu.get_secondary_oam_count();
+    assert_eq!(count, 1, "Should have 1 sprite in secondary OAM");
+
+    let slot0_line50 = ppu.get_secondary_oam_sprite(0).unwrap();
+    assert_eq!(slot0_line50.1, 0x33, "On scanline 50, slot 0 should be OAM index 3");
+    assert!(!slot0_line50.4,
+        "OAM index 3 should NOT have sprite0=true (only OAM index 0 triggers hit)");
+
+    // On scanline 100, OAM index 0 IS visible
+    // Therefore it should have sprite0=true
+    ppu.test_do_sprite_evaluation(100).unwrap();
+
+    let slot0_line100 = ppu.get_secondary_oam_sprite(0).unwrap();
+    assert_eq!(slot0_line100.1, 0x00, "On scanline 100, slot 0 should be OAM index 0");
+    assert!(slot0_line100.4, "OAM index 0 should have sprite0=true");
 }
 

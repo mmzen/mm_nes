@@ -1,4 +1,4 @@
-// Authorship: Human 49% | Claude 51%
+// Authorship: Human 48% | Claude 52%
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
@@ -1219,6 +1219,50 @@ impl Ppu2c02 {
         self.frame_odd
     }
 
+    /// Test helper: set a sprite in primary OAM (for sprite zero testing)
+    #[cfg(test)]
+    pub fn set_primary_oam_sprite(&mut self, index: usize, y: u8, tile: u8, attr: u8, x: u8) {
+        if index < 64 {
+            self.oam.primary[index] = Sprite {
+                y,
+                tile_index: tile,
+                attributes: attr,
+                x,
+                sprite0: false,
+            };
+        }
+    }
+
+    /// Test helper: get secondary OAM sprite info (for sprite zero testing)
+    /// Returns (y, tile, attr, x, sprite0_flag) or None if slot is empty/unused
+    #[cfg(test)]
+    pub fn get_secondary_oam_sprite(&self, slot: usize) -> Option<(u8, u8, u8, u8, bool)> {
+        if slot < self.oam.sprite_count {
+            let s = &self.oam.secondary[slot];
+            Some((s.y, s.tile_index, s.attributes, s.x, s.sprite0))
+        } else {
+            None
+        }
+    }
+
+    /// Test helper: get secondary OAM sprite count
+    #[cfg(test)]
+    pub fn get_secondary_oam_count(&self) -> usize {
+        self.oam.sprite_count
+    }
+
+    /// Test helper: get current OAMADDR value
+    #[cfg(test)]
+    pub fn get_oam_addr(&self) -> u8 {
+        self.register.borrow().oam_addr
+    }
+
+    /// Test helper: call sprite evaluation for a scanline
+    #[cfg(test)]
+    pub fn test_do_sprite_evaluation(&mut self, scanline: u16) -> Result<(), crate::ppu::PpuError> {
+        self.do_sprite_evaluation(scanline)
+    }
+
     fn get_flag(&self, flag: PpuFlag) -> bool {
         match flag {
             Control(_) => (self.register.borrow_mut().control & flag.bits()) != 0,
@@ -2096,14 +2140,22 @@ impl Ppu2c02 {
         self.oam.clear_secondary();
         let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
 
+        // Sprite evaluation order can start from a non-zero OAMADDR, but sprite-0 hit
+        // detection is ALWAYS tied to the sprite originating from OAM index 0.
+        // Only OAM index 0 can trigger sprite-0 hit, regardless of evaluation order.
+        let start_sprite = (self.register.borrow().oam_addr / 4) as usize;
+        let num_sprites = self.oam.primary.len();
+
         let mut count = 0usize;
-        for i in 0..self.oam.primary.len() {
+        for offset in 0..num_sprites {
+            let i = (start_sprite + offset) % num_sprites;
             let sprite = &self.oam.primary[i];
 
             if self.is_scanline_in_sprite_range(scanline, sprite, sprite_size) {
                 if count < self.oam.secondary.len() {
                     self.oam.secondary[count] = *sprite;
 
+                    // Only OAM index 0 can trigger sprite-0 hit
                     if i == 0 {
                         self.oam.secondary[count].sprite0 = true;
                     }
