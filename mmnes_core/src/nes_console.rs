@@ -1,4 +1,4 @@
-// Authorship: Human 20% | Claude 80%
+// Authorship: Human 18% | Claude 82%
 use std::cell::{Cell, RefCell};
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
@@ -261,6 +261,17 @@ impl NesConsole {
         }
 
         // ============================================================
+        // SUB-DOT ORDERING: Advance 1 PPU dot BEFORE bus operation
+        // ============================================================
+        // This provides sub-dot ordering for VBlank boundary suppression:
+        // - If dot 1 of scanline 241 occurs HERE, VBlank is set BEFORE the CPU read
+        // - If dot 1 occurs in the remaining 2 dots (after CPU read), boundary suppression applies
+        let ppu_frame_1 = self.ppu.borrow_mut().advance_dots(1)?;
+        if let Some(frame) = ppu_frame_1 {
+            out_frame = Some(frame);
+        }
+
+        // ============================================================
         // STEP 3: EXECUTE BUS OPERATION FOR THE SELECTED MASTER
         // ============================================================
 
@@ -366,12 +377,16 @@ impl NesConsole {
         }
         self.apu_counter.current = apu_cycles;
 
-        // Advance PPU by 1 CPU cycle (PPU internally converts to dots: 3 for NTSC, ~3.2 for PAL)
-        let (new_ppu_cycles, ppu_frame) = self.ppu.borrow_mut().run(self.ppu_counter.current, 1)?;
-        if let Some(frame) = ppu_frame {
+        // Advance PPU by remaining 2 dots (sub-dot ordering: 1 dot was advanced before bus op)
+        // Total: 3 dots per CPU cycle for NTSC
+        let ppu_frame_2 = self.ppu.borrow_mut().advance_dots(2)?;
+        if let Some(frame) = ppu_frame_2 {
             out_frame = Some(frame);
         }
-        self.ppu_counter.current = new_ppu_cycles;
+        self.ppu_counter.current += 1;
+
+        // Clear per-cycle PPU state (VBlank boundary suppression latch)
+        self.ppu.borrow_mut().end_master_cycle();
 
         Ok((cpu_result, out_frame, out_samples))
     }
@@ -540,6 +555,43 @@ impl NesConsole {
         self.sync_ppu_startup()?;
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// Test-only methods for NesConsole
+// ============================================================================
+
+#[cfg(test)]
+impl NesConsole {
+    /// Test helper: Get current PPU scanline (0-261 for NTSC)
+    pub fn get_ppu_scanline(&self) -> u16 {
+        self.ppu.borrow().get_scanline()
+    }
+
+    /// Test helper: Get current PPU dot (0-340)
+    pub fn get_ppu_dot(&self) -> u16 {
+        self.ppu.borrow().get_dot()
+    }
+
+    /// Test helper: Check if VBlank flag is set (without side effects)
+    ///
+    /// Unlike reading $2002 which clears VBlank, this peeks at the flag directly.
+    pub fn is_vblank_set(&self) -> bool {
+        use crate::ppu_2c02::Ppu2c02;
+        // Downcast to Ppu2c02 to access test helper
+        // This is safe in tests since we always use Ppu2c02
+        let ppu = self.ppu.borrow();
+        if let Some(ppu_2c02) = ppu.as_any().downcast_ref::<Ppu2c02>() {
+            ppu_2c02.is_vblank_set()
+        } else {
+            false
+        }
+    }
+
+    /// Test helper: Get master cycle count
+    pub fn get_master_cycles(&self) -> u64 {
+        self.master_cycles
     }
 }
 

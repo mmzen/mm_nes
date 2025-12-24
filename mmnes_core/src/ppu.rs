@@ -1,4 +1,5 @@
-// Authorship: Human 85% | Claude 15%
+// Authorship: Human 75% | Claude 25%
+use std::any::Any;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -57,6 +58,14 @@ pub trait PPU: BusDevice + DmaDevice + Configurable {
 
     /// Get current scanline (0-261 for NTSC, 0-311 for PAL).
     fn get_scanline(&self) -> u16;
+
+    /// Called at the end of each master cycle to clear per-cycle state.
+    /// This clears latches like status_read_this_cycle used for boundary suppression.
+    /// Must be called after all PPU advancement for the cycle is complete.
+    fn end_master_cycle(&mut self);
+
+    /// Downcast support for test helpers.
+    fn as_any(&self) -> &dyn Any;
 }
 
 #[derive(Debug, Clone)]

@@ -1,4 +1,5 @@
-// Authorship: Human 50% | Claude 50%
+// Authorship: Human 49% | Claude 51%
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
 use std::rc::Rc;
@@ -367,6 +368,9 @@ pub struct Ppu2c02 {
     cycles_per_scanline_fp: u64,
     cycles_acc_fp: u64,
     nmi_suppressed: Cell<bool>,
+    // VBlank boundary suppression - set when $2002 is read during the same master cycle
+    // that would set VBlank. When true, VBlank flag setting is suppressed.
+    status_read_this_cycle: Cell<bool>,
     // PPU open bus - tracks last value on the internal data bus
     open_bus: Cell<u8>,
     // Track total PPU dots for open bus decay calculation
@@ -518,6 +522,7 @@ impl PPU for Ppu2c02 {
         self.sprites_pixels_line = PixelLines::default();
         self.renderer = RefCell::new(Renderer::new());
         self.nmi_suppressed.set(false);
+        self.status_read_this_cycle.set(false);
 
         // Reset dot-level timing to pre-render scanline
         self.current_dot = 0;
@@ -558,6 +563,10 @@ impl PPU for Ppu2c02 {
         // Advance PPU by the calculated dots
         let frame = self.advance_dots_internal(ppu_dots)?;
 
+        // Clear the boundary read flag after advancing.
+        // This ensures the flag only affects the current master cycle.
+        self.status_read_this_cycle.set(false);
+
         Ok((start_cycle + credits, frame))
     }
 
@@ -575,6 +584,16 @@ impl PPU for Ppu2c02 {
 
     fn get_scanline(&self) -> u16 {
         self.current_scanline
+    }
+
+    fn end_master_cycle(&mut self) {
+        // Clear per-cycle state used for VBlank boundary suppression.
+        // This must be called after all PPU dots for the master cycle have advanced.
+        self.status_read_this_cycle.set(false);
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -755,6 +774,11 @@ impl Ppu2c02 {
     fn read_status_register(&self) -> u8 {
         let status = self.register.borrow().status;
         let decayed_open_bus = self.get_decayed_open_bus();
+
+        // Mark that $2002 was read this master cycle.
+        // This is checked in advance_dots_internal() to suppress VBlank if the read
+        // happens on the same cycle that would set VBlank (scanline 241, dot 1).
+        self.status_read_this_cycle.set(true);
 
         if let PpuState::Rendering(scanline) = self.state {
             if scanline == self.config.nmi_scanline && !self.get_flag(Status(VBlank)) {
@@ -982,6 +1006,7 @@ impl Ppu2c02 {
             cycles_per_scanline_fp: 0,
             cycles_acc_fp: 0,
             nmi_suppressed: Cell::new(false),
+            status_read_this_cycle: Cell::new(false),
             open_bus: Cell::new(0),
             total_dots: Cell::new(0),
             open_bus_refresh_dots: [
@@ -2336,11 +2361,22 @@ impl Ppu2c02 {
                 (scanline, VBLANK_SET_DOT) if scanline == self.config.nmi_scanline => {
                     self.renderer.borrow_mut().update();
                     self.renderer.borrow_mut().reset();
-                    self.set_flag(Status(VBlank), true);
                     frame_ready = true;
 
-                    if self.get_flag(Control(GenerateNmi)) && !self.nmi_suppressed.get() {
-                        self.cpu.borrow_mut().signal_nmi()?;
+                    // VBlank boundary suppression: If $2002 was read during the same master
+                    // cycle that would set VBlank, suppress both VBlank flag and NMI.
+                    // This is a well-documented NES hardware quirk.
+                    if self.status_read_this_cycle.get() {
+                        // $2002 was read on the boundary cycle - suppress VBlank and NMI
+                        self.nmi_suppressed.set(true);
+                        // Do NOT set VBlank flag
+                    } else {
+                        // Normal case: set VBlank flag
+                        self.set_flag(Status(VBlank), true);
+
+                        if self.get_flag(Control(GenerateNmi)) && !self.nmi_suppressed.get() {
+                            self.cpu.borrow_mut().signal_nmi()?;
+                        }
                     }
                     self.nmi_suppressed.set(false);
 
