@@ -21,7 +21,7 @@ impl Display for MemoryType {
             MemoryType::StandardMemory => write!(f, "memory type: standard Memory"),
             MemoryType::Mmc1SwitchableMemory => write!(f, "memory type: MMC1 switchable Memory"),
             MemoryType::PpuCiramMemory => write!(f, "memory type: ciram Memory"),
-            MemoryType::Mmc2SwitchableMemory => { write!(f, "memory type: MMC2 switchable Memory") }
+            MemoryType::Mmc2SwitchableMemory => write!(f, "memory type: MMC2 switchable Memory"),
         }
     }
 }

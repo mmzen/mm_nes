@@ -1,4 +1,4 @@
-// Authorship: Human 90% | Claude 10%
+// Authorship: Human 85% | Claude 15%
 use std::cell::RefCell;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -54,6 +54,7 @@ pub enum CartridgeType {
     UNROM,
     MMC1,
     MMC2,
+    MMC3,
     AXROM,
 }
 
@@ -65,6 +66,7 @@ impl Display for CartridgeType {
             CartridgeType::UNROM => { write!(f, "cartridge type: UNROM") }
             CartridgeType::MMC1 => { write!(f, "cartridge type: MMC1") }
             CartridgeType::MMC2 => { write!(f, "cartridge type: MMC2") }
+            CartridgeType::MMC3 => { write!(f, "cartridge type: MMC3") }
             CartridgeType::AXROM => { write!(f, "cartridge type: AXROM") }
         }
     }
@@ -78,6 +80,7 @@ impl PartialEq for CartridgeType {
             (CartridgeType::UNROM, CartridgeType::UNROM) => true,
             (CartridgeType::MMC1, CartridgeType::MMC1) => true,
             (CartridgeType::MMC2, CartridgeType::MMC2) => true,
+            (CartridgeType::MMC3, CartridgeType::MMC3) => true,
             (CartridgeType::AXROM, CartridgeType::AXROM) => true,
             _ => false,
         }
@@ -89,6 +92,20 @@ pub trait Cartridge: BusDevice {
     fn get_prg_ram(&self) -> Option<Rc<RefCell<dyn BusDevice>>> { None }
     fn get_mirroring(&self) -> Rc<RefCell<PpuNameTableMirroring>>;
     fn get_region(&self) -> Region;
+
+    /// Check if mapper has an IRQ pending (for mappers with scanline counters like MMC3).
+    /// Default implementation returns false (no IRQ support).
+    fn poll_irq(&self) -> bool { false }
+
+    /// Clear the mapper's IRQ pending flag.
+    /// Default implementation does nothing.
+    fn clear_irq(&self) {}
+
+    /// Notify the mapper of a PPU address bus access.
+    /// This is called for ALL PPU bus reads (pattern tables, nametables, etc.)
+    /// Used by scanline counters like MMC3 to detect A12 rising edges.
+    /// Default implementation does nothing.
+    fn notify_ppu_address(&self, _addr: u16) {}
 }
 
 /***

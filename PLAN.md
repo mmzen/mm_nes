@@ -18,7 +18,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 - Interrupts: **Latched polling** - NMI/IRQ sampled at start of each cycle, used at instruction completion
 - **NEW**: GET/PUT APU phase tracking for DMA alignment + CPU repeated reads during DMA idle cycles
 
-**Current focus**: AxROM Mapper 7 implementation complete. Supported mappers: NROM, UxROM, MMC1, MMC2, AxROM
+**Current focus**: MMC3 Mapper 4 implementation complete. Supported mappers: NROM, UxROM, MMC1, MMC2, MMC3, AxROM
 
 **AccuracyCoin Score**: 90/131 (target: 120+/131)
 
@@ -73,12 +73,43 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | **DMA Code Review Round 5 (INT)** | **Pure intent + commit pattern** | Eliminated Get/Put states, pure oam_wants_bus_op, last_cpu_bus_address tracking |
 | **AxROM Mapper (Mapper 7)** | **New mapper implementation** | 32KB bank switching, one-screen mirroring, CHR-RAM only, 14 tests |
 | **PPU Sprite-0 Arbitrary Fix** | **Byte-level OAM evaluation** | Hardware-accurate sprite-0 aliasing, unaligned OAMADDR support, 6 tests |
+| **MMC3 Mapper (Mapper 4)** | **New mapper implementation** | PRG/CHR banking, IRQ counter, PRG-RAM, mirroring, 20 tests |
 
 ---
 
 ## In Progress
 
 *No active tasks*
+
+### MMC3 Mapper Implementation (December 24, 2025) - COMPLETED
+
+Implemented MMC3 (Mapper 4) per `requirements/MAPPER_MMC3.md`:
+
+**New files**:
+- `mmnes_core/src/mapper/mmc3_cartridge.rs` (~630 lines)
+- `mmnes_core/src/tests/mmc3_cartridge.rs` (20 tests)
+
+**Features implemented**:
+- **PRG Banking**: 8KB banks, 4 slots, two modes (R6/R7 switchable vs fixed)
+- **CHR Banking**: 1KB banks, 8 slots, two modes, R0/R1 forced even alignment
+- **PRG-RAM**: 8KB at $6000-$7FFF with enable/write-protect control
+- **Mirroring**: Vertical/Horizontal switchable via $A000
+- **IRQ Counter**: A12 rising edge detection with 8-cycle filter
+
+**Modified files**:
+- `cartridge.rs`: Added `CartridgeType::MMC3`
+- `mapper.rs`: Added `pub mod mmc3_cartridge`
+- `ines_loader.rs`: Added match arm for `NesMapper::MMC3`
+- `tests/mod.rs`: Added `mod mmc3_cartridge`
+
+**Tests** (20 total):
+- PRG banking: mode 0/1 layout, bank selection
+- CHR banking: mode 0/1 layout, R0/R1 even alignment
+- PRG-RAM: enable/disable, write protect
+- Mirroring: vertical/horizontal switching
+- IRQ: latch, enable/disable, counter decrement, A12 filter, reload flag
+
+All 370 tests pass (350 existing + 20 new).
 
 ### PPU Sprite-0 Arbitrary Fix (December 24, 2025) - COMPLETED
 
@@ -216,6 +247,26 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 24, 2025 (session 39)
+- **MMC3 Mapper (Mapper 4) Implementation** - per `requirements/MAPPER_MMC3.md`
+  - **New file**: `mmnes_core/src/mapper/mmc3_cartridge.rs` (~630 lines)
+    - PRG banking: 8KB banks, 4 slots, two modes (mode 0: R6/R7 at $8000/$A000; mode 1: fixed at $8000/$C000)
+    - CHR banking: 1KB banks, 8 slots, two modes, R0/R1 forced even alignment
+    - PRG-RAM: 8KB at $6000-$7FFF with enable/write-protect ($A001)
+    - Mirroring: Vertical/Horizontal switchable via $A000
+    - IRQ counter: A12 rising edge detection with 8-cycle filter, latch/reload/enable/disable
+  - **Modified files**:
+    - `cartridge.rs`: Added `CartridgeType::MMC3`
+    - `mapper.rs`: Added `pub mod mmc3_cartridge`
+    - `ines_loader.rs`: Added match arm for `NesMapper::MMC3`
+  - **New test file**: `tests/mmc3_cartridge.rs` (20 tests)
+    - PRG banking tests: mode 0/1 layout, bank selection bits 0-2
+    - CHR banking tests: mode 0/1 layout, R0/R1 even alignment
+    - PRG-RAM tests: enable/disable, write protect, read/write behavior
+    - Mirroring tests: vertical/horizontal switching
+    - IRQ tests: latch write, enable/disable, counter decrement, A12 filter, reload flag
+- All 370 tests pass (350 existing + 20 new), frontend builds successfully
 
 ### Session: December 24, 2025 (session 38)
 - **PPU Sprite-0 Arbitrary Fix** - 4 iterations to achieve hardware-accurate behavior
@@ -688,6 +739,7 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 24, 2025 | ~66% | ~34% | DMA code review 11-pending (address None fix, CPU bus intent improvements) |
 | Dec 24, 2025 | ~66% | ~34% | DMA code review 12 (cycle parity derivation, OAM alignment docs/assertions) |
 | Dec 24, 2025 | ~65% | ~35% | PPU Sprite-0 Arbitrary Fix (byte-level OAM eval, 6 new tests) |
+| Dec 24, 2025 | ~64% | ~36% | MMC3 Mapper 4 implementation (~630 lines new code, 20 tests) |
 
 ---
 

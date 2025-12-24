@@ -24,6 +24,7 @@ mod standard_controller;
 mod error_display;
 mod dma_controller;
 mod axrom_cartridge;
+mod mmc3_cartridge;
 mod ppu_vblank_timing;
 
 static START: Once = Once::new();

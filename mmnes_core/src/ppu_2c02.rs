@@ -1,4 +1,4 @@
-// Authorship: Human 48% | Claude 52%
+// Authorship: Human 46% | Claude 54%
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::fmt::{Debug, Display, Formatter};
@@ -6,6 +6,7 @@ use std::rc::Rc;
 use log::info;
 use crate::bus::Bus;
 use crate::bus_device::{BusDevice, BusDeviceType};
+use crate::cartridge::Cartridge;
 use crate::config_spec::{ConfigSpec, Configurable};
 use crate::cpu::CPU;
 use crate::dma_device::DmaDevice;
@@ -590,6 +591,11 @@ impl PPU for Ppu2c02 {
         // Clear per-cycle state used for VBlank boundary suppression.
         // This must be called after all PPU dots for the master cycle have advanced.
         self.status_read_this_cycle.set(false);
+    }
+
+    fn set_cartridge(&mut self, _cartridge: Rc<RefCell<dyn Cartridge>>) {
+        // MMC3 A12 notifications are handled via CHR memory reads, not direct PPU calls.
+        // This is intentionally a no-op to avoid double-clocking the IRQ counter.
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -1317,8 +1323,10 @@ impl Ppu2c02 {
         let mut pattern_data= vec![];
 
         for line in 0..=7 {
-            let mut pattern_data0 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16)?;
-            let mut pattern_data1 = self.bus.read_byte(pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16 + (PATTERN_DATA_SIZE as u16 / 2))?;
+            let addr0 = pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16) + line as u16;
+            let addr1 = addr0 + (PATTERN_DATA_SIZE as u16 / 2);
+            let mut pattern_data0 = self.bus.read_byte(addr0)?;
+            let mut pattern_data1 = self.bus.read_byte(addr1)?;
 
             if flip_horizontal {
                 self.flip_horizontal(&mut pattern_data0, &mut pattern_data1);
@@ -1336,8 +1344,10 @@ impl Ppu2c02 {
     /// where reading all 8 lines at once would trigger latch incorrectly
     fn fetch_single_line_pattern_data_from_bus(&self, tile_index: u8, pattern_table_addr: u16, line: u8, flip_horizontal: bool) -> Result<Vec<u8>, PpuError> {
         let base_addr = pattern_table_addr + (tile_index as u16 * PATTERN_DATA_SIZE as u16);
-        let mut pattern_data0 = self.bus.read_byte(base_addr + line as u16)?;
-        let mut pattern_data1 = self.bus.read_byte(base_addr + line as u16 + (PATTERN_DATA_SIZE as u16 / 2))?;
+        let addr0 = base_addr + line as u16;
+        let addr1 = addr0 + (PATTERN_DATA_SIZE as u16 / 2);
+        let mut pattern_data0 = self.bus.read_byte(addr0)?;
+        let mut pattern_data1 = self.bus.read_byte(addr1)?;
 
         if flip_horizontal {
             self.flip_horizontal(&mut pattern_data0, &mut pattern_data1);

@@ -1,10 +1,13 @@
-// Authorship: Human 75% | Claude 25%
+// Authorship: Human 70% | Claude 30%
 use std::any::Any;
+use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 use crate::bus::BusError;
 use crate::bus_device::BusDevice;
+use crate::cartridge::Cartridge;
 use crate::config_spec::Configurable;
 use crate::cpu::CpuError;
 use crate::dma_device::DmaDevice;
@@ -63,6 +66,10 @@ pub trait PPU: BusDevice + DmaDevice + Configurable {
     /// This clears latches like status_read_this_cycle used for boundary suppression.
     /// Must be called after all PPU advancement for the cycle is complete.
     fn end_master_cycle(&mut self);
+
+    /// Set cartridge reference for mappers that need PPU address bus notifications (e.g., MMC3).
+    /// The PPU will call `cartridge.notify_ppu_address(addr)` for all bus reads.
+    fn set_cartridge(&mut self, cartridge: Rc<RefCell<dyn Cartridge>>);
 
     /// Downcast support for test helpers.
     fn as_any(&self) -> &dyn Any;

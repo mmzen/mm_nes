@@ -171,6 +171,7 @@ impl Registers {
 
 pub const APU_FRAME_COUNTER_IRQ: u8 = 0x01;
 pub const APU_DMC_IRQ: u8 = 0x02;
+pub const MAPPER_IRQ: u8 = 0x04;
 pub const PPU_NMI: u8 = 0x80;
 
 #[derive(Debug, Default)]

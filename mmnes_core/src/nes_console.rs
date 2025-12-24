@@ -12,7 +12,7 @@ use crate::cartridge::Cartridge;
 use crate::config_spec::{ConfigSpec, Configurable};
 use crate::controller::{Controller, ControllerType};
 use crate::cpu::{CPU, CpuCycleResult, CpuError, CpuType};
-use crate::cpu_6502::Cpu6502;
+use crate::cpu_6502::{Cpu6502, MAPPER_IRQ};
 use crate::cpu_debugger::CpuSnapshot;
 use crate::dma::PpuDmaType;
 use crate::dma_controller::{ApuPhase, DmaController};
@@ -90,6 +90,8 @@ pub struct NesConsole {
     /// This eliminates mutable toggle drift - phase is always a derived invariant.
     /// Randomized on power-on (not reset) to simulate real hardware indeterminism.
     phase_offset: u64,
+    /// Cartridge reference for mapper IRQ polling (MMC3 scanline counter, etc.)
+    cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
 }
 
 impl Configurable for NesConsole {
@@ -118,6 +120,7 @@ impl NesConsole {
         config: ConfigSpec,
         dma_start_page: Rc<Cell<Option<u8>>>,
         dma_controller: DmaController<dyn Bus>,
+        cartridge: Option<Rc<RefCell<dyn Cartridge>>>,
     ) -> NesConsole {
         let mut console = NesConsole {
             cpu,
@@ -135,6 +138,7 @@ impl NesConsole {
             dma_controller,
             last_cpu_bus_address: None,
             phase_offset: 0, // Will be randomized on power_on()
+            cartridge,
         };
 
         console.set_config(config);
@@ -387,6 +391,24 @@ impl NesConsole {
 
         // Clear per-cycle PPU state (VBlank boundary suppression latch)
         self.ppu.borrow_mut().end_master_cycle();
+
+        // ============================================================
+        // STEP 5: CHECK MAPPER IRQ (after PPU advances, since A12 edges happen during CHR reads)
+        // ============================================================
+        // MMC3 and similar mappers generate IRQ based on A12 rising edges during PPU
+        // pattern table fetches. Poll the cartridge and signal/clear CPU IRQ accordingly.
+        if let Some(ref cartridge) = self.cartridge {
+            let mapper_irq_pending = cartridge.borrow().poll_irq();
+            let cpu_has_mapper_irq = self.cpu.borrow().is_asserted_irq_by_source(MAPPER_IRQ)?;
+
+            if mapper_irq_pending && !cpu_has_mapper_irq {
+                // Mapper asserted IRQ - signal CPU
+                self.cpu.borrow_mut().signal_irq(MAPPER_IRQ)?;
+            } else if !mapper_irq_pending && cpu_has_mapper_irq {
+                // Mapper cleared IRQ - clear CPU
+                self.cpu.borrow_mut().clear_irq(MAPPER_IRQ)?;
+            }
+        }
 
         Ok((cpu_result, out_frame, out_samples))
     }
@@ -842,6 +864,11 @@ impl NesConsoleBuilder {
         self.ppu = Some(ppu.clone());
         self.ppu_type = Some(ppu_type.clone());
 
+        // Set cartridge reference on PPU for mapper A12 notifications (MMC3 scanline counter)
+        if let Some(ref cartridge) = self.cartridge {
+            ppu.borrow_mut().set_cartridge(cartridge.clone());
+        }
+
         Ok((ppu.clone(), dma))
     }
 
@@ -1006,6 +1033,7 @@ impl NesConsoleBuilder {
             self.config,
             self.dma_start_page,
             dma_controller,
+            self.cartridge.take(),
         );
 
         Ok(console)
