@@ -72,12 +72,44 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 | **CPU Code Review Round 4** | **Hijack semantics + NMI contract** | interrupt_type updated on hijack, NMI line clearing documented |
 | **DMA Code Review Round 5 (INT)** | **Pure intent + commit pattern** | Eliminated Get/Put states, pure oam_wants_bus_op, last_cpu_bus_address tracking |
 | **AxROM Mapper (Mapper 7)** | **New mapper implementation** | 32KB bank switching, one-screen mirroring, CHR-RAM only, 14 tests |
+| **PPU Sprite-0 Arbitrary Fix** | **Byte-level OAM evaluation** | Hardware-accurate sprite-0 aliasing, unaligned OAMADDR support, 6 tests |
 
 ---
 
 ## In Progress
 
 *No active tasks*
+
+### PPU Sprite-0 Arbitrary Fix (December 24, 2025) - COMPLETED
+
+Implemented hardware-accurate sprite-0 hit detection with byte-level OAM evaluation:
+
+**Fixes implemented** (4 requirement iterations):
+1. **fix_1**: Reverted to `i == 0` (only OAM index 0 triggers sprite-0 hit)
+2. **fix_2**: Changed to `count == 0` (first processed), fixed OAMADDR timing ($2004 increment by 1, conditional reset)
+3. **fix_3**: Alias model - only sprite at `OAMADDR/4` gets sprite0=true, no "first visible" fallback
+4. **fix_4**: Byte-level sprite evaluation with unaligned OAMADDR support
+
+**Final implementation**:
+- Byte-level OAM evaluation: reads 4 consecutive bytes as Y/TILE/ATTR/X starting from OAMADDR
+- Unaligned OAMADDR causes byte reinterpretation (e.g., OAMADDR=1 reads TILE as Y)
+- Aliased sprite-0 is first virtual sprite in evaluation (sprite_offset == 0)
+- OAMADDR reset gated on rendering enabled (pre-render scanline, dot 257, visible scanlines)
+- No "first visible" fallback - if aliased sprite not visible, no sprite-0 hit
+
+**New helper functions**:
+- `read_oam_byte(addr)` - reads OAM as raw bytes
+- `is_y_in_sprite_range(scanline, y, size)` - checks Y coordinate visibility
+
+**Tests added** (6 total):
+- `test_sprite_zero_with_oamaddr_zero` - OAM index 0 aliased when OAMADDR=0
+- `test_sprite_zero_with_nonzero_oamaddr` - aliased sprite gets sprite0=true
+- `test_sprite_zero_alias_only_no_fallback` - no fallback when alias not visible
+- `test_sprite_zero_aliased_not_visible_no_fallback` - same with OAMADDR != 0
+- `test_sprite_zero_unaligned_oamaddr_byte_reinterpretation` - byte-level evaluation
+- `test_oamaddr_preserved_when_rendering_disabled` - OAMADDR not reset when rendering off
+
+All 350 tests pass.
 
 ### DMA Code Review Status (December 22, 2025)
 
@@ -93,7 +125,7 @@ The emulator is functional with **true cycle-accurate emulation**. All 8 phases 
 
 **Interrupt Flag Latency fix also complete** - IRQ/NMI now serviced at instruction boundary without extra opcode (AccuracyCoin code 1).
 
-**All 339 tests pass (596 total, 257 ignored), frontend builds successfully.**
+**All 350 tests pass (607 total, 257 ignored), frontend builds successfully.**
 
 Full DMA code review history archived in session logs below.
 
@@ -184,6 +216,24 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 24, 2025 (session 38)
+- **PPU Sprite-0 Arbitrary Fix** - 4 iterations to achieve hardware-accurate behavior
+  - **fix_1**: Reverted from `count == 0` to `i == 0` per ROM test "Sprite 0 should trigger hit"
+  - **fix_2**: Changed back to `count == 0`, fixed OAMADDR timing issues
+    - $2004 writes during rendering increment OAMADDR by 1 (not 4)
+    - OAMADDR reset at dot 257 and pre-render scanline gated on rendering enabled
+    - Fixed RefCell double-borrow bug in $2004 write handler
+  - **fix_3**: Implemented alias model - only sprite at `OAMADDR/4` gets sprite0=true
+    - No "first visible" fallback - if aliased sprite not visible, no hit
+  - **fix_4**: Byte-level sprite evaluation (final implementation)
+    - Added `read_oam_byte(addr)` helper to read OAM as raw bytes
+    - Added `is_y_in_sprite_range(scanline, y, size)` helper
+    - Rewrote `do_sprite_evaluation()` for byte-level access
+    - Unaligned OAMADDR causes byte reinterpretation (Y/TILE/ATTR/X shift)
+    - First virtual sprite (at OAMADDR) is aliased sprite-0
+- **6 new tests** for sprite-0 behavior (aligned, unaligned, alias, fallback)
+- All 350 tests pass, frontend builds successfully
 
 ### Session: December 24, 2025 (session 37)
 - **DMA Code Review Round 11** - addressing issues from `requirements/DMA_code_review_11-pending.md`
@@ -637,6 +687,7 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 22, 2025 | ~66% | ~34% | AxROM Mapper 7 implementation (~300 lines new code, 14 tests) |
 | Dec 24, 2025 | ~66% | ~34% | DMA code review 11-pending (address None fix, CPU bus intent improvements) |
 | Dec 24, 2025 | ~66% | ~34% | DMA code review 12 (cycle parity derivation, OAM alignment docs/assertions) |
+| Dec 24, 2025 | ~65% | ~35% | PPU Sprite-0 Arbitrary Fix (byte-level OAM eval, 6 new tests) |
 
 ---
 

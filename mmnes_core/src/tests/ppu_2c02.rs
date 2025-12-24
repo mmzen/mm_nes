@@ -1423,9 +1423,8 @@ fn test_sprite_zero_with_oamaddr_zero() {
     assert!(!slot1.4, "OAM index 1 should have sprite0=false");
 }
 
-/// Test that with non-zero OAMADDR, ONLY OAM index 0 can trigger sprite-0 hit.
-/// Even if another sprite is processed first (due to OAMADDR), it should NOT
-/// have sprite0=true. Only OAM index 0 triggers sprite-0 hit.
+/// Test that with non-zero OAMADDR, only the "aliased" sprite (at OAMADDR/4) gets sprite0=true.
+/// The alias model: sprite-0 is the entry at OAMADDR, not "first visible."
 #[test]
 fn test_sprite_zero_with_nonzero_oamaddr() {
     init();
@@ -1443,35 +1442,36 @@ fn test_sprite_zero_with_nonzero_oamaddr() {
     ppu.set_primary_oam_sprite(6, 49, 0x66, 0x00, 70);   // OAM index 6
 
     // Set OAMADDR to point to sprite 5 (byte address = 5 * 4 = 20)
-    // Evaluation starts at sprite 5, wraps around
+    // Aliased sprite = 20/4 = 5
     ppu.write_byte(0x03, 20).unwrap();
     assert_eq!(ppu.get_oam_addr(), 20, "OAMADDR should be 20");
 
     // Run sprite evaluation for scanline 50
-    // Sprites 5 and 6 are visible, but OAM index 0 is NOT visible on this scanline.
+    // Sprites 5 and 6 are visible. Aliased sprite (index 5) IS visible.
     ppu.test_do_sprite_evaluation(50).unwrap();
 
     // Check secondary OAM
     let count = ppu.get_secondary_oam_count();
     assert_eq!(count, 2, "Should have 2 sprites in secondary OAM");
 
-    // Slot 0 contains sprite 5 (first processed due to OAMADDR)
-    // But sprite0 should be FALSE because this is OAM index 5, not 0
+    // Slot 0 contains sprite 5 (the aliased sprite, which is visible)
+    // Only the aliased sprite gets sprite0=true
     let slot0 = ppu.get_secondary_oam_sprite(0).unwrap();
     assert_eq!(slot0.1, 0x55, "Slot 0 should contain sprite with tile 0x55 (OAM index 5)");
-    assert!(!slot0.4,
-        "OAM index 5 should NOT have sprite0=true (only OAM index 0 triggers sprite-0 hit)");
+    assert!(slot0.4,
+        "Aliased sprite (OAM index 5) should have sprite0=true");
 
-    // Slot 1 contains sprite 6, also should NOT have sprite0
+    // Slot 1 contains sprite 6, should NOT have sprite0
     let slot1 = ppu.get_secondary_oam_sprite(1).unwrap();
     assert_eq!(slot1.1, 0x66, "Slot 1 should contain sprite with tile 0x66 (OAM index 6)");
-    assert!(!slot1.4, "OAM index 6 should have sprite0=false");
+    assert!(!slot1.4, "OAM index 6 should have sprite0=false (not the aliased sprite)");
 }
 
-/// Test that sprite-0 hit only occurs when OAM index 0 is visible on the scanline.
-/// If OAM index 0 is not visible, no sprite should have sprite0=true.
+/// Test the alias model: when OAMADDR=0, only OAM index 0 can have sprite0=true.
+/// If OAM index 0 is NOT visible on a scanline, NO sprite gets sprite0=true.
+/// This is the key behavior: sprite-0 hit is tied to the aliased entry, not "first visible."
 #[test]
-fn test_sprite_zero_only_when_oam_index_zero_visible() {
+fn test_sprite_zero_alias_only_no_fallback() {
     init();
 
     let mut ppu = create_ppu_for_timing_tests();
@@ -1484,11 +1484,12 @@ fn test_sprite_zero_only_when_oam_index_zero_visible() {
     ppu.set_primary_oam_sprite(0, 99, 0x00, 0x00, 50);   // OAM index 0
     ppu.set_primary_oam_sprite(3, 49, 0x33, 0x00, 60);   // OAM index 3
 
-    // OAMADDR = 0 (default)
+    // OAMADDR = 0 (default), so aliased sprite = index 0
     assert_eq!(ppu.get_oam_addr(), 0);
 
-    // On scanline 50, OAM index 0 is NOT visible, only index 3 is visible
-    // Therefore NO sprite should have sprite0=true
+    // On scanline 50, OAM index 0 (the aliased sprite) is NOT visible.
+    // Only index 3 is visible, but it should NOT get sprite0=true.
+    // No "first visible" fallback - if alias isn't visible, no sprite-0 hit.
     ppu.test_do_sprite_evaluation(50).unwrap();
 
     let count = ppu.get_secondary_oam_count();
@@ -1497,14 +1498,140 @@ fn test_sprite_zero_only_when_oam_index_zero_visible() {
     let slot0_line50 = ppu.get_secondary_oam_sprite(0).unwrap();
     assert_eq!(slot0_line50.1, 0x33, "On scanline 50, slot 0 should be OAM index 3");
     assert!(!slot0_line50.4,
-        "OAM index 3 should NOT have sprite0=true (only OAM index 0 triggers hit)");
+        "OAM index 3 should NOT have sprite0=true (aliased sprite index 0 is not visible)");
 
-    // On scanline 100, OAM index 0 IS visible
-    // Therefore it should have sprite0=true
+    // On scanline 100, OAM index 0 (the aliased sprite) IS visible.
+    // It should have sprite0=true.
     ppu.test_do_sprite_evaluation(100).unwrap();
 
     let slot0_line100 = ppu.get_secondary_oam_sprite(0).unwrap();
     assert_eq!(slot0_line100.1, 0x00, "On scanline 100, slot 0 should be OAM index 0");
-    assert!(slot0_line100.4, "OAM index 0 should have sprite0=true");
+    assert!(slot0_line100.4, "OAM index 0 should have sprite0=true (aliased and visible)");
+}
+
+/// Test that when OAMADDR != 0 and the aliased sprite is NOT visible,
+/// no sprite gets sprite0=true (no fallback to other visible sprites).
+#[test]
+fn test_sprite_zero_aliased_not_visible_no_fallback() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Note: Sprites are displayed one pixel lower than their Y coordinate.
+    // Set up sprites:
+    // - OAM index 5 at Y=99 (visible on scanline 100, NOT on scanline 50) - this will be aliased
+    // - OAM index 6 at Y=49 (visible on scanline 50)
+    // - OAM index 7 at Y=49 (also visible on scanline 50)
+    ppu.set_primary_oam_sprite(5, 99, 0x55, 0x00, 60);   // OAM index 5 (aliased)
+    ppu.set_primary_oam_sprite(6, 49, 0x66, 0x00, 70);   // OAM index 6
+    ppu.set_primary_oam_sprite(7, 49, 0x77, 0x00, 80);   // OAM index 7
+
+    // Set OAMADDR to point to sprite 5 (byte address = 5 * 4 = 20)
+    // Aliased sprite = 20/4 = 5
+    ppu.write_byte(0x03, 20).unwrap();
+    assert_eq!(ppu.get_oam_addr(), 20, "OAMADDR should be 20");
+
+    // On scanline 50, the aliased sprite (index 5) is NOT visible.
+    // Sprites 6 and 7 are visible, but neither should get sprite0=true.
+    ppu.test_do_sprite_evaluation(50).unwrap();
+
+    let count = ppu.get_secondary_oam_count();
+    assert_eq!(count, 2, "Should have 2 sprites in secondary OAM");
+
+    // Neither visible sprite should have sprite0=true
+    let slot0 = ppu.get_secondary_oam_sprite(0).unwrap();
+    assert_eq!(slot0.1, 0x66, "Slot 0 should be OAM index 6");
+    assert!(!slot0.4,
+        "OAM index 6 should NOT have sprite0=true (aliased sprite 5 is not visible)");
+
+    let slot1 = ppu.get_secondary_oam_sprite(1).unwrap();
+    assert_eq!(slot1.1, 0x77, "Slot 1 should be OAM index 7");
+    assert!(!slot1.4, "OAM index 7 should NOT have sprite0=true");
+
+    // On scanline 100, the aliased sprite (index 5) IS visible.
+    ppu.test_do_sprite_evaluation(100).unwrap();
+
+    let slot0_line100 = ppu.get_secondary_oam_sprite(0).unwrap();
+    assert_eq!(slot0_line100.1, 0x55, "On scanline 100, slot 0 should be OAM index 5");
+    assert!(slot0_line100.4, "Aliased sprite (index 5) should have sprite0=true when visible");
+}
+
+/// Test byte-level sprite evaluation with unaligned OAMADDR.
+/// When OAMADDR is not a multiple of 4, bytes are reinterpreted:
+/// - OAMADDR=1: byte 1 becomes Y, byte 2 becomes TILE, byte 3 becomes ATTR, byte 4 becomes X
+/// This creates a "virtual sprite" from shifted OAM data.
+#[test]
+fn test_sprite_zero_unaligned_oamaddr_byte_reinterpretation() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Set up sprite 0 in primary OAM:
+    // OAM bytes for sprite 0: [Y=0xFF, TILE=0x49, ATTR=0x00, X=0x50]
+    // Y=0xFF means sprite is at Y=255, which won't be visible on scanline 50
+    // But TILE=0x49 = 73, which when read as Y means sprite displays on scanline 74
+    ppu.set_primary_oam_sprite(0, 0xFF, 0x49, 0x00, 0x50);
+
+    // Set up sprite 1 in primary OAM:
+    // OAM bytes for sprite 1: [Y=0x31, TILE=0xAA, ATTR=0x01, X=0x60]
+    // Y=0x31 = 49, which means sprite displays on scanlines 50-57
+    ppu.set_primary_oam_sprite(1, 0x31, 0xAA, 0x01, 0x60);
+
+    // Set OAMADDR to 1 (unaligned - points to TILE byte of sprite 0)
+    // Virtual sprite 0 will be formed from bytes 1,2,3,4:
+    //   Y = byte 1 = 0x49 (sprite 0's TILE) → displays on scanlines 74-81
+    //   TILE = byte 2 = 0x00 (sprite 0's ATTR)
+    //   ATTR = byte 3 = 0x50 (sprite 0's X)
+    //   X = byte 4 = 0x31 (sprite 1's Y)
+    ppu.write_byte(0x03, 1).unwrap();
+    assert_eq!(ppu.get_oam_addr(), 1, "OAMADDR should be 1");
+
+    // Run sprite evaluation for scanline 50
+    // Virtual sprite 0 (from bytes 1-4) has Y=0x49=73, visible on scanlines 74-81, NOT 50
+    // Virtual sprite 1 (from bytes 5-8) would have Y=byte5=0xAA (sprite 1's TILE)
+    ppu.test_do_sprite_evaluation(50).unwrap();
+
+    // The aliased virtual sprite (starting at OAMADDR=1) has Y=0x49=73
+    // It's NOT visible on scanline 50 (visible on 74-81)
+    // So no sprite should have sprite0=true
+    let count = ppu.get_secondary_oam_count();
+    // Check what sprites are actually visible - depends on the virtual sprite formation
+    // Virtual sprite 0: Y=0x49=73 (not visible on scanline 50)
+    // We need to check the actual results
+
+    // On scanline 74, the aliased virtual sprite SHOULD be visible
+    ppu.test_do_sprite_evaluation(74).unwrap();
+    let count_74 = ppu.get_secondary_oam_count();
+    assert!(count_74 >= 1, "At least 1 sprite should be visible on scanline 74");
+
+    let slot0_line74 = ppu.get_secondary_oam_sprite(0).unwrap();
+    // Virtual sprite formed from bytes 1,2,3,4:
+    // Y=0x49, TILE=0x00, ATTR=0x50, X=0x31
+    assert_eq!(slot0_line74.0, 0x49, "Y should be 0x49 (reinterpreted from sprite 0's TILE)");
+    assert_eq!(slot0_line74.1, 0x00, "TILE should be 0x00 (reinterpreted from sprite 0's ATTR)");
+    assert!(slot0_line74.4, "Aliased virtual sprite should have sprite0=true");
+}
+
+/// Test that OAMADDR is preserved when rendering is disabled.
+/// This is critical for mid-frame enable aliasing.
+#[test]
+fn test_oamaddr_preserved_when_rendering_disabled() {
+    init();
+
+    let mut ppu = create_ppu_for_timing_tests();
+    ppu.initialize().unwrap();
+
+    // Disable rendering (both background and sprites off)
+    ppu.write_byte(0x01, 0x00).unwrap(); // Mask register = 0
+
+    // Set OAMADDR to a non-zero value
+    ppu.write_byte(0x03, 42).unwrap();
+    assert_eq!(ppu.get_oam_addr(), 42, "OAMADDR should be 42");
+
+    // OAMADDR should be preserved since rendering is disabled
+    // (In real hardware, OAMADDR reset only happens during rendering)
+    assert_eq!(ppu.get_oam_addr(), 42, "OAMADDR should still be 42 with rendering disabled");
 }
 

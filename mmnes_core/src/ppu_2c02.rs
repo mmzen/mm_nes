@@ -829,8 +829,10 @@ impl Ppu2c02 {
         //trace!("PPU: writing to oam data register: 0x{:02X}: 0x{:02X}", addr, value);
 
         if let PpuState::Rendering(_) = self.state  {
+            // During rendering, writes to $2004 are ignored but OAMADDR still increments by 1
             //trace!("PPU: ignoring write to OAM address 0x{:02X} as PPU is in state {}", addr, self.state);
-            self.register.borrow_mut().oam_addr = addr.wrapping_add(4);
+            let new_addr = self.register.borrow().oam_addr.wrapping_add(1);
+            self.register.borrow_mut().oam_addr = new_addr;
         } else {
             let sprite_index = (addr / 4) as usize;
             let offset = addr % 4;
@@ -2082,10 +2084,30 @@ impl Ppu2c02 {
     }
 
     fn is_scanline_in_sprite_range(&self, scanline: u16, sprite: &Sprite, size: u8) -> bool {
-        let top = sprite.y as u16 + 1;
+        self.is_y_in_sprite_range(scanline, sprite.y, size)
+    }
+
+    /// Check if a scanline falls within a sprite's vertical range given its Y coordinate.
+    /// Sprites are displayed one pixel lower than their Y value (Y+1 to Y+size).
+    fn is_y_in_sprite_range(&self, scanline: u16, y: u8, size: u8) -> bool {
+        let top = y as u16 + 1;
         let bottom = top + size as u16;
 
         scanline >= top && scanline < bottom
+    }
+
+    /// Read a single byte from primary OAM at the given address (0-255).
+    /// OAM layout: [Y, TILE, ATTR, X] repeating for 64 sprites.
+    fn read_oam_byte(&self, addr: u8) -> u8 {
+        let sprite_idx = (addr / 4) as usize;
+        let byte_offset = addr % 4;
+        match byte_offset {
+            0 => self.oam.primary[sprite_idx].y,
+            1 => self.oam.primary[sprite_idx].tile_index,
+            2 => self.oam.primary[sprite_idx].attributes,
+            3 => self.oam.primary[sprite_idx].x,
+            _ => unreachable!()
+        }
     }
 
     fn get_flip_values(&self, sprite: &Sprite) -> (bool, bool) {
@@ -2140,23 +2162,39 @@ impl Ppu2c02 {
         self.oam.clear_secondary();
         let sprite_size = if self.get_flag(Control(SpriteSize)) { 16u8 } else { 8u8 };
 
-        // Sprite evaluation order can start from a non-zero OAMADDR, but sprite-0 hit
-        // detection is ALWAYS tied to the sprite originating from OAM index 0.
-        // Only OAM index 0 can trigger sprite-0 hit, regardless of evaluation order.
-        let start_sprite = (self.register.borrow().oam_addr / 4) as usize;
-        let num_sprites = self.oam.primary.len();
+        // Byte-level sprite evaluation starting from OAMADDR:
+        // - Evaluation reads OAM bytes starting at OAMADDR (0-255)
+        // - Each "virtual sprite" is formed by reading 4 consecutive bytes as Y/TILE/ATTR/X
+        // - If OAMADDR is unaligned (not a multiple of 4), bytes are reinterpreted accordingly
+        // - The first virtual sprite (starting at OAMADDR) is the "aliased" sprite-0
+        // - Only the aliased sprite can trigger sprite-0 hit; no "first visible" fallback
+        let oam_addr = self.register.borrow().oam_addr;
 
         let mut count = 0usize;
-        for offset in 0..num_sprites {
-            let i = (start_sprite + offset) % num_sprites;
-            let sprite = &self.oam.primary[i];
+        for sprite_offset in 0u8..64 {
+            // Calculate the starting byte for this virtual sprite
+            let byte_start = oam_addr.wrapping_add(sprite_offset.wrapping_mul(4));
 
-            if self.is_scanline_in_sprite_range(scanline, sprite, sprite_size) {
+            // Read 4 consecutive bytes as Y/TILE/ATTR/X (with wrapping)
+            let y = self.read_oam_byte(byte_start);
+            let tile = self.read_oam_byte(byte_start.wrapping_add(1));
+            let attr = self.read_oam_byte(byte_start.wrapping_add(2));
+            let x = self.read_oam_byte(byte_start.wrapping_add(3));
+
+            // Check if this virtual sprite is in range for the scanline
+            if self.is_y_in_sprite_range(scanline, y, sprite_size) {
                 if count < self.oam.secondary.len() {
-                    self.oam.secondary[count] = *sprite;
+                    self.oam.secondary[count] = Sprite {
+                        y,
+                        tile_index: tile,
+                        attributes: attr,
+                        x,
+                        sprite0: false,
+                    };
 
-                    // Only OAM index 0 can trigger sprite-0 hit
-                    if i == 0 {
+                    // Only the first virtual sprite (sprite_offset == 0) is the aliased sprite-0.
+                    // This is the sprite starting at OAMADDR, regardless of visibility order.
+                    if sprite_offset == 0 {
                         self.oam.secondary[count].sprite0 = true;
                     }
 
@@ -2354,16 +2392,18 @@ impl Ppu2c02 {
                 (scanline, VBLANK_SET_DOT) if scanline == self.pre_render_scanline() => {
                     let show_bg = self.get_flag(Mask(ShowBackground));
                     let show_spr = self.get_flag(Mask(ShowSprites));
+                    let rendering_enabled = show_bg || show_spr;
+
                     self.set_flag(Status(VBlank), false);
                     self.set_flag(Status(Sprite0Hit), false);
                     self.set_flag(Status(SpriteOverflow), false);
                     self.sprite0_hit_pending = false;
                     let _ = self.cpu.borrow_mut().clear_nmi();
                     self.nmi_suppressed.set(false);
-                    self.register.borrow_mut().oam_addr = 0;
 
-                    // Do sprite evaluation for scanline 0 if rendering enabled
-                    if show_bg || show_spr {
+                    // OAMADDR reset only happens when rendering is enabled
+                    if rendering_enabled {
+                        self.register.borrow_mut().oam_addr = 0;
                         self.put_horizontal_t_into_v();
                         self.put_vertical_t_into_v();
                         self.do_sprite_evaluation(0)?;
@@ -2473,7 +2513,10 @@ impl Ppu2c02 {
                         }
 
                         self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
-                        self.register.borrow_mut().oam_addr = 0;
+                        // OAMADDR reset only happens when rendering is enabled
+                        if rendering_enabled {
+                            self.register.borrow_mut().oam_addr = 0;
+                        }
                         self.scanline_rendered = true;
                         self.last_rendered_dot = VISIBLE_DOTS;
                         self.state = PpuState::Rendering(scanline + 1);
@@ -2534,10 +2577,10 @@ impl Ppu2c02 {
                 let _ = self.cpu.borrow_mut().clear_nmi();
                 self.nmi_suppressed.set(false);
 
-                self.register.borrow_mut().oam_addr = 0;
                 self.state = PpuState::Rendering(0);
 
                 if self.get_flag(Mask(ShowBackground)) || self.get_flag(Mask(ShowSprites)) {
+                    self.register.borrow_mut().oam_addr = 0;
                     self.put_horizontal_t_into_v();
                     self.put_vertical_t_into_v();
                     self.do_sprite_evaluation(0)?;
@@ -2561,13 +2604,13 @@ impl Ppu2c02 {
                 if show_background || show_sprites {
                     self.do_sprite_evaluation(scanline + 1)?;
                     self.put_horizontal_t_into_v();
+                    self.register.borrow_mut().oam_addr = 0;
                 } else {
                     self.oam.clear_secondary();
                 }
 
                 self.write_pixels_lines_to_frame(scanline, show_background, show_sprites);
 
-                self.register.borrow_mut().oam_addr = 0;
                 self.state = PpuState::Rendering(scanline + 1);
             },
 
