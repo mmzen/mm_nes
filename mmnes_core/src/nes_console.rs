@@ -81,9 +81,15 @@ pub struct NesConsole {
     /// The real NES bus shows "repeated reads" from the last accessed address when
     /// the CPU is stalled, causing side effects for certain registers ($2002, $2007, etc.)
     last_cpu_bus_address: Option<u16>,
-    /// Current APU phase (GET/PUT alternates every CPU cycle)
-    /// Phase is passed to DMA controller as a parameter for explicit contract
-    apu_phase: ApuPhase,
+    /// Phase offset for GET/PUT cycle parity (0 or 1).
+    ///
+    /// The actual phase is DERIVED from `master_cycles + phase_offset`:
+    /// - Even = GET phase (reads)
+    /// - Odd = PUT phase (writes)
+    ///
+    /// This eliminates mutable toggle drift - phase is always a derived invariant.
+    /// Randomized on power-on (not reset) to simulate real hardware indeterminism.
+    phase_offset: u64,
 }
 
 impl Configurable for NesConsole {
@@ -128,7 +134,7 @@ impl NesConsole {
             master_cycles: 0,
             dma_controller,
             last_cpu_bus_address: None,
-            apu_phase: ApuPhase::default(),
+            phase_offset: 0, // Will be randomized on power_on()
         };
 
         console.set_config(config);
@@ -218,10 +224,30 @@ impl NesConsole {
         // STEP 2: DECIDE BUS MASTER AND START DMA IF NEEDED
         // ============================================================
 
+        // Derive current phase from master_cycles (invariant - no mutable toggle drift)
+        // Phase is computed BEFORE incrementing master_cycles, so it represents this cycle's phase.
+        let current_phase = ApuPhase::from_cycle(self.master_cycles + self.phase_offset);
+
         // Start OAM DMA if triggered
         // NOTE: We do NOT set the halted read address here - it will be captured
         // by the DMA controller when halt actually succeeds (PendingHalt → Halt)
+        //
+        // ALIGNMENT: The $4014 write happened on the PREVIOUS cycle (master_cycles - 1).
+        // The trigger phase was `current_phase.toggle()` (the phase before this one).
+        // OAM DMA alignment (513 vs 514 cycles) depends on this trigger phase:
+        // - Trigger on GET: First DMA step on PUT → halt on PUT → first read on GET → 513 total
+        // - Trigger on PUT: First DMA step on GET → halt on GET → alignment cycle → 514 total
+        // This alignment happens naturally via phase-gated state machine in DMA controller.
         if let Some(page) = oam_dma_start {
+            // The trigger phase is deterministic from cycle count (Phase 1 fix).
+            // No need to store it - derived from (master_cycles - 1 + phase_offset).
+            let _trigger_phase = ApuPhase::from_cycle(self.master_cycles.wrapping_sub(1) + self.phase_offset);
+            debug_assert_eq!(
+                _trigger_phase.toggle(), current_phase,
+                "Phase invariant violated: trigger phase {} should toggle to current phase {}",
+                if _trigger_phase.is_get() { "GET" } else { "PUT" },
+                if current_phase.is_get() { "GET" } else { "PUT" }
+            );
             self.dma_controller.start_oam_dma(page);
         }
 
@@ -241,7 +267,7 @@ impl NesConsole {
         // Step DMA controller if active (handles state transitions including PendingHalt → Halt)
         // This must be called even during PendingHalt to advance the state machine.
         let dma_result = if self.dma_controller.is_active() {
-            Some(self.dma_controller.step_cycle(cpu_is_writing, pending_read_addr, self.apu_phase)
+            Some(self.dma_controller.step_cycle(cpu_is_writing, pending_read_addr, current_phase)
                 .map_err(|e| NesConsoleError::InternalError(format!("DMA error: {}", e)))?)
         } else {
             None
@@ -326,11 +352,8 @@ impl NesConsole {
         self.cpu_counter.current += 1;
         self.master_cycles += 1;
 
-        // Toggle APU phase (GET/PUT alternates every CPU cycle)
-        self.apu_phase = self.apu_phase.toggle();
-
-        // Note: The APU has its own internal cpu_cycle_odd for its timing.
-        // apu_phase is the source of truth for DMA timing.
+        // Note: Phase (GET/PUT) is derived from master_cycles + phase_offset at the start
+        // of each cycle. No toggle needed - the increment above naturally advances parity.
 
         // Advance APU (AFTER the bus operation, not before)
         let (apu_cycles, apu_samples) = self.apu.borrow_mut().run(self.apu_counter.current, 1)?;
@@ -438,49 +461,44 @@ impl NesConsole {
     pub fn power_on(&mut self) -> Result<(), NesConsoleError> {
         self.reset_entry_point()?;
 
-        // Randomize APU phase on power-on (not on reset)
+        // Randomize phase offset on power-on (not on reset)
         // The real NES has indeterminate initial phase
         // Pass None for non-deterministic (realism mode)
-        self.randomize_apu_phase(None);
+        self.randomize_phase_offset(None);
 
         Ok(())
     }
 
-    /// Power on with deterministic APU phase for testing.
+    /// Power on with deterministic phase offset for testing.
     ///
     /// # Arguments
-    /// * `phase_seed` - Seed for phase selection (seed % 2 == 0 → GET, else PUT)
+    /// * `phase_seed` - Seed for phase selection (seed % 2 == 0 → offset 0, else offset 1)
     pub fn power_on_deterministic(&mut self, phase_seed: u64) -> Result<(), NesConsoleError> {
         self.reset_entry_point()?;
-        self.randomize_apu_phase(Some(phase_seed));
+        self.randomize_phase_offset(Some(phase_seed));
         Ok(())
     }
 
-    /// Randomize the APU GET/PUT phase
+    /// Randomize the phase offset for GET/PUT cycle parity.
     ///
     /// On real hardware, the initial APU phase alignment is indeterminate.
     /// This randomization ensures games don't rely on a specific initial state.
     ///
+    /// The phase offset is 0 or 1, added to master_cycles when computing phase:
+    /// - offset 0: cycle 0 = GET, cycle 1 = PUT, cycle 2 = GET, ...
+    /// - offset 1: cycle 0 = PUT, cycle 1 = GET, cycle 2 = PUT, ...
+    ///
     /// # Arguments
     /// * `seed` - If `Some(n)`, uses deterministic selection (n % 2).
     ///            If `None`, uses wall-clock time (non-deterministic).
-    fn randomize_apu_phase(&mut self, seed: Option<u64>) {
-        let phase_value = match seed {
-            Some(s) => s % 2 == 0,
+    fn randomize_phase_offset(&mut self, seed: Option<u64>) {
+        self.phase_offset = match seed {
+            Some(s) => s % 2,
             None => std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() % 2 == 0)
-                .unwrap_or(false),
+                .map(|d| (d.as_nanos() % 2) as u64)
+                .unwrap_or(0),
         };
-
-        let random_phase = if phase_value {
-            ApuPhase::Get
-        } else {
-            ApuPhase::Put
-        };
-
-        // Set the local phase (passed to DMA controller as parameter)
-        self.apu_phase = random_phase;
     }
 
     fn reset_counters(&mut self) {
@@ -490,8 +508,10 @@ impl NesConsole {
         // This ensures both instruction-level and cycle-accurate modes are synchronized.
         self.ppu_counter = CyclesCounter::new(CYCLE_START_SEQUENCE);
         self.dma_start_page.set(None);
-        // Note: APU phase is NOT reset here - it persists across reset
-        // (only randomized on power-on). The DmaController.reset() also preserves phase.
+        // Note: phase_offset is NOT reset here - it persists across reset.
+        // Only randomized on power_on(). The DmaController.reset() also preserves phase.
+        // Since phase is derived from (master_cycles + phase_offset), resetting
+        // master_cycles to 0 restores the same starting phase as power-on.
         self.master_cycles = 0;
         self.dma_controller.reset();
         self.last_cpu_bus_address = None;

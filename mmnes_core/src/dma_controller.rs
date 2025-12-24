@@ -56,6 +56,21 @@ pub enum ApuPhase {
 }
 
 impl ApuPhase {
+    /// Derive phase from cycle count - eliminates mutable toggle drift.
+    ///
+    /// This is the canonical way to compute phase: from the master cycle count.
+    /// Even cycles = GET, odd cycles = PUT.
+    ///
+    /// # Arguments
+    /// * `cycle` - The master cycle count (can include an offset for randomization)
+    pub fn from_cycle(cycle: u64) -> ApuPhase {
+        if cycle & 1 == 0 {
+            ApuPhase::Get
+        } else {
+            ApuPhase::Put
+        }
+    }
+
     pub fn toggle(&self) -> ApuPhase {
         match self {
             ApuPhase::Get => ApuPhase::Put,

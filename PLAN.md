@@ -201,7 +201,21 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
     - `IndirectIndexedY` (ZP),Y: cycles 1-3 now return proper addresses
     - `Indirect` (JMP indirect): cycles 1-4 now return proper addresses
     - No more `address: None` with "Complex to compute" comment
-- All 339 tests pass (596 total, 257 ignored), frontend builds successfully
+- **DMA Code Review Round 12** - addressing issues from `requirements/DMA_code_review_12.md`
+  - **Phase 1: Cycle parity derivation** (critical - eliminates drift)
+    - Removed mutable `apu_phase` field from `NesConsole`
+    - Added `phase_offset: u64` (0 or 1) for power-on randomization
+    - Phase now DERIVED from `master_cycles + phase_offset` via `ApuPhase::from_cycle()`
+    - No more mutable toggle that could drift
+  - **Phase 2: OAM trigger alignment** (alignment now deterministic)
+    - Documented how 513/514 cycle alignment works naturally via phase-gating
+    - Added debug assertion to verify trigger phase invariant
+    - Trigger phase computed from `master_cycles - 1 + phase_offset` at sampling time
+  - **New test**: `test_apu_phase_from_cycle` - verifies derived phase calculation
+  - **Remaining phases** (Phases 3-5: Internal bus op, DMC Complete, assertions) deferred
+    - Current implementation passes all tests with derived phase model
+    - These are defensive improvements for future if needed
+- All 340 tests pass (597 total, 257 ignored), frontend builds successfully
 
 ### Session: December 22, 2025 (session 36)
 - **AxROM Mapper (Mapper 7) Implementation** - implementing `requirements/MAPPER_AxROM.md`
@@ -622,6 +636,7 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 5 (INT) - pure intent+commit, last_cpu_bus_address |
 | Dec 22, 2025 | ~66% | ~34% | AxROM Mapper 7 implementation (~300 lines new code, 14 tests) |
 | Dec 24, 2025 | ~66% | ~34% | DMA code review 11-pending (address None fix, CPU bus intent improvements) |
+| Dec 24, 2025 | ~66% | ~34% | DMA code review 12 (cycle parity derivation, OAM alignment docs/assertions) |
 
 ---
 

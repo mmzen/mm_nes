@@ -366,6 +366,25 @@ fn test_apu_phase_is_get_is_put() {
 }
 
 #[test]
+fn test_apu_phase_from_cycle() {
+    init();
+
+    // Even cycles = GET, odd cycles = PUT
+    assert_eq!(ApuPhase::from_cycle(0), ApuPhase::Get);
+    assert_eq!(ApuPhase::from_cycle(1), ApuPhase::Put);
+    assert_eq!(ApuPhase::from_cycle(2), ApuPhase::Get);
+    assert_eq!(ApuPhase::from_cycle(3), ApuPhase::Put);
+
+    // Large values maintain parity
+    assert_eq!(ApuPhase::from_cycle(1000), ApuPhase::Get);
+    assert_eq!(ApuPhase::from_cycle(1001), ApuPhase::Put);
+
+    // Offset of 1 inverts the phase
+    assert_eq!(ApuPhase::from_cycle(0 + 1), ApuPhase::Put);
+    assert_eq!(ApuPhase::from_cycle(1 + 1), ApuPhase::Get);
+}
+
+#[test]
 fn test_oam_dma_uses_current_apu_phase_for_alignment() {
     init();
     let mut controller = create_controller();
