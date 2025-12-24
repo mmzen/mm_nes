@@ -6,7 +6,7 @@ This file tracks the development progress of mmnes, documenting what has been do
 
 ## Current Status
 
-**Last updated**: December 22, 2025
+**Last updated**: December 24, 2025
 
 The emulator is functional with **true cycle-accurate emulation**. All 8 phases of cycle accuracy roadmap complete. **Legacy instruction-level stepping has been removed** - the emulator now has a single execution path via `step_master_cycle()`.
 
@@ -184,6 +184,24 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 ---
 
 ## Session Log
+
+### Session: December 24, 2025 (session 37)
+- **DMA Code Review Round 11** - addressing issues from `requirements/DMA_code_review_11-pending.md`
+  - **Fix #1**: `pending_read_addr` now uses `.or(last_cpu_bus_address)` fallback
+    - CPU bus intent can return `None` for certain cycles (complex addressing modes, halted state)
+    - Without fallback, "one bus op per cycle" degenerates into "sometimes zero" when stalled
+    - Now guaranteed to always have an address for DMA repeated reads
+  - **Fix #2**: `last_cpu_bus_address` only updated when `address.is_some()`
+    - Defensive guard against `memory_read=true` with `address=None` (shouldn't happen but safe)
+    - Prevents losing fallback address
+  - **Fix #3**: Updated `is_cpu_stalled()` doc comment
+    - Removed stale reference to `Get`, `Put` states (only `Halt`, `WaitGet`, `WaitPut` exist now)
+  - **Fix #4**: CPU bus intent now computes concrete addresses for all addressing modes
+    - `IndirectIndexedX` (ZP,X): cycles 1-4 now return proper addresses
+    - `IndirectIndexedY` (ZP),Y: cycles 1-3 now return proper addresses
+    - `Indirect` (JMP indirect): cycles 1-4 now return proper addresses
+    - No more `address: None` with "Complex to compute" comment
+- All 339 tests pass (596 total, 257 ignored), frontend builds successfully
 
 ### Session: December 22, 2025 (session 36)
 - **AxROM Mapper (Mapper 7) Implementation** - implementing `requirements/MAPPER_AxROM.md`
@@ -603,6 +621,7 @@ Based on feedback in `requirements/DMA_code_review_2.md`, implemented 5 critical
 | Dec 22, 2025 | ~67% | ~33% | PPU DMA code review round 2 (data_bus audit, regression test, read_byte simplify) |
 | Dec 22, 2025 | ~67% | ~33% | DMA code review round 5 (INT) - pure intent+commit, last_cpu_bus_address |
 | Dec 22, 2025 | ~66% | ~34% | AxROM Mapper 7 implementation (~300 lines new code, 14 tests) |
+| Dec 24, 2025 | ~66% | ~34% | DMA code review 11-pending (address None fix, CPU bus intent improvements) |
 
 ---
 

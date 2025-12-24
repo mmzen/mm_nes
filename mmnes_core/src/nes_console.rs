@@ -182,8 +182,13 @@ impl NesConsole {
         // Capture the PENDING read address for this cycle (not historical last read).
         // When DMA halts the CPU, repeated reads use the address of the read being halted,
         // not some previous read. This is critical for $2007 VRAM increment side effects.
+        //
+        // IMPORTANT: CPU bus intent may return None for certain cycles (complex addressing
+        // modes, halted state). We MUST fall back to last_cpu_bus_address to ensure we
+        // always have an address when halting. Without this, "one bus op per cycle" degenerates
+        // into "sometimes zero" when stalled with None address.
         let pending_read_addr = if !cpu_is_writing {
-            cpu_bus_intent.address
+            cpu_bus_intent.address.or(self.last_cpu_bus_address)
         } else {
             // CPU is writing - fall back to last bus address for repeated reads
             self.last_cpu_bus_address
@@ -287,8 +292,12 @@ impl NesConsole {
 
             // Track the CPU's last bus address for DMA repeated reads
             // This includes BOTH reads and writes - the real NES bus shows the
-            // last accessed address during DMA stalls, regardless of access type
-            if result.memory_read || result.memory_write {
+            // last accessed address during DMA stalls, regardless of access type.
+            //
+            // IMPORTANT: Only update if address is Some. If CPU reports memory_read=true
+            // but address=None (should never happen, but defensive), we keep the previous
+            // value rather than overwriting with None and losing our fallback.
+            if (result.memory_read || result.memory_write) && result.address.is_some() {
                 self.last_cpu_bus_address = result.address;
             }
 

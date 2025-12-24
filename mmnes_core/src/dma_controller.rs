@@ -281,7 +281,7 @@ impl<B: Bus + ?Sized> DmaController<B> {
     /// executing normally until a read cycle allows the halt to succeed.
     ///
     /// CPU is stalled when:
-    /// - OAM DMA: `Halt`, `WaitGet`, `Get`, `WaitPut`, `Put`
+    /// - OAM DMA: `Halt`, `WaitGet`, `WaitPut`
     /// - DMC DMA: `Halt`, `Dummy`, `Align`, `Read`
     pub fn is_cpu_stalled(&self) -> bool {
         self.is_cpu_stalled_by_oam() || self.is_cpu_stalled_by_dmc()

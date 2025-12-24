@@ -1127,11 +1127,32 @@ impl Cpu6502 {
             }
 
             IndirectIndexedX => {
-                // (ZP,X): complex indirect addressing
+                // (ZP,X): indexed indirect addressing
+                // Cycle 1: read operand from PC+1
+                // Cycle 2: dummy read from operand_lo (while adding X)
+                // Cycle 3: read pointer low from base_addr
+                // Cycle 4: read pointer high from (base_addr + 1) & 0xFF
+                // Cycle 5+: read/write effective address
+                let x = self.registers.x;
                 match cycle {
-                    1..=4 => CpuBusIntent {
+                    1 => CpuBusIntent {
                         op: BusOperation::Read,
-                        address: None, // Complex to compute
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo as u16),
+                        is_write: false,
+                    },
+                    3 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo.wrapping_add(x) as u16),
+                        is_write: false,
+                    },
+                    4 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo.wrapping_add(x).wrapping_add(1) as u16),
                         is_write: false,
                     },
                     5 if is_store => CpuBusIntent {
@@ -1159,11 +1180,25 @@ impl Cpu6502 {
             }
 
             IndirectIndexedY => {
-                // (ZP),Y: complex indirect addressing
+                // (ZP),Y: indirect indexed addressing
+                // Cycle 1: read operand from PC+1
+                // Cycle 2: read pointer low from operand_lo (ZP address)
+                // Cycle 3: read pointer high from (operand_lo + 1) & 0xFF
+                // Cycle 4+: read/write effective address
                 match cycle {
-                    1..=3 => CpuBusIntent {
+                    1 => CpuBusIntent {
                         op: BusOperation::Read,
-                        address: None, // Complex to compute
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo as u16),
+                        is_write: false,
+                    },
+                    3 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.operand_lo.wrapping_add(1) as u16),
                         is_write: false,
                     },
                     4 if is_store => CpuBusIntent {
@@ -1212,11 +1247,38 @@ impl Cpu6502 {
             }
 
             Indirect => {
-                // JMP (indirect) - all reads
-                CpuBusIntent {
-                    op: BusOperation::Read,
-                    address: None,
-                    is_write: false,
+                // JMP (indirect): 5 cycles total (including opcode fetch)
+                // Cycle 1: read pointer low from PC+1
+                // Cycle 2: read pointer high from PC+2
+                // Cycle 3: read effective low from [operand_lo, operand_hi]
+                // Cycle 4: read effective high from base_addr (with page wrap bug)
+                match cycle {
+                    1 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(1)),
+                        is_write: false,
+                    },
+                    2 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(pc.wrapping_add(2)),
+                        is_write: false,
+                    },
+                    3 => CpuBusIntent {
+                        op: BusOperation::Read,
+                        address: Some(state.base_addr),
+                        is_write: false,
+                    },
+                    4 => {
+                        // Page wrap bug: high byte read from same page
+                        let ptr_lo = state.base_addr as u8;
+                        let addr = (state.base_addr & 0xFF00) | ptr_lo.wrapping_add(1) as u16;
+                        CpuBusIntent {
+                            op: BusOperation::Read,
+                            address: Some(addr),
+                            is_write: false,
+                        }
+                    }
+                    _ => CpuBusIntent::default(),
                 }
             }
         }
